@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Logo Preview - Quản trị tài nguyên máy tính</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0e7ff 100%);
+    min-height: 100vh;
+    padding: 40px 20px;
+    color: #0F172A;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 {
+    text-align: center;
+    font-size: 32px;
+    margin-bottom: 8px;
+    color: #1E3A8A;
+  }
+  .subtitle {
+    text-align: center;
+    color: #64748B;
+    margin-bottom: 40px;
+    font-size: 16px;
+  }
+  .logos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 30px;
+    margin-bottom: 50px;
+  }
+  .logo-card {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    border: 2px solid transparent;
+    transition: all 0.3s;
+  }
+  .logo-card:hover {
+    border-color: #3B82F6;
+    transform: translateY(-4px);
+    box-shadow: 0 8px 30px rgba(59,130,246,0.15);
+  }
+  .logo-name {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #1E3A8A;
+  }
+  .logo-desc {
+    font-size: 13px;
+    color: #64748B;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+  .logo-preview {
+    background: #F8FAFC;
+    border-radius: 12px;
+    padding: 30px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 20px;
+    min-height: 240px;
+  }
+  .logo-preview img { max-width: 200px; max-height: 200px; }
+  .size-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    background: #F8FAFC;
+    border-radius: 12px;
+    padding: 15px;
+    gap: 15px;
+  }
+  .size-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .size-label {
+    font-size: 11px;
+    color: #64748B;
+    font-weight: 500;
+  }
+  .browser-bar {
+    background: #E2E8F0;
+    border-radius: 8px;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 15px;
+  }
+  .browser-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #CBD5E1;
+  }
+  .browser-tab {
+    background: white;
+    border-radius: 6px 6px 0 0;
+    padding: 6px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #475569;
+  }
+  .browser-tab img { width: 14px; height: 14px; }
+  .tag {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .recommend { background: #FEF3C7; color: #92400E; }
+  .favicon { background: #DBEAFE; color: #1E3A8A; }
+  .badge-info { background: #DCFCE7; color: #166534; }
+  .section-title {
+    font-size: 22px;
+    color: #1E3A8A;
+    margin: 40px 0 20px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #DBEAFE;
+  }
+  .info-box {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    margin-top: 40px;
+  }
+  pre {
+    background: #F1F5F9;
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 10px;
+    font-size: 13px;
+    overflow-x: auto;
+  }
+  ol { line-height: 1.8; color: #475569; padding-left: 20px; }
+  code { background: #F1F5F9; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🎨 Logo Preview</h1>
+  <p class="subtitle">Quản trị tài nguyên máy tính — Modern Geometric • Blue Indigo Palette</p>
+
+  <div class="logos-grid">
+
+    <!-- Logo 1: Minimal Q -->
+    <div class="logo-card">
+      <span class="tag recommend">⭐ Best for Favicon</span>
+      <div class="logo-name">1. Minimal Q Monogram</div>
+      <div class="logo-desc">
+        Monogram chữ "Q" trong hexagon trên nền bo góc. <strong>Tốt nhất cho favicon 16x16</strong> — đọc rõ ở mọi kích thước, thiết kế tối giản, chuyên nghiệp.
+      </div>
+      <div class="logo-preview">
+        <img src="favicons-minimal/favicon-256x256.png" alt="Minimal Logo">
+      </div>
+      <div class="size-row">
+        <div class="size-item">
+          <img src="favicons-minimal/favicon-16x16.png" width="16" height="16">
+          <span class="size-label">16px (favicon)</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-minimal/favicon-32x32.png" width="32" height="32">
+          <span class="size-label">32px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-minimal/favicon-64x64.png" width="64" height="64">
+          <span class="size-label">64px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-minimal/favicon-128x128.png" width="128" height="128">
+          <span class="size-label">128px</span>
+        </div>
+      </div>
+      <div class="browser-bar">
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-tab">
+          <img src="favicons-minimal/favicon-16x16.png">
+          Quản trị tài nguyên máy tính
+        </div>
+      </div>
+    </div>
+
+    <!-- Logo 2: Hexagonal Network -->
+    <div class="logo-card">
+      <span class="tag favicon">� Network Style</span>
+      <div class="logo-name">2. Hexagonal Network</div>
+      <div class="logo-desc">
+        Hexagon với các node mạng lưới � trung tâm — tượng trưng cho việc quản lý tài nguyên máy tính được kết nối và tổ chức có cấu trúc.
+      </div>
+      <div class="logo-preview">
+        <img src="favicons-hexagonal/favicon-256x256.png" alt="Hexagonal Logo">
+      </div>
+      <div class="size-row">
+        <div class="size-item">
+          <img src="favicons-hexagonal/favicon-16x16.png" width="16" height="16">
+          <span class="size-label">16px (favicon)</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-hexagonal/favicon-32x32.png" width="32" height="32">
+          <span class="size-label">32px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-hexagonal/favicon-64x64.png" width="64" height="64">
+          <span class="size-label">64px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-hexagonal/favicon-128x128.png" width="128" height="128">
+          <span class="size-label">128px</span>
+        </div>
+      </div>
+      <div class="browser-bar">
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-tab">
+          <img src="favicons-hexagonal/favicon-16x16.png">
+          Quản trị tài nguyên máy tính
+        </div>
+      </div>
+    </div>
+
+    <!-- Logo 3: Cube -->
+    <div class="logo-card">
+      <span class="tag badge-info">� 3D Style</span>
+      <div class="logo-name">3. Isometric Cube</div>
+      <div class="logo-desc">
+        Khối lập phương isometric 3D với các đường server — biểu tượng cho hệ thống quản trị tài nguyên máy tính có chiều sâu và tổ chức.
+      </div>
+      <div class="logo-preview">
+        <img src="favicons-cube/favicon-256x256.png" alt="Cube Logo">
+      </div>
+      <div class="size-row">
+        <div class="size-item">
+          <img src="favicons-cube/favicon-16x16.png" width="16" height="16">
+          <span class="size-label">16px (favicon)</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-cube/favicon-32x32.png" width="32" height="32">
+          <span class="size-label">32px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-cube/favicon-64x64.png" width="64" height="64">
+          <span class="size-label">64px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-cube/favicon-128x128.png" width="128" height="128">
+          <span class="size-label">128px</span>
+        </div>
+      </div>
+      <div class="browser-bar">
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-tab">
+          <img src="favicons-cube/favicon-16x16.png">
+          Quản trị tài nguyên máy tính
+        </div>
+      </div>
+    </div>
+
+    <!-- Logo 4: Grid -->
+    <div class="logo-card">
+      <span class="tag favicon">📊 Dashboard</span>
+      <div class="logo-name">4. Resource Grid</div>
+      <div class="logo-desc">
+        Lưới 3x3 ô vuông với ô trung tâm được highlight — tượng trưng cho dashboard quản lý nhiều tài nguyên máy tính cùng lúc.
+      </div>
+      <div class="logo-preview">
+        <img src="favicons-grid/favicon-256x256.png" alt="Grid Logo">
+      </div>
+      <div class="size-row">
+        <div class="size-item">
+          <img src="favicons-grid/favicon-16x16.png" width="16" height="16">
+          <span class="size-label">16px (favicon)</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-grid/favicon-32x32.png" width="32" height="32">
+          <span class="size-label">32px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-grid/favicon-64x64.png" width="64" height="64">
+          <span class="size-label">64px</span>
+        </div>
+        <div class="size-item">
+          <img src="favicons-grid/favicon-128x128.png" width="128" height="128">
+          <span class="size-label">128px</span>
+        </div>
+      </div>
+      <div class="browser-bar">
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-dot"></div>
+        <div class="browser-tab">
+          <img src="favicons-grid/favicon-16x16.png">
+          Quản trị tài nguyên máy tính
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <h2 class="section-title">📋 Hướng dẫn sử dụng làm Favicon</h2>
+    <ol>
+      <li>Mở file <code>preview.html</code> trong trình duyệt để xem tất cả logo và chọn logo bạn thích nhất.</li>
+      <li>Mỗi logo đã có sẵn ở các kích thước chu�n: <strong>16x16, 32x32, 48x48, 64x64, 128x128, 180x180, 192x192, 256x256, 512x512</strong> và file <code>favicon.ico</code> đa phân giải.</li>
+      <li>Copy file <code>favicon.ico</code> vào thư mục gốc của website.</li>
+      <li>Thêm thẻ HTML sau vào phần <code>&lt;head&gt;</code>:
+        <pre>&lt;link rel="icon" type="image/x-icon" href="/favicon.ico"&gt;
+&lt;link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png"&gt;
+&lt;link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"&gt;
+&lt;link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"&gt;
+&lt;link rel="manifest" href="/site.webmanifest"&gt;</pre>
+      </li>
+    </ol>
+  </div>
+</div>
+</body>
+</html>

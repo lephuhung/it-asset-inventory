@@ -73,6 +73,7 @@ uvicorn app.main:app --reload
 | POST | `/api/inventory` | Agent gửi snapshot cấu hình |
 | GET | `/api/machines` | Danh sách máy (lọc org/status/tìm kiếm) |
 | GET | `/api/stats/overview` | Thống kê dashboard |
+| GET | `/api/stats/inventory` | Thống kê cấu hình hiện tại: Win10/11 (`by_os_family`), firewall, Windows Update, antivirus, top phần mềm (`top_software`) — GROUP BY SQL trên bảng `machine_current`/`machine_software`, RBAC theo org |
 | GET | `/api/compliance/current` | Thông báo tuân thủ hiện hành |
 | POST | `/api/reports/export` | Xuất Excel danh sách máy (lọc org/status/q) |
 | GET | `/api/agent/config` | Cấu hình agent (mTLS): heartbeat, online TTL, inventory... |
@@ -119,6 +120,30 @@ uvicorn app.main:app --reload
 - `app/services/partition.py::ensure_heartbeat_partitions` tự tạo daily partition;
   background monitor đảm bảo luôn có partition 7 ngày tới.
 - Index trên parent tự áp dụng cho mỗi partition.
+
+## Thống kê inventory (refactor schema 2026-08)
+
+Để thống kê nhiều chiều (app cài nhiều nhất, số máy bật update/firewall, Win10/11) mà không
+scan JSONB lịch sử, server lưu thêm 2 bảng "hiện tại" khi nhận inventory (cùng transaction):
+
+- **`machine_current`** — snapshot mới nhất/máy (1:1), OS chuẩn hóa (`os_product`,
+  `os_release` = DisplayVersion, `os_family` = windows_10/11/server/linux/other) + security
+  thành cột có index (`firewall_enabled`, `windows_update_status/enabled`, `antivirus_enabled`…).
+- **`machine_software`** — 1 dòng/app/máy (unique theo tên không phân biệt hoa thường) →
+  `SELECT name, count(DISTINCT machine_id) … GROUP BY name` = top phần mềm.
+
+Mọi chuẩn hóa **phía server** (`app/services/inventory_normalize.py`) — **agent không cần đổi**,
+payload v1/v2/v3 vẫn tương thích (xem `docs/API_CONTRACT.md` mục 3.7). Chi tiết thiết kế:
+`docs/REFACTOR_SCHEMA_THONG_KE.md`.
+
+Backfill dữ liệu cũ (đã có specs trước migration):
+
+```bash
+.venv/bin/python -m scripts.backfill_machine_current
+```
+
+> ⚠️ Agent hiện tại chưa gửi `firewall_enabled`/`windows_update_status` → thống kê tương ứng
+> trả `unknown` tới khi agent release mới bổ sung collector.
 
 ## Sprint đã hoàn thành
 

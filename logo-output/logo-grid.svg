@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- 3x3 grid representing resource grid/dashboard -->
+  <g transform="translate(256,256)">
+    <!-- Row 1 -->
+    <rect x="-150" y="-150" width="90" height="90" rx="12" fill="#1E3A8A" stroke="#0F172A" stroke-width="2"/>
+    <rect x="-45" y="-150" width="90" height="90" rx="12" fill="#2563EB" stroke="#0F172A" stroke-width="2"/>
+    <rect x="60" y="-150" width="90" height="90" rx="12" fill="#3B82F6" stroke="#0F172A" stroke-width="2"/>
+
+    <!-- Row 2 -->
+    <rect x="-150" y="-45" width="90" height="90" rx="12" fill="#2563EB" stroke="#0F172A" stroke-width="2"/>
+    <rect x="-45" y="-45" width="90" height="90" rx="12" fill="#DBEAFE" stroke="#0F172A" stroke-width="2"/>
+    <rect x="60" y="-45" width="90" height="90" rx="12" fill="#3B82F6" stroke="#0F172A" stroke-width="2"/>
+
+    <!-- Row 3 -->
+    <rect x="-150" y="60" width="90" height="90" rx="12" fill="#3B82F6" stroke="#0F172A" stroke-width="2"/>
+    <rect x="-45" y="60" width="90" height="90" rx="12" fill="#2563EB" stroke="#0F172A" stroke-width="2"/>
+    <rect x="60" y="60" width="90" height="90" rx="12" fill="#1E3A8A" stroke="#0F172A" stroke-width="2"/>
+
+    <!-- Highlight center cell -->
+    <rect x="-45" y="-45" width="90" height="90" rx="12" fill="none" stroke="#FFFFFF" stroke-width="4"/>
+
+    <!-- Dots in each cell representing resources -->
+    <circle cx="-105" cy="-105" r="6" fill="#FFFFFF"/>
+    <circle cx="0" cy="-105" r="6" fill="#FFFFFF"/>
+    <circle cx="105" cy="-105" r="6" fill="#FFFFFF"/>
+
+    <circle cx="-105" cy="0" r="6" fill="#FFFFFF"/>
+    <circle cx="0" cy="0" r="10" fill="#1E3A8A"/>
+    <circle cx="105" cy="0" r="6" fill="#FFFFFF"/>
+
+    <circle cx="-105" cy="105" r="6" fill="#FFFFFF"/>
+    <circle cx="0" cy="105" r="6" fill="#FFFFFF"/>
+    <circle cx="105" cy="105" r="6" fill="#FFFFFF"/>
+  </g>
+</svg>

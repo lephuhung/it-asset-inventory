@@ -1,7 +1,11 @@
 # API CONTRACT — Hệ thống IT Asset Inventory (Phase 1 MVP)
 
 > Hợp đồng dùng chung cho 3 thành phần: `agent/` (C#), `server/` (FastAPI), `portal/` (Next.js).
-> **v1.3 — khớp implementation thực tế của server** (đã verify 67/67 test). Mọi dev khi code PHẢI bám đúng file này; thay đổi phải sửa contract trước.
+> **v1.4 — khớp implementation thực tế của server** (đã verify 78/78 test). Mọi dev khi code PHẢI bám đúng file này; thay đổi phải sửa contract trước.
+>
+> **v1.4 (2026-08-26)**: refactor schema thống kê phía server — bảng `machine_current` +
+> `machine_software` (xem mục 3.7). **Agent KHÔNG đổi**: payload v1/v2/v3 vẫn được chấp nhận
+> nguyên vẹn; mọi chuẩn hóa (os_product/os_release/os_family, security → cột) do server tính.
 
 ---
 
@@ -95,40 +99,118 @@ Response 200:
 
 ### 3.3. POST /api/inventory (mTLS bắt buộc)
 
-Request (flat, tất cả trường optional):
+Request (tất cả trường optional — agent không đọc được trường nào thì bỏ trống). Đây là
+payload **chuẩn agent Windows đẩy lên** (schema v2 — đầy đủ cpu/disks+partitions/gpu/
+mainboard/bios/network mở rộng/installed_software/security):
 ```json
 {
-  "os_name": "Windows 11 Pro",
-  "os_version": "10.0.22631",
-  "os_build": "22631",
-  "os_arch": "x64",
-  "os_installed_at": "2024-...Z",
-  "activation_status": "licensed",
-  "cpu": { "model": "...", "cores": 8 },
-  "ram_gb": 16.0,
-  "disks": [ { "model": "...", "serial": "...", "size_gb": 512, "type": "SSD" } ],
-  "gpu": { "model": "..." },
-  "mainboard": { "model": "...", "serial": "..." },
-  "bios": { "version": "..." },
-  "network": [ { "name": "Ethernet", "ip": "10.0.0.42", "mac": "AA-BB-...", "is_dual_homed": false } ],
-  "logged_user": "DOMAIN\\nguyenvana",
-  "installed_software": [ { "name": "...", "version": "..." } ],
+  "os_name": "Windows 11 Pro 25H2",
+  "os_version": "10.0.26200",
+  "os_build": "26200",
+  "os_arch": "X64",
+  "os_installed_at": "2024-05-15T08:30:00Z",
+  "activation_status": "Licensed",
+  "is_vm": false,
+  "logged_user": "DESKTOP-EATRCNQ\\LPH",
+  "config_hash": "a1b2c3d4e5f6...",
+  "cpu": { "model": "13th Gen Intel(R) Core(TM) i7-13700H", "cores": 14, "threads": 20, "clock_mhz": 2400, "virtualization_enabled": true },
+  "ram_gb": 31.7,
+  "disks": [
+    {
+      "model": "NVMe SAMSUNG MZVL21T0HDLU-00B00",
+      "size_bytes": 1024209543168,
+      "bus_type": "NVMe",
+      "media_type": "SSD",
+      "smart_health": "OK",
+      "partitions": [ { "drive_letter": "C:", "total_bytes": 511000000000, "free_bytes": 320000000000, "file_system": "NTFS" } ]
+    }
+  ],
+  "gpu": { "model": "NVIDIA GeForce RTX 4060 Laptop GPU", "driver_version": "31.0.15.5123", "memory_mb": 8192 },
+  "mainboard": { "manufacturer": "Dell Inc.", "product": "0K5R1T", "serial": "/ABC1234/CN123456789/", "version": "A00" },
+  "bios": { "vendor": "Dell Inc.", "version": "1.14.0", "release_date": "2024-01-10", "smbios_version": "3.5" },
+  "network": [
+    {
+      "name": "Wi-Fi (Intel(R) Wi-Fi 6E AX211 160MHz)",
+      "ip": "10.10.0.253",
+      "mac": "00:1A:2B:3C:4D:5E",
+      "is_dual_homed": false,
+      "gateway": "10.10.0.1",
+      "dhcp_enabled": true,
+      "dns_servers": ["10.10.0.1", "8.8.8.8"],
+      "speed_mbps": 1200
+    }
+  ],
+  "installed_software": [
+    {
+      "display_name": "Google Chrome",
+      "version": "127.0.6533.100",
+      "publisher": "Google LLC",
+      "install_date": "2024-08-10",
+      "uninstall_string": "\"C:\\Program Files\\Google\\Chrome\\...\"",
+      "is_per_user": false
+    }
+  ],
   "security": {
-    "antivirus": [ { "name": "...", "status": "enabled" } ],
+    "antivirus": [ { "displayName": "Windows Defender", "enabled": true, "upToDate": true } ],
     "windows_update_status": "up-to-date",
     "bitlocker": "on",
     "rdp_enabled": false,
-    "local_accounts": [ { "name": "...", "has_password": true } ],
-    "smarts": [ { "disk": "C:", "health": "ok" } ]
-  },
-  "is_vm": false,
-  "config_hash": "sha256-của-payload"
+    "local_accounts": [ { "username": "Administrator", "full_name": "Quản trị hệ thống", "disabled": true, "has_password": true, "is_admin": true } ],
+    "smarts": [ { "device": "PhysicalDrive0", "model": "NVMe SAMSUNG MZVL21T0HDLU-00B00", "health": "OK" } ]
+  }
 }
 ```
+
+Ghi chú:
+- **Backward-compat**: payload cũ (v1 — `cpu.{model,cores}`, `disks[].{serial,size_gb,type}`,
+  `security.antivirus[].{name,status}`…) vẫn được chấp nhận; trường lạ bị bỏ qua (không 422).
+- **Alias/legacy fields**: agent gửi song song cả hai tên (vd `installed_software[].{display_name,name}`,
+  `security.antivirus[].{displayName,name,status,enabled}`, `security.local_accounts[].{username,name}`,
+  `disks[].{size_bytes,size,size_gb}`, `mainboard.{model,manufacturer,product}`) — server giữ nguyên
+  tất cả, front-end ưu tiên đọc tên chuẩn v2 rồi fallback v1.
+- **Security mở rộng (v3)**: `firewall_enabled`, `uac_enabled`, `secure_boot_enabled`,
+  `usb_storage_blocked`, `weak_protocols.{smbv1_disabled,tls10_disabled,tls11_disabled,ssl3_disabled}`,
+  `listening_ports[].{port,protocol,address}`, `startup_programs[].{name,command,location}` — lưu
+  trong JSONB `security`, portal hiển thị ở thẻ "Trạng thái bảo mật".
+- `config_hash` do agent tính (sha256 của payload trừ chính `config_hash`) — server không nhận
+  thì tự tính. Gửi lại cùng hash → `config_changed=false`, không lưu snapshot trùng.
+- Trường sai kiểu (vd `cpu.threads` là chuỗi) → **422**, không lưu dữ liệu hỏng.
 
 Response 200: `{ "ok": true, "config_changed": false }`
 
 - Gửi: lần đầu sau enroll, khi cấu hình thay đổi (config_hash mới), định kỳ `inventory_interval_hours` (24h).
+- Máy lưu đủ: os (kể cả `os_installed_at`, `activation_status`), cpu, ram, disks+partitions,
+  gpu, mainboard, bios, network (kể cả `gateway`/`dhcp_enabled`/`dns_servers`/`speed_mbps`),
+  logged_user, installed_software, security (kể cả nhóm mở rộng v3), config_hash — trả về qua
+  `GET /api/machines/{id}` → `latest_spec`.
+
+### 3.7. Chuẩn hóa dữ liệu phía server (v1.4 — agent KHÔNG cần đổi)
+
+Kể từ v1.4, khi nhận inventory server ghi **thêm** 2 bảng phục vụ thống kê (cùng transaction
+với `machine_specs` — xem `docs/REFACTOR_SCHEMA_THONG_KE.md`):
+
+| Bảng | Vai trò | Ghi khi |
+|---|---|---|
+| `machine_current` | Snapshot **mới nhất** của mỗi máy (1:1 với machines), OS/security là **cột có index** | Upsert mỗi lần nhận inventory |
+| `machine_software` | Phần mềm đã cài — **1 dòng/app/máy** (unique `machine_id + lower(name)`) | Replace toàn bộ app của máy (delete + insert) |
+
+Chuẩn hóa **phía server** từ payload agent gửi (agent giữ nguyên):
+
+- `os_product` (ProductName thuần, VD "Windows 11 Pro") + `os_release` (DisplayVersion, VD "25H2"):
+  tách từ `os_name` (token `\d{2}H\d` ở đuôi) hoặc fallback `os_version`. Lý do: `os_version`
+  luôn là `10.0.<build>` cho CẢ Win10 lẫn Win11 → không phân biệt được.
+- `os_family` (windows_10 | windows_11 | windows_server_YYYY | linux | other): phân loại theo
+  ProductName — dùng cho thống kê "số máy Win10/Win11" (GROUP BY).
+- Security (JSONB) → cột phẳng có kiểu: `firewall_enabled`, `windows_update_status`,
+  `windows_update_enabled` (suy từ status: up-to-date/pending/checking/enabled → true;
+  disabled/off/never/paused → false), `antivirus_enabled`, `antivirus_up_to_date`,
+  `bitlocker`, `uac_enabled`, `secure_boot_enabled`, `rdp_enabled`, `usb_storage_blocked`.
+- `installed_software` → dòng chuẩn `{name, version, publisher, install_date}` (name ưu tiên
+  `display_name`, fallback `name`).
+
+> ⚠️ Agent hiện tại **chưa gửi** `firewall_enabled`/`windows_update_status` (chỉ có trong schema
+> v3 và payload test) — các thống kê tương ứng trả `unknown` cho tới khi agent release mới
+> bổ sung collector. Đây là giới hạn dữ liệu, không phải lỗi schema.
 
 ### 3.4. POST /api/renew (mTLS bắt buộc) — tự gia hạn client cert
 
@@ -194,6 +276,7 @@ Roles: `super_admin` (toàn quyền), `org_admin` (cây org của mình + cấp 
 | POST | /api/machines/{id}/approve · /reject · /rescan · PATCH /lifecycle | vận hành |
 | GET | /api/machines/{id}/timeline | lịch sử bật/tắt |
 | GET | /api/stats/overview | `{total_machines, online, ...}` |
+| GET | /api/stats/inventory | thống kê cấu hình **hiện tại**: `total_machines`, `by_os_family` (Win10/Win11…), `by_os_arch`, `by_is_vm`, `by_ram_gb` (`<4/4–8/8–16/16–32/32+ GB` + `unknown`), `by_firewall`, `by_windows_update_status/enabled`, `by_antivirus`, `by_bitlocker`, `top_software` (query: `org_id`?, `top_software_limit`=20, max 100) |
 | POST | /api/reports/export | Excel (mask SĐT mặc định) |
 | POST | /api/reports/export-pdf | PDF (Phase 4) |
 | GET | /api/orgs | cây tổ chức |
