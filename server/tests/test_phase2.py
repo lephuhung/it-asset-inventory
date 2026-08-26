@@ -170,31 +170,3 @@ async def test_bulk_tokens(client, seeded_env):
         headers=_auth(token),
     )
     assert r.status_code == 403
-
-
-# ── Org assign rules ───────────────────────────────────────────
-
-
-async def test_org_assign_rule_match(client, seeded_env):
-    token = await _login(client, seeded_env["email"], seeded_env["password"])
-    r = await client.post(
-        "/api/org-rules",
-        json={
-            "name": "Phòng Kế toán theo hostname",
-            "org_id": seeded_env["org_id"],
-            "match_field": "hostname",
-            "pattern": "KT-*",
-            "priority": 10,
-        },
-        headers=_auth(token),
-    )
-    assert r.status_code == 200, r.text
-
-    from app.api.routes.org_rules import find_assign_org_id
-    from app.db.models import OrgAssignRule as _Rule
-
-    async with __import__("app.db.session", fromlist=["AsyncSessionLocal"]).AsyncSessionLocal() as s:
-        rules = (await s.execute(select(_Rule))).scalars().all()
-
-    assert find_assign_org_id(rules, "KT-001", "10.0.0.5") == uuid.UUID(seeded_env["org_id"])
-    assert find_assign_org_id(rules, "TC-001", "10.0.0.5") is None  # không khớp pattern

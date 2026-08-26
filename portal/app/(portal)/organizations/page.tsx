@@ -1,16 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Building2, Check, Landmark, Network, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  Building2,
+  Check,
+  ChevronRight,
+  Landmark,
+  Network,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { Organization, OrganizationCreate, OrgAssignRule } from "@/lib/types";
+import type { Organization, OrganizationCreate } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   ErrorBanner,
   Field,
+  IconButton,
   Input,
   PageHeader,
   Select,
@@ -25,27 +37,211 @@ const CREATE_TYPES: Array<{ value: OrganizationCreate["type"]; label: string }> 
   { value: "don_vi", label: "Đơn vị trực thuộc" },
 ];
 
-function OrgNode({ org, depth = 0 }: { org: Organization; depth?: number }) {
-  const meta = ORG_TYPE_META[org.type] ?? { label: org.type, badge: "bg-slate-100 text-slate-600 ring-slate-500/20" };
+/* Chấm màu phân loại theo loại tổ chức — điểm chấm trang trí duy nhất
+   mà palette sticker được phép đảm nhiệm (Design.md §Colors). */
+const TYPE_DOT: Record<string, string> = {
+  root: "bg-brand-600",
+  ubnd_xa: "bg-sky-600",
+  so_ban_nganh: "bg-violet-600",
+  phong: "bg-amber-500",
+  don_vi: "bg-slate-400",
+};
+
+/* Tiền tố hiển thị trước tên theo loại tổ chức. */
+const TYPE_PREFIX: Record<string, string> = {
+  ubnd_xa: "UBND Xã/Phường",
+  so_ban_nganh: "Sở/Ban/Ngành",
+};
+
+/* Chuẩn hóa cho tìm kiếm: bỏ dấu tiếng Việt, đ→d, lowercase. */
+function normText(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .toLowerCase();
+}
+
+/** Duyệt cây: thêm vào `acc` các id nằm trên đường dẫn tới node khớp.
+    Tìm trên cả tên lẫn tiền tố/nhãn loại (VD: gõ "so" ra Sở ban ngành).
+    Trả về số node tự khớp trong cây con. */
+function collectVisible(orgs: Organization[], q: string, acc: Set<string>): number {
+  let count = 0;
+  for (const org of orgs) {
+    const childAcc = new Set<string>();
+    const childMatches = org.children?.length ? collectVisible(org.children, q, childAcc) : 0;
+    const meta = ORG_TYPE_META[org.type];
+    const haystack = normText(
+      `${org.name} ${TYPE_PREFIX[org.type] ?? ""} ${meta?.label ?? ""}`,
+    );
+    const selfMatch = haystack.includes(q);
+    if (selfMatch || childMatches > 0) {
+      acc.add(org.id);
+      if (selfMatch) count += 1;
+    }
+    for (const id of childAcc) acc.add(id);
+    count += childMatches;
+  }
+  return count;
+}
+
+function OrgNode({
+  org,
+  depth = 0,
+  collapsed,
+  onToggle,
+  visibleIds,
+}: {
+  org: Organization;
+  depth?: number;
+  collapsed: Set<string>;
+  onToggle: (id: string) => void;
+  /** null = không lọc; khi lọc chỉ render node thuộc đường dẫn khớp (luôn mở). */
+  visibleIds: Set<string> | null;
+}) {
+  if (visibleIds && !visibleIds.has(org.id)) return null;
+  const meta =
+    ORG_TYPE_META[org.type] ?? { label: org.type, badge: "bg-slate-100 text-slate-600 ring-slate-500/20" };
+  const children = org.children ?? [];
+  const hasChildren = children.length > 0;
+  const open = visibleIds !== null || !collapsed.has(org.id);
+
   return (
-    <li className={depth > 0 ? "mt-1" : ""}>
+    <li>
       <div
-        className={`flex flex-wrap items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-slate-50 ${
-          depth > 0 ? "ml-6 border-l-2 border-slate-200 pl-4" : ""
-        }`}
+        className="group flex items-center gap-1.5 rounded-sm py-1 pr-2 transition-colors hover:bg-slate-50"
+        style={{ marginLeft: depth * 18 }}
       >
-        <Building2 className="size-4 shrink-0 text-slate-400" />
-        <span className="text-sm font-medium text-slate-800">{org.name}</span>
+        {/* Nút mở/đóng hoặc chỗ trống căn lề */}
+        {hasChildren ? (
+          <button
+            onClick={() => onToggle(org.id)}
+            aria-expanded={open}
+            aria-label={`${open ? "Thu gọn" : "Mở"} ${org.name}`}
+            className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          >
+            <ChevronRight
+              className={`size-3.5 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+            />
+          </button>
+        ) : (
+          <span className="size-5 shrink-0" />
+        )}
+
+        <span className={`size-2 shrink-0 rounded-full ${TYPE_DOT[org.type] ?? "bg-slate-400"}`} aria-hidden />
+        <Building2 className="size-3.5 shrink-0 text-slate-300 group-hover:text-slate-400" aria-hidden />
+        {TYPE_PREFIX[org.type] && (
+          <span className="shrink-0 text-xs font-medium text-slate-400">{TYPE_PREFIX[org.type]}</span>
+        )}
+        <span className={`truncate text-sm text-slate-800 ${depth === 0 ? "font-medium" : ""}`}>
+          {org.name}
+        </span>
         <Badge className={meta.badge}>{meta.label}</Badge>
+        {hasChildren && !open && (
+          <span className="shrink-0 text-[11px] tabular-nums text-slate-400">
+            {children.length} cấp dưới
+          </span>
+        )}
       </div>
-      {org.children?.length > 0 && (
-        <ul>
-          {org.children.map((c) => (
-            <OrgNode key={c.id} org={c} depth={depth + 1} />
+
+      {hasChildren && open && (
+        <ul className="ml-[13px] border-l border-slate-200 pl-1.5">
+          {children.map((c) => (
+            <OrgNode
+              key={c.id}
+              org={c}
+              depth={depth + 1}
+              collapsed={collapsed}
+              onToggle={onToggle}
+              visibleIds={visibleIds}
+            />
           ))}
         </ul>
       )}
     </li>
+  );
+}
+
+/** Tách cây thành 2 khối hiển thị RIÊNG: UBND cấp xã / Sở ban ngành.
+    - Node gốc type=root là "cha chung" (VD: UBND tỉnh) → bỏ qua chính nó,
+      các con của nó được phân vào khối theo type.
+    - Node type=ubnd_xa → khối UBND (giữ nguyên cây con: đơn vị trực thuộc).
+    - Node type=so_ban_nganh → khối Sở (giữ nguyên cây con: phòng ban).
+    - Loại khác đứng đầu cây (phong/don_vi lẻ) → khối "Khác" để không mất dữ liệu. */
+function splitTree(tree: Organization[]): {
+  ubnd: Organization[];
+  so: Organization[];
+  other: Organization[];
+} {
+  const ubnd: Organization[] = [];
+  const so: Organization[] = [];
+  const other: Organization[] = [];
+  const push = (nodes: Organization[]) => {
+    for (const n of nodes) {
+      if (n.type === "root") push(n.children ?? []);
+      else if (n.type === "ubnd_xa") ubnd.push(n);
+      else if (n.type === "so_ban_nganh") so.push(n);
+      else other.push(n);
+    }
+  };
+  push(tree);
+  return { ubnd, so, other };
+}
+
+/** Đếm tổng node trong cây con (kể cả gốc). */
+function countNodes(org: Organization): number {
+  return 1 + (org.children ?? []).reduce((acc, c) => acc + countNodes(c), 0);
+}
+
+/** Cây con của `org` có node thuộc `visibleIds` (đang tìm kiếm) không? */
+function subtreeHasVisible(org: Organization, visibleIds: Set<string>): boolean {
+  if (visibleIds.has(org.id)) return true;
+  return (org.children ?? []).some((c) => subtreeHasVisible(c, visibleIds));
+}
+
+/** Một khối tổ chức (UBND cấp xã / Sở ban ngành) — header + cây con riêng. */
+function OrgSection({
+  icon,
+  title,
+  nodes,
+  collapsed,
+  onToggle,
+  visibleIds,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  nodes: Organization[];
+  collapsed: Set<string>;
+  onToggle: (id: string) => void;
+  visibleIds: Set<string> | null;
+}) {
+  if (nodes.length === 0) return null;
+  // Đang tìm kiếm mà khối không có kết quả → ẩn cả khối (tránh header rỗng).
+  if (visibleIds && !nodes.some((n) => subtreeHasVisible(n, visibleIds))) return null;
+
+  const count = nodes.reduce((acc, n) => acc + countNodes(n), 0);
+  return (
+    <div className="mb-4 last:mb-0">
+      <div className="mb-1.5 flex items-center gap-2 rounded-md bg-slate-50/80 px-2.5 py-1.5">
+        <span className="text-slate-400">{icon}</span>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">{title}</h3>
+        <span className="ml-auto rounded-full bg-white px-2 py-0.5 text-[11px] font-medium tabular-nums text-slate-400 ring-1 ring-inset ring-slate-200">
+          {count} tổ chức
+        </span>
+      </div>
+      <ul>
+        {nodes.map((n) => (
+          <OrgNode
+            key={n.id}
+            org={n}
+            collapsed={collapsed}
+            onToggle={onToggle}
+            visibleIds={visibleIds}
+          />
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -65,6 +261,61 @@ export default function OrganizationsPage() {
 
   const isSuper = user?.role === "super_admin" || user?.role === "admin_global";
   const flatten = useMemo(() => flattenOrgTree(tree), [tree]);
+
+  /* 2 khối hiển thị riêng: UBND cấp xã / Sở ban ngành (không trộn chung). */
+  const { ubnd, so, other } = useMemo(() => splitTree(tree), [tree]);
+
+  /* ── Cây co cụm + tìm kiếm ── */
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const bootstrapped = useRef(false);
+
+  // Lần đầu tải xong: thu gọn TOÀN BỘ các nhánh có cấp dưới (mặc định đóng)
+  useEffect(() => {
+    if (bootstrapped.current || tree.length === 0) return;
+    bootstrapped.current = true;
+    const init = new Set<string>();
+    const walk = (nodes: Organization[]) => {
+      for (const n of nodes) {
+        if (n.children?.length) init.add(n.id);
+        walk(n.children ?? []);
+      }
+    };
+    walk(tree);
+    setCollapsed(init);
+  }, [tree]);
+
+  const q = useMemo(() => normText(query.trim()), [query]);
+  const filtering = q.length > 0;
+  const { visibleIds, matchCount } = useMemo(() => {
+    if (!filtering) return { visibleIds: null as Set<string> | null, matchCount: 0 };
+    const acc = new Set<string>();
+    const n = collectVisible(tree, q, acc);
+    return { visibleIds: acc, matchCount: n };
+  }, [tree, q, filtering]);
+
+  const toggle = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const setAll = (open: boolean) => {
+    if (open) {
+      setCollapsed(new Set());
+    } else {
+      setCollapsed(new Set(flatten.filter((n) => n.org.children?.length).map((n) => n.org.id)));
+    }
+  };
+
+  const typeCounts = useMemo(() => {
+    const acc: Record<string, number> = {};
+    for (const { org } of flatten) acc[org.type] = (acc[org.type] ?? 0) + 1;
+    return acc;
+  }, [flatten]);
 
   const load = useCallback(async () => {
     try {
@@ -135,12 +386,31 @@ export default function OrganizationsPage() {
         <Card
           className="lg:col-span-3"
           title="Sơ đồ tổ chức"
-          subtitle="Cây phân cấp — màu theo loại tổ chức"
+          subtitle="2 khối riêng: UBND cấp xã · Sở ban ngành — chấm màu theo loại · nhấn mũi tên để mở/thu gọn"
           padded={false}
+          actions={
+            <>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Tìm tổ chức… (không cần dấu)"
+                  className="h-8! w-52! min-w-0 pl-8! text-xs!"
+                  aria-label="Tìm kiếm tổ chức"
+                />
+              </div>
+              {tree.length > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setAll(filtering || collapsed.size > 0)}>
+                  {filtering || collapsed.size > 0 ? "Mở tất cả" : "Thu gọn"}
+                </Button>
+              )}
+            </>
+          }
         >
           {loading && tree.length === 0 ? (
             <Spinner label="Đang tải cây tổ chức…" />
-          ) : tree.length === 0 ? (
+          ) : ubnd.length + so.length + other.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-12 text-center">
               <Building2 className="size-10 text-slate-300" />
               <p className="text-sm font-medium text-slate-600">Chưa có tổ chức nào</p>
@@ -149,15 +419,65 @@ export default function OrganizationsPage() {
               </p>
             </div>
           ) : (
-            <ul className="p-4">
-              {tree.map((n) => (
-                <OrgNode key={n.id} org={n} />
-              ))}
-            </ul>
+            <>
+              {/* Chip thống kê theo loại — tổng quan nhanh khi danh sách dài */}
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2.5">
+                {Object.entries(typeCounts).map(([t, n]) => (
+                  <Badge key={t} className={ORG_TYPE_META[t as keyof typeof ORG_TYPE_META]?.badge ?? "bg-slate-100 text-slate-600 ring-slate-500/20"}>
+                    {ORG_TYPE_META[t as keyof typeof ORG_TYPE_META]?.label ?? t}: {n}
+                  </Badge>
+                ))}
+                {filtering && (
+                  <span className="ml-auto text-xs text-slate-500">
+                    {matchCount}/{flatten.length} kết quả
+                  </span>
+                )}
+              </div>
+
+              {filtering && matchCount === 0 ? (
+                <div className="flex flex-col items-center gap-1.5 py-12 text-center">
+                  <Search className="size-8 text-slate-300" />
+                  <p className="text-sm font-medium text-slate-600">Không có tổ chức nào khớp</p>
+                  <p className="text-xs text-slate-400">
+                    Không tìm thấy kết quả cho “{query.trim()}”.
+                  </p>
+                </div>
+              ) : (
+                /* Khung cuộn nội bộ — danh sách dài không đẩy trang.
+                   2 khối RIÊNG: UBND cấp xã · Sở ban ngành (không trộn chung). */
+                <div className="max-h-[560px] overflow-y-auto p-3">
+                  <OrgSection
+                    icon={<Landmark className="size-4" />}
+                    title="UBND cấp xã"
+                    nodes={ubnd}
+                    collapsed={collapsed}
+                    onToggle={toggle}
+                    visibleIds={visibleIds}
+                  />
+                  <OrgSection
+                    icon={<Network className="size-4" />}
+                    title="Sở ban ngành"
+                    nodes={so}
+                    collapsed={collapsed}
+                    onToggle={toggle}
+                    visibleIds={visibleIds}
+                  />
+                  <OrgSection
+                    icon={<Building2 className="size-4" />}
+                    title="Khác"
+                    nodes={other}
+                    collapsed={collapsed}
+                    onToggle={toggle}
+                    visibleIds={visibleIds}
+                  />
+                </div>
+              )}
+            </>
           )}
           {tree.length > 0 && (
             <p className="border-t border-slate-100 px-4 py-2.5 text-xs text-slate-400">
-              {tree.length} tổ chức gốc · {flatten.length} tổ chức trong phạm vi quyền của bạn
+              {ubnd.length + so.length + other.length} tổ chức hiển thị trong phạm vi quyền của bạn
+              {ubnd.length > 0 && so.length > 0 && " · 2 khối: UBND cấp xã & Sở ban ngành"}
             </p>
           )}
         </Card>
@@ -218,7 +538,7 @@ export default function OrganizationsPage() {
             </Field>
 
             {!isSuper && (
-              <p className="rounded-md bg-[#f5f5f5] px-3 py-2 text-xs text-[#4f4848]">
+              <p className="rounded-md bg-brand-50 px-3 py-2 text-xs text-brand-700">
                 Cấp trên được chọn phải thuộc phạm vi quyền của bạn (tổ chức của bạn hoặc cấp dưới) — backend sẽ từ chối nếu vi phạm.
               </p>
             )}
@@ -231,178 +551,6 @@ export default function OrganizationsPage() {
           </form>
         </Card>
       </div>
-
-      <OrgAssignRulesPanel orgs={tree} />
     </div>
-  );
-}
-
-/* ── Rule tự gán tổ chức (tính năng #13) ───────────────────── */
-
-function OrgAssignRulesPanel({ orgs }: { orgs: Organization[] }) {
-  const [rules, setRules] = useState<OrgAssignRule[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const [name, setName] = useState("");
-  const [orgId, setOrgId] = useState("");
-  const [matchField, setMatchField] = useState<"hostname" | "ip_prefix">("hostname");
-  const [pattern, setPattern] = useState("");
-  const [priority, setPriority] = useState(100);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  const flatten = useMemo(() => flattenOrgTree(orgs), [orgs]);
-
-  const load = useCallback(async () => {
-    try {
-      setRules(await api.get<OrgAssignRule[]>("/org-rules"));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Không tải được rule");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const create = async (e: FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setFormError(null);
-    try {
-      await api.post<OrgAssignRule>("/org-rules", {
-        name,
-        org_id: orgId,
-        match_field: matchField,
-        pattern,
-        enabled: true,
-        priority,
-      });
-      setName("");
-      setPattern("");
-      await load();
-    } catch (err) {
-      setFormError(err instanceof ApiError ? err.detail : "Không tạo được rule");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const remove = async (r: OrgAssignRule) => {
-    if (!window.confirm(`Xóa rule "${r.name}"?`)) return;
-    try {
-      await api.delete(`/org-rules/${r.id}`);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Xóa thất bại");
-    }
-  };
-
-  const orgName = (id: string) => {
-    const f = flatten.find((x) => x.org.id === id);
-    return f ? f.org.name : id.slice(0, 8);
-  };
-
-  return (
-    <Card
-      className="mt-6"
-      title="Rule tự gán tổ chức"
-      subtitle="Khi máy mới enroll, hostname/dải IP khớp rule → máy tự gán cho tổ chức đích (ưu tiên cao trước)"
-      padded={false}
-    >
-      {error && (
-        <div className="px-5 pt-4">
-          <ErrorBanner message={error} onRetry={() => void load()} />
-        </div>
-      )}
-      <div className="grid gap-6 p-5 lg:grid-cols-2">
-        <div>
-          {loading && rules.length === 0 ? (
-            <Spinner />
-          ) : rules.length === 0 ? (
-            <p className="text-sm text-slate-500">Chưa có rule nào.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {rules.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center gap-2 py-2.5">
-                  <Badge className="bg-blue-50 text-blue-700 ring-blue-600/20">{r.match_field}</Badge>
-                  <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
-                    {r.pattern}
-                  </code>
-                  <span className="text-xs text-slate-400">→</span>
-                  <span className="text-sm text-slate-700">{orgName(r.org_id)}</span>
-                  <span className="text-[11px] text-slate-400">prio {r.priority}</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Badge
-                      className={
-                        r.enabled
-                          ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
-                          : "bg-slate-100 text-slate-500 ring-slate-500/20"
-                      }
-                    >
-                      {r.enabled ? "Bật" : "Tắt"}
-                    </Badge>
-                    <button
-                      onClick={() => void remove(r)}
-                      className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                      title="Xóa rule"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <form onSubmit={create} className="space-y-3">
-          <Field label="Tên rule" required>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Phòng Kế toán theo hostname" required />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Trường khớp" required>
-              <Select
-                value={matchField}
-                onChange={(e) => setMatchField(e.target.value as "hostname" | "ip_prefix")}
-              >
-                <option value="hostname">Hostname (KT-*)</option>
-                <option value="ip_prefix">Dải IP (10.0.)</option>
-              </Select>
-            </Field>
-            <Field label="Pattern" required hint="VD: KT-* hoặc 10.0.">
-              <Input value={pattern} onChange={(e) => setPattern(e.target.value)} placeholder="KT-*" required />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Gán cho tổ chức" required>
-              <Select value={orgId} onChange={(e) => setOrgId(e.target.value)} required>
-                <option value="">— Chọn —</option>
-                {flatten.map(({ org, depth }) => {
-                  const meta = ORG_TYPE_META[org.type];
-                  return (
-                    <option key={org.id} value={org.id}>
-                      {"— ".repeat(depth)}
-                      {org.name} ({meta?.label ?? org.type})
-                    </option>
-                  );
-                })}
-              </Select>
-            </Field>
-            <Field label="Ưu tiên" hint="Nhỏ = ưu tiên cao">
-              <Input type="number" min={1} max={1000} value={priority} onChange={(e) => setPriority(Number(e.target.value))} />
-            </Field>
-          </div>
-          {formError && <p className="text-sm text-rose-600">{formError}</p>}
-          <Button type="submit" loading={submitting} className="w-full" disabled={!name || !pattern || !orgId}>
-            <Plus className="size-4" /> Thêm rule
-          </Button>
-        </form>
-      </div>
-    </Card>
   );
 }

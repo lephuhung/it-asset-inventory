@@ -12,9 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import hash_token
-from app.db.models import EnrollToken, Machine, MachineStatus, OrgAssignRule, TokenStatus, User
+from app.db.models import EnrollToken, Machine, MachineStatus, TokenStatus, User
 from app.db.session import get_db
 from app.schemas import EnrollRequest, EnrollResponse
+from app.services.agent_settings import effective_agent_config
 from app.services.ca import get_ca_service
 from app.services.fingerprint import compute_weighted_id, is_same_machine
 
@@ -56,11 +57,9 @@ async def enroll(
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token hết hạn")
 
-    # 2. Xác định org đích: org của token, trừ khi có org-assign rule khớp hostname/IP (tính năng #13)
-    from app.api.routes.org_rules import find_assign_org_id
-
-    rules = (await db.execute(select(OrgAssignRule))).scalars().all()
-    target_org_id = find_assign_org_id(rules, body.hostname, ip) or token_row.org_id
+    # 2. Xác định org đích: org gắn trên token (Chế độ B — link tự khai báo / bulk CSV
+    # đã bind sẵn org khi admin cấp). Nếu cần chuyển org, dùng bulk import hoặc đổi token.
+    target_org_id = token_row.org_id
 
     # 3. Fuzzy-match fingerprint: máy cũ hay máy mới?
     fp_dict = body.fingerprint.model_dump(exclude_none=True)
@@ -164,7 +163,7 @@ async def enroll(
     await db.commit()
 
     renew_after = now + timedelta(days=int(settings.client_cert_valid_days * 0.7))
-    agent_cfg = settings.agent_config_payload()
+    agent_cfg = await effective_agent_config(db)
     return EnrollResponse(
         machine_id=machine.id,
         client_cert_pem=cert_pem,
@@ -172,7 +171,7 @@ async def enroll(
         renew_after=renew_after,
         is_new_machine=is_new,
         status=MachineStatus(machine.status),
-        agent_server_url=settings.agent_server_url,
+        agent_server_url=agent_cfg["agent_server_url"],
         heartbeat_interval_seconds=agent_cfg["heartbeat_interval_seconds"],
         heartbeat_jitter_seconds=agent_cfg["heartbeat_jitter_seconds"],
         inventory_interval_hours=agent_cfg["inventory_interval_hours"],

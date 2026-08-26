@@ -26,7 +26,6 @@ from app.api.routes import (
     inventory,
     machines,
     offline_import,
-    org_rules,
     orgs,
     renew,
     reports,
@@ -120,7 +119,6 @@ app.include_router(tokens.router)
 app.include_router(machines.router)
 app.include_router(stats.router)
 app.include_router(orgs.router)
-app.include_router(org_rules.router)
 app.include_router(alert_rules.router)
 app.include_router(self_service.router)
 app.include_router(drifts.router)
@@ -130,6 +128,8 @@ app.include_router(api_keys.public_router)
 app.include_router(audit.router)
 app.include_router(compliance.router)
 app.include_router(reports.router)
+from app.api.routes import agent_settings
+app.include_router(agent_settings.router)
 app.include_router(agent_config.router)
 app.include_router(renew.router)
 app.include_router(install.router)

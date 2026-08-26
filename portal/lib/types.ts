@@ -73,6 +73,7 @@ export interface MachineListItem {
   enrolled_at: string;
   org_id: string;
   assigned_user_id: string | null;
+  logged_user?: string | null;
 }
 
 export interface NetworkInterface {
@@ -86,6 +87,13 @@ export interface SecurityPosture {
   antivirus?: Array<Record<string, unknown>> | null;
   windows_update_status?: string | null;
   bitlocker?: string | null;
+  firewall_enabled?: boolean | null;
+  uac_enabled?: boolean | null;
+  secure_boot_enabled?: boolean | null;
+  usb_storage_blocked?: boolean | null;
+  weak_protocols?: Record<string, boolean> | null;
+  listening_ports?: Array<Record<string, unknown>> | null;
+  startup_programs?: Array<Record<string, unknown>> | null;
   rdp_enabled?: boolean | null;
   local_accounts?: Array<Record<string, unknown>> | null;
   smarts?: Array<Record<string, unknown>> | null;
@@ -237,17 +245,6 @@ export interface BulkTokenResponse {
   tokens: TokenCreateResponse[];
 }
 
-export interface OrgAssignRule {
-  id: string;
-  name: string;
-  org_id: string;
-  match_field: "hostname" | "ip_prefix";
-  pattern: string;
-  enabled: boolean;
-  priority: number;
-  created_at: string;
-}
-
 /* ── Phase 3 ───────────────────────────────────────────────── */
 
 export type AssetLifecycleValue = "new" | "in_use" | "in_repair" | "decommissioned";
@@ -302,6 +299,34 @@ export interface ApiKey {
 
 export interface ApiKeyCreated extends ApiKey {
   key: string; // chỉ hiện 1 lần
+}
+
+/* ── Inventory stats (`GET /api/stats/inventory`) ───────────── */
+
+export interface StatBucket {
+  /** Key nhóm đếm — chuẩn hóa: "true"/"false"/"unknown" cho bool, raw cho chuỗi. */
+  key: string;
+  count: number;
+}
+
+export interface TopSoftwareItem {
+  name: string;
+  machines: number;
+}
+
+export interface InventoryStatsResponse {
+  total_machines: number;
+  by_os_family: StatBucket[];
+  by_os_arch: StatBucket[];
+  by_is_vm: StatBucket[];
+  by_ram_gb: StatBucket[];
+  by_windows_update_status: StatBucket[];
+  by_windows_update_enabled: StatBucket[];
+  by_firewall: StatBucket[];
+  by_antivirus: StatBucket[];
+  by_bitlocker: StatBucket[];
+  top_software: TopSoftwareItem[];
+  generated_at: string;
 }
 /* ── User management (Super Admin) ─────────────────────────── */
 

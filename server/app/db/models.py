@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -141,6 +142,12 @@ class Machine(Base):
     specs: Mapped[list[MachineSpec]] = relationship(
         back_populates="machine", cascade="all, delete-orphan", order_by="MachineSpec.collected_at.desc()"
     )
+    current: Mapped[MachineCurrent | None] = relationship(
+        back_populates="machine", cascade="all, delete-orphan", uselist=False
+    )
+    software: Mapped[list[MachineSoftware]] = relationship(
+        back_populates="machine", cascade="all, delete-orphan"
+    )
 
 
 class MachineSpec(Base):
@@ -150,20 +157,119 @@ class MachineSpec(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), nullable=False)
     os_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    os_product: Mapped[str | None] = mapped_column(String(128), nullable=True)  # ProductName thuần ("Windows 11 Pro")
+    os_release: Mapped[str | None] = mapped_column(String(32), nullable=True)   # DisplayVersion ("25H2")
+    os_family: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)  # windows_10|windows_11|...
     os_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os_build: Mapped[str | None] = mapped_column(String(32), nullable=True)
     os_arch: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    os_installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activation_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     cpu: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ram_gb: Mapped[float | None] = mapped_column(Float, nullable=True)
     disks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     gpu: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    mainboard: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    bios: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     network: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     logged_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    installed_software: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     security: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
     machine: Mapped[Machine] = relationship(back_populates="specs")
+
+
+class MachineCurrent(Base):
+    """Snapshot CẤU HÌNH MỚI NHẤT của mỗi máy — 1:1 với machines (denormalized).
+
+    Upsert mỗi lần nhận inventory mới (cùng transaction với insert `machine_specs`).
+    Nguồn duy nhất cho thống kê "hiện tại" — mọi câu đếm là GROUP BY trên cột có index,
+    không phải scan lịch sử JSONB trong `machine_specs`.
+
+    Các trường OS/security được CHUẨN HÓA PHÍA SERVER từ payload agent (v1/v2/v3) —
+    agent không cần đổi (xem `app/services/inventory_normalize.py`).
+    """
+
+    __tablename__ = "machine_current"
+
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), primary_key=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ── OS — chuẩn hóa để đếm (không parse chuỗi) ──
+    os_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    os_product: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    os_release: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    os_family: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    os_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    os_build: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    os_arch: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    os_installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activation_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # ── Phần cứng — ít thống kê, giữ JSONB gọn ──
+    cpu: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    ram_gb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    disks: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    gpu: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    mainboard: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    bios: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    network: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_vm: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    logged_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # ── Bảo mật — CỘT có kiểu rõ ràng (đếm được, index được) ──
+    antivirus: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # chi tiết, hiển thị
+    antivirus_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    antivirus_up_to_date: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    windows_update_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    windows_update_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    bitlocker: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    firewall_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    uac_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    secure_boot_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    rdp_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    usb_storage_blocked: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    machine: Mapped[Machine] = relationship(back_populates="current")
+
+
+class MachineSoftware(Base):
+    """Phần mềm đã cài của mỗi máy — 1 dòng/app/máy (bảng "hiện tại" chuẩn hóa).
+
+    Upsert dạng replace (xóa hết app cũ của máy + insert danh sách mới) mỗi lần
+    inventory đổi — tần suất thấp (24h / khi cấu hình đổi), kích thước nhỏ (~50–200/máy).
+
+    - "App cài nhiều nhất": GROUP BY name → COUNT(DISTINCT machine_id) (index lower(name)).
+    - "Máy nào thiếu app X": LEFT JOIN machines.
+    - Alert `software_new` (diff vs allowlist) trở nên tầm thường.
+    """
+
+    __tablename__ = "machine_software"
+    __table_args__ = (
+        # Unique theo tên KHÔNG phân biệt hoa thường — agent cùng code luôn gửi cùng casing,
+        # nhưng offline import / agent khác có thể lệch. Dùng text("lower(name)") để trỏ ĐÚNG
+        # vào cột (func.lower("name") sẽ thành literal 'name' — sai).
+        Index(
+            "uq_machine_software_machine_name",
+            "machine_id",
+            text("lower(name)"),
+            unique=True,
+        ),
+        Index("ix_machine_software_name", text("lower(name)")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    publisher: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    install_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    machine: Mapped[Machine] = relationship(back_populates="software")
 
 
 class Heartbeat(Base):
@@ -287,20 +393,7 @@ class SelfServiceLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
 
-class OrgAssignRule(Base):
-    """Tự gán tổ chức theo rule (tính năng #13) — hostname pattern / dải IP."""
 
-    __tablename__ = "org_assign_rules"
-
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)  # org sẽ gán
-    match_field: Mapped[str] = mapped_column(String(16), default="hostname")  # hostname | ip_prefix
-    pattern: Mapped[str] = mapped_column(String(255), nullable=False)  # KT-* hoặc 10.0.
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    priority: Mapped[int] = mapped_column(Integer, default=100)  # nhỏ = ưu tiên cao
-    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
 
 class FingerprintDrift(Base):
@@ -342,3 +435,22 @@ class ApiKey(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class AgentConfigOverride(Base):
+    """Cấu hình agent do Super Admin đặt từ portal (bảng 1 dòng, id cố định = 1).
+
+    Agent sau khi cài đặt gọi `GET /api/agent/config` (hoặc nhận qua heartbeat)
+    để đồng bộ: tần suất heartbeat, chu kỳ inventory, IP/Domain server đẩy dữ liệu.
+    Trường `None` = dùng giá trị mặc định từ env (`app.core.config.Settings`).
+    """
+
+    __tablename__ = "agent_config_override"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    heartbeat_interval_seconds: Mapped[int | None] = mapped_column(nullable=True)
+    heartbeat_jitter_seconds: Mapped[int | None] = mapped_column(nullable=True)
+    inventory_interval_hours: Mapped[int | None] = mapped_column(nullable=True)
+    agent_server_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # IP/Domain agent đẩy dữ liệu về
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)

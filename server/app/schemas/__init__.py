@@ -89,6 +89,8 @@ class HeartbeatResponse(BaseModel):
 
 
 # ── Inventory ─────────────────────────────────────────────────────
+# Schema khớp đúng payload agent Windows đẩy lên (xem docs/API_CONTRACT.md).
+# Mọi trường optional — agent không đọc được (WMI/Registry lỗi) → bỏ trống.
 
 
 class NetworkInterface(BaseModel):
@@ -96,15 +98,127 @@ class NetworkInterface(BaseModel):
     ip: str | None = None
     mac: str | None = None
     is_dual_homed: bool = False
+    gateway: str | None = None
+    dhcp_enabled: bool | None = None
+    dns_servers: list[str] | None = None
+    speed_mbps: int | None = Field(default=None, ge=0)
+
+
+class CpuInfo(BaseModel):
+    model: str | None = None
+    cores: int | None = Field(default=None, ge=1)
+    threads: int | None = Field(default=None, ge=1)
+    clock_mhz: int | None = Field(default=None, ge=0)
+    virtualization_enabled: bool | None = None
+
+
+class DiskPartition(BaseModel):
+    drive_letter: str | None = None
+    total_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    file_system: str | None = None
+
+
+class DiskInfo(BaseModel):
+    model: str | None = None
+    serial: str | None = None  # v1 (cũ): serial ổ cứng
+    size_bytes: int | None = Field(default=None, ge=0)
+    size: int | None = Field(default=None, ge=0)  # alias của size_bytes (agent mới gửi cả hai)
+    size_gb: float | None = Field(default=None, ge=0)  # v1 (cũ): dung lượng GB
+    type: str | None = None  # v1 (cũ): SSD | HDD | NVMe
+    bus_type: str | None = None  # NVMe | SATA | SAS | ...
+    media_type: str | None = None  # SSD | HDD | ...
+    smart_health: str | None = None  # OK | caution | ...
+    partitions: list[DiskPartition] | None = None
+
+
+class GpuInfo(BaseModel):
+    model: str | None = None
+    driver_version: str | None = None
+    memory_mb: int | None = Field(default=None, ge=0)
+
+
+class MainboardInfo(BaseModel):
+    model: str | None = None  # v1 (cũ): "model" = manufacturer + product
+    manufacturer: str | None = None
+    product: str | None = None
+    serial: str | None = None
+    version: str | None = None
+
+
+class BiosInfo(BaseModel):
+    vendor: str | None = None
+    version: str | None = None
+    release_date: str | None = None
+    smbios_version: str | None = None
+
+
+class InstalledSoftware(BaseModel):
+    display_name: str | None = None
+    name: str | None = None  # v1 (cũ) / alias của display_name
+    version: str | None = None
+    publisher: str | None = None
+    install_date: str | None = None
+    uninstall_string: str | None = None
+    is_per_user: bool | None = None
+
+
+class AntivirusInfo(BaseModel):
+    displayName: str | None = None
+    name: str | None = None  # v1 (cũ) / alias của displayName
+    status: str | None = None  # v1 (cũ): enabled | disabled
+    enabled: bool | None = None
+    upToDate: bool | None = None
+
+
+class LocalAccountInfo(BaseModel):
+    username: str | None = None
+    name: str | None = None  # v1 (cũ) / alias của username
+    full_name: str | None = None
+    disabled: bool | None = None
+    has_password: bool | None = None
+    is_admin: bool | None = None
+
+
+class SmartDeviceInfo(BaseModel):
+    device: str | None = None
+    model: str | None = None
+    health: str | None = None
+
+
+class WeakProtocols(BaseModel):
+    smbv1_disabled: bool | None = None
+    tls10_disabled: bool | None = None
+    tls11_disabled: bool | None = None
+    ssl3_disabled: bool | None = None
+
+
+class ListeningPort(BaseModel):
+    port: int | None = Field(default=None, ge=0, le=65535)
+    protocol: str | None = None  # TCP | UDP
+    address: str | None = None
+
+
+class StartupProgram(BaseModel):
+    name: str | None = None
+    command: str | None = None
+    location: str | None = None  # HKLM_Run | HKCU_Run | ...
 
 
 class SecurityPosture(BaseModel):
-    antivirus: list[dict] | None = None
+    antivirus: list[AntivirusInfo] | None = None
     windows_update_status: str | None = None
     bitlocker: str | None = None
+    firewall_enabled: bool | None = None
+    uac_enabled: bool | None = None
+    secure_boot_enabled: bool | None = None
+    usb_storage_blocked: bool | None = None
+    weak_protocols: WeakProtocols | None = None
+    listening_ports: list[ListeningPort] | None = None
+    startup_programs: list[StartupProgram] | None = None
     rdp_enabled: bool | None = None
-    local_accounts: list[dict] | None = None
-    smarts: list[dict] | None = None  # SMART cơ bản
+    local_accounts: list[LocalAccountInfo] | None = None
+    smarts: list[SmartDeviceInfo] | None = None  # SMART cơ bản
 
 
 class InventoryRequest(BaseModel):
@@ -114,15 +228,15 @@ class InventoryRequest(BaseModel):
     os_arch: str | None = None
     os_installed_at: datetime | None = None
     activation_status: str | None = None
-    cpu: dict | None = None
+    cpu: CpuInfo | None = None
     ram_gb: float | None = None
-    disks: list[dict] | None = None
-    gpu: dict | None = None
-    mainboard: dict | None = None
-    bios: dict | None = None
+    disks: list[DiskInfo] | None = None
+    gpu: GpuInfo | None = None
+    mainboard: MainboardInfo | None = None
+    bios: BiosInfo | None = None
     network: list[NetworkInterface] | None = None
     logged_user: str | None = None
-    installed_software: list[dict] | None = None
+    installed_software: list[InstalledSoftware] | None = None
     security: SecurityPosture | None = None
     is_vm: bool | None = None
     config_hash: str | None = Field(default=None, max_length=64)
@@ -182,6 +296,7 @@ class MachineListItem(BaseModel):
     enrolled_at: datetime
     org_id: uuid.UUID
     assigned_user_id: uuid.UUID | None
+    logged_user: str | None = None  # user Windows đang đăng nhập (từ snapshot mới nhất)
 
 
 class MachineDetail(MachineListItem):
@@ -222,6 +337,41 @@ class StatsOverview(BaseModel):
     lost: int
     pending_tokens: int
     expired_tokens: int
+
+
+class StatBucket(BaseModel):
+    """1 nhóm đếm: key chuẩn hóa ("true"/"false"/"unknown" cho bool) + số lượng."""
+
+    key: str
+    count: int
+
+
+class TopSoftwareItem(BaseModel):
+    """1 app trong bảng xếp hạng "cài nhiều nhất" — số máy cài (distinct)."""
+
+    name: str
+    machines: int
+
+
+class InventoryStatsResponse(BaseModel):
+    """Thống kê cấu hình 'hiện tại' — đọc từ machine_current / machine_software (GROUP BY SQL).
+
+    Nguồn dữ liệu: snapshot mới nhất của từng máy (không phải lịch sử machine_specs).
+    `unknown` = máy chưa gửi trường đó (agent cũ / trường cần admin).
+    """
+
+    total_machines: int
+    by_os_family: list[StatBucket] = []
+    by_os_arch: list[StatBucket] = []
+    by_is_vm: list[StatBucket] = []
+    by_ram_gb: list[StatBucket] = []
+    by_windows_update_status: list[StatBucket] = []
+    by_windows_update_enabled: list[StatBucket] = []
+    by_firewall: list[StatBucket] = []
+    by_antivirus: list[StatBucket] = []
+    by_bitlocker: list[StatBucket] = []
+    top_software: list[TopSoftwareItem] = []
+    generated_at: datetime
 
 
 # ── Agent config ───────────────────────────────────────────────
@@ -340,23 +490,6 @@ class BulkTokenRequest(BaseModel):
 class BulkTokenResponse(BaseModel):
     created: int
     tokens: list[TokenCreateResponse]
-
-
-# ── Org assign rules (tự gán tổ chức) ──────────────────────────
-
-
-class OrgAssignRuleCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
-    org_id: uuid.UUID
-    match_field: str = Field(default="hostname", description="hostname | ip_prefix")
-    pattern: str = Field(..., min_length=1, max_length=255)
-    enabled: bool = True
-    priority: int = Field(default=100, ge=1, le=1000)
-
-
-class OrgAssignRuleOut(OrgAssignRuleCreate):
-    id: uuid.UUID
-    created_at: datetime
 
 
 # ── Phase 3: lifecycle, approvals, drift, rescan, offline import ──
@@ -483,3 +616,48 @@ class UserUpdateRequest(BaseModel):
 
 class UserResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
+
+
+# ── Cấu hình agent (portal Vận hành → Cấu hình Agent) ───────────
+
+
+class AgentSettingsUpdate(BaseModel):
+    """Super Admin chỉnh cấu hình agent từ portal. Trường `None` = về mặc định env."""
+
+    heartbeat_interval_seconds: int | None = Field(default=None, ge=5, le=3600)
+    heartbeat_jitter_seconds: int | None = Field(default=None, ge=0, le=600)
+    inventory_interval_hours: int | None = Field(default=None, ge=1, le=168)
+    agent_server_url: str | None = Field(default=None, max_length=512)
+
+
+class AgentSettingsOut(BaseModel):
+    """Cấu hình hiệu lực + giá trị mặc định env + nguồn của từng trường."""
+
+    # Giá trị hiệu lực (agent đang nhận)
+    heartbeat_interval_seconds: int
+    heartbeat_jitter_seconds: int
+    online_ttl_seconds: int
+    inventory_interval_hours: int
+    renew_before_percent: int
+    agent_server_url: str
+
+    # Giá trị mặc định env (để so sánh / hoàn tác)
+    defaults: dict[str, int | str]
+    overridden: dict[str, bool]
+    updated_at: datetime | None = None
+    updated_by: uuid.UUID | None = None
+
+
+# ── Thống kê máy theo tổ chức (agent vs cách ly) ─────────────────
+
+
+class OrgMachineStat(BaseModel):
+    """Số máy của 1 tổ chức, tách theo có agent (có heartbeat) / cách ly."""
+
+    org_id: uuid.UUID
+    org_name: str
+    org_type: str
+    total: int
+    with_agent: int  # đã gửi heartbeat ít nhất 1 lần → đang cài agent
+    isolated: int  # không bao giờ heartbeat → import offline (máy cách ly)
+    pending: int  # chờ duyệt enroll — chưa thuộc nhóm nào
