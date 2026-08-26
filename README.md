@@ -36,6 +36,30 @@ bash deploy/certs/gen-dev-certs.sh
 
 Tài khoản seed mặc định: `admin@example.gov.vn` (xem `server/.env` → `SEED_ADMIN_*`).
 
+## Đồng bộ GitHub & CI
+
+Repo git đã khởi tạo (nhánh `main`, đã loại cache: node_modules/.next/.venv/bin/obj/.nuget-packages/.env).
+
+```bash
+# 1. Tạo repo trên GitHub (khuyến nghị Private), rồi:
+git remote add origin git@github.com:<USER>/<REPO>.git
+git push -u origin main
+
+# 2. CI chạy tự động mỗi push/PR (xem .github/workflows/ci.yml):
+#    - Server: pytest (68 tests, có Postgres service) + ruff
+#    - Agent:  dotnet build trên Ubuntu + Windows
+#    - Portal: npm run typecheck + build
+```
+
+**Phát triển agent trên Windows (theo yêu cầu):**
+1. Clone repo trên máy Windows: `git clone <repo> && cd agent`
+2. Mở `agent/OrgInventoryAgent.sln` (cần .NET 8 SDK) hoặc `dotnet build -c Release`
+3. Build MSI: `.\installer\build-msi.ps1 -Sign -CertificateThumbprint <thumb>` (cần WiX v4: `dotnet tool install --global wix`)
+4. Cài thử: `msiexec /i OrgInventoryAgent.msi /qn ENROLL_TOKEN="t_..." ENDPOINTS="https://agent.gov.vn"` (admin)
+5. Debug không cần MSI: `OrgInventoryAgent.exe --data-dir C:\temp\at --endpoint https://... --enroll-token ... --once`
+6. Log: `%ProgramData%\OrgInventory\logs\agent.log` · config: `%ProgramData%\OrgInventory\config.json`
+7. Mỗi commit agent → push → job CI "Agent C# (dotnet build)" chạy trên cả Ubuntu lẫn Windows tự xác nhận build xanh.
+
 ## Test
 
 ```bash

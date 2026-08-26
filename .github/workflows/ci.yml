@@ -1,0 +1,91 @@
+# CI — kiểm chứng tự động mỗi push/PR lên GitHub
+# Jobs: server (pytest + ruff), agent (dotnet build Linux + Windows), portal (typecheck + build)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server:
+    name: Server FastAPI (pytest + ruff)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: inventory
+          POSTGRES_PASSWORD: inventory
+          POSTGRES_DB: inventory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inventory -d inventory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Cài dependencies
+        run: pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check app
+      - name: Chạy test (68 tests)
+        run: pytest -q
+        env:
+          POSTGRES_TEST_HOST: 127.0.0.1
+          POSTGRES_TEST_PORT: 5432
+          POSTGRES_TEST_USER: inventory
+          POSTGRES_TEST_PASSWORD: inventory
+          POSTGRES_TEST_DB: inventory_test
+
+  agent:
+    name: Agent C# (dotnet build)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Build Release
+        run: dotnet build -c Release --nologo
+      - name: Smoke — in fingerprint (chỉ Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          dotnet run --project src/OrgInventoryAgent -c Release --no-build -- --print-fingerprint
+
+  portal:
+    name: Portal Next.js (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Cài dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
