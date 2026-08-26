@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Báo cáo Windows EOL - Asset Inventory</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-container": "#fffbff",
+                        "outline": "#737686",
+                        "on-error-container": "#93000a",
+                        "ink-muted": "#475569",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "secondary-fixed-dim": "#b7c4ff",
+                        "on-secondary-fixed": "#001551",
+                        "on-tertiary-fixed-variant": "#7d2d00",
+                        "secondary-container": "#4069f2",
+                        "surface-bright": "#f7f9fb",
+                        "bad": "#e11d48",
+                        "on-background": "#191c1e",
+                        "ok": "#10b981",
+                        "error-container": "#ffdad6",
+                        "tertiary-container": "#bc4800",
+                        "secondary-fixed": "#dce1ff",
+                        "inverse-primary": "#b4c5ff",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "tertiary-fixed": "#ffdbcd",
+                        "surface": "#ffffff",
+                        "border": "#e2e8f0",
+                        "secondary": "#1d4ed8",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "on-secondary-fixed-variant": "#0039b5",
+                        "on-primary-container": "#eeefff",
+                        "surface-tint": "#0053db",
+                        "primary-container": "#2563eb",
+                        "inverse-on-surface": "#eff1f3",
+                        "primary": "#004ac6",
+                        "on-tertiary-fixed": "#360f00",
+                        "ink-subtle": "#94a3b8",
+                        "primary-fixed": "#dbe1ff",
+                        "surface-variant": "#e0e3e5",
+                        "tertiary-fixed-dim": "#ffb596",
+                        "inverse-surface": "#2d3133",
+                        "on-tertiary": "#ffffff",
+                        "surface-container": "#eceef0",
+                        "brand-50": "#eff6ff",
+                        "on-primary-fixed": "#00174b",
+                        "on-tertiary-container": "#ffede6",
+                        "tertiary": "#943700",
+                        "on-secondary": "#ffffff",
+                        "ink": "#0f172a",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "warn": "#d97706",
+                        "on-surface-variant": "#434655",
+                        "surface-dim": "#d8dadc",
+                        "surface-muted": "#f8fafc",
+                        "border-soft": "#f1f5f9",
+                        "brand-100": "#dbeafe",
+                        "surface-container-high": "#e6e8ea",
+                        "outline-variant": "#c3c6d7",
+                        "surface-container-low": "#f2f4f6",
+                        "on-error": "#ffffff",
+                        "background": "#f7f9fb",
+                        "surface-container-highest": "#e0e3e5"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "page-margin-desktop": "2rem",
+                        "max-content-width": "1320px",
+                        "section-gap": "1.5rem",
+                        "sidebar-width": "16rem",
+                        "card-padding": "1.25rem",
+                        "header-height": "3.5rem"
+                    },
+                    "fontFamily": {
+                        "label-xs": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "hint": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "headline-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-xs": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "hint": ["11px", { "lineHeight": "14px", "fontWeight": "400" }],
+                        "headline-md": ["15px", { "lineHeight": "22px", "fontWeight": "600" }],
+                        "headline-lg": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .tbl-wrap {
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-sm antialiased">
+<!-- SideNavBar -->
+<nav class="w-64 h-screen fixed left-0 top-0 bg-surface border-r border-border shadow-sm flex flex-col h-full py-4 z-40">
+<div class="px-6 mb-8 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-lg">IT</div>
+<div>
+<h1 class="text-headline-md font-headline-md font-bold text-primary">Asset Inventory</h1>
+<p class="text-label-xs font-label-xs text-ink-muted">Enterprise Portal</p>
+</div>
+</div>
+<ul class="flex-1 overflow-y-auto px-4 space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="text-body-sm font-body-sm">Tong quan</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="laptop_mac">laptop_mac</span>
+<span class="text-body-sm font-body-sm">May tinh</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="qr_code">qr_code</span>
+<span class="text-body-sm font-body-sm">May ma</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="key">key</span>
+<span class="text-body-sm font-body-sm">Token trien khai</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="assessment">assessment</span>
+<span class="text-body-sm font-body-sm">Xuat bao cao</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-primary font-semibold bg-brand-50 opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="history" style="font-variation-settings: 'FILL' 1;">history</span>
+<span class="text-body-sm font-body-sm">Windows EOL</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="event_note">event_note</span>
+<span class="text-body-sm font-body-sm">Audit log</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="security">security</span>
+<span class="text-body-sm font-body-sm">Bao mat tai khoan</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="notification_important">notification_important</span>
+<span class="text-body-sm font-body-sm">Thong bao tuan thu</span>
+</a>
+</li>
+</ul>
+<div class="px-4 mt-auto">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted hover:bg-surface-container transition-colors opacity-80 duration-150 border-t border-border mt-2 pt-4" href="#">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+<span class="text-body-sm font-body-sm">Quan tri vien he thong</span>
+</a>
+</div>
+</nav>
+<!-- Main Content Area -->
+<div class="ml-64 flex flex-col min-h-screen">
+<!-- TopAppBar -->
+<header class="h-14 sticky top-0 z-50 w-full bg-surface/80 backdrop-blur-md border-b border-border flex justify-between items-center px-page-margin-desktop">
+<div class="flex items-center gap-4">
+<!-- Search bar on left -->
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[20px]">search</span>
+<input class="w-full pl-9 pr-4 py-1.5 bg-surface-muted border border-border rounded-md text-body-sm focus:ring-2 focus:ring-primary focus:border-primary focus:outline-none transition-shadow text-ink placeholder:text-outline" placeholder="Search..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<button class="px-3 py-1.5 bg-primary-container text-on-primary-container rounded-md text-label-xs font-label-xs font-semibold hover:bg-primary transition-colors flex items-center gap-2">
+<span class="relative flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-on-primary-container opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-on-primary-container"></span>
+</span>
+                    Realtime
+                </button>
+<button class="p-2 text-ink-muted hover:text-primary transition-colors rounded-full hover:bg-surface-muted">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 text-ink-muted hover:text-primary transition-colors rounded-full hover:bg-surface-muted">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-surface-dim flex items-center justify-center font-bold text-primary ml-2 border border-border">
+                    Q
+                </div>
+</div>
+</header>
+<!-- Page Content -->
+<main class="flex-1 p-page-margin-desktop mx-auto w-full max-w-max-content-width flex flex-col gap-section-gap min-w-0">
+<!-- Page Header -->
+<div class="flex flex-col gap-1">
+<h2 class="text-headline-lg font-headline-lg text-ink">Báo cáo Windows EOL</h2>
+<p class="text-body-sm font-body-sm text-ink-muted">Danh sách máy chạy Windows sắp hoặc đã hết vòng đời hỗ trợ từ Microsoft.</p>
+</div>
+<!-- Summary Card Bento Grid -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Expired -->
+<div class="bg-surface rounded-xl p-card-padding border border-border shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="text-label-xs font-label-xs text-ink-muted uppercase">Đã hết hạn</span>
+<span class="material-symbols-outlined text-bad">warning</span>
+</div>
+<div class="text-[32px] font-bold text-ink leading-tight">12</div>
+<div class="text-hint font-hint text-bad font-medium mt-1">Yêu cầu nâng cấp khẩn cấp</div>
+</div>
+<!-- Expiring Soon -->
+<div class="bg-surface rounded-xl p-card-padding border border-border shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="text-label-xs font-label-xs text-ink-muted uppercase">Sắp hết hạn</span>
+<span class="material-symbols-outlined text-warn">schedule</span>
+</div>
+<div class="text-[32px] font-bold text-ink leading-tight">45</div>
+<div class="text-hint font-hint text-warn font-medium mt-1">&lt; 180 ngày</div>
+</div>
+<!-- Safe -->
+<div class="bg-surface rounded-xl p-card-padding border border-border shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="text-label-xs font-label-xs text-ink-muted uppercase">Còn hạn</span>
+<span class="material-symbols-outlined text-ok">check_circle</span>
+</div>
+<div class="text-[32px] font-bold text-ink leading-tight">1,180</div>
+<div class="text-hint font-hint text-ok font-medium mt-1">An toàn</div>
+</div>
+</div>
+<!-- Table Card -->
+<div class="bg-surface rounded-xl border border-border shadow-sm flex flex-col overflow-hidden min-w-0">
+<div class="px-5 py-4 border-b border-border bg-surface flex justify-between items-center">
+<h3 class="text-headline-md font-headline-md text-ink">Danh sách máy theo EOL</h3>
+<div class="flex gap-2">
+<button class="px-3 py-1.5 border border-border rounded-md text-body-sm font-medium text-ink hover:bg-surface-muted transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-[18px]">filter_list</span>
+                            Lọc
+                        </button>
+<button class="px-3 py-1.5 border border-border rounded-md text-body-sm font-medium text-ink hover:bg-surface-muted transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-[18px]">download</span>
+                            Xuất
+                        </button>
+</div>
+</div>
+<div class="p-5 min-w-0">
+<div class="tbl-wrap border border-soft rounded-lg">
+<table class="w-full text-left border-collapse min-w-max">
+<thead>
+<tr class="bg-surface-muted border-b border-soft">
+<th class="px-4 py-3 text-label-xs font-label-xs text-ink-muted uppercase tracking-wider font-semibold">Hostname</th>
+<th class="px-4 py-3 text-label-xs font-label-xs text-ink-muted uppercase tracking-wider font-semibold">OS</th>
+<th class="px-4 py-3 text-label-xs font-label-xs text-ink-muted uppercase tracking-wider font-semibold">Ngày EOL</th>
+<th class="px-4 py-3 text-label-xs font-label-xs text-ink-muted uppercase tracking-wider font-semibold text-right">Còn lại</th>
+<th class="px-4 py-3 text-label-xs font-label-xs text-ink-muted uppercase tracking-wider font-semibold">Trạng thái</th>
+</tr>
+</thead>
+<tbody class="text-body-sm font-body-sm divide-y divide-soft">
+<tr class="hover:bg-surface-muted/50 transition-colors">
+<td class="px-4 py-3 font-medium text-ink whitespace-nowrap">PC-KT-001</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">Windows 10 21H2</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">13/06/2023</td>
+<td class="px-4 py-3 text-bad font-medium text-right whitespace-nowrap">-240 ngày</td>
+<td class="px-4 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-1 rounded-full bg-bad/10 text-bad text-[11px] font-semibold tracking-wide gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-bad"></span>
+                                            Đã hết hạn
+                                        </span>
+</td>
+</tr>
+<tr class="hover:bg-surface-muted/50 transition-colors">
+<td class="px-4 py-3 font-medium text-ink whitespace-nowrap">PC-VP-088</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">Windows 10 22H2</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">14/10/2025</td>
+<td class="px-4 py-3 text-ok font-medium text-right whitespace-nowrap">520 ngày</td>
+<td class="px-4 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-1 rounded-full bg-ok/10 text-ok text-[11px] font-semibold tracking-wide gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-ok"></span>
+                                            An toàn
+                                        </span>
+</td>
+</tr>
+<tr class="hover:bg-surface-muted/50 transition-colors">
+<td class="px-4 py-3 font-medium text-ink whitespace-nowrap">LAP-MKT-012</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">Windows 11 21H2</td>
+<td class="px-4 py-3 text-ink-muted whitespace-nowrap">10/10/2024</td>
+<td class="px-4 py-3 text-warn font-medium text-right whitespace-nowrap">150 ngày</td>
+<td class="px-4 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-1 rounded-full bg-warn/10 text-warn text-[11px] font-semibold tracking-wide gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-warn"></span>
+                                            Cảnh báo
+                                        </span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

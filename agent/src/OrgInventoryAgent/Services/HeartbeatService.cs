@@ -1,0 +1,186 @@
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Collectors;
+using OrgInventoryAgent.Net;
+
+namespace OrgInventoryAgent.Services;
+
+/// <summary>
+/// Heartbeat định kỳ: chu kỳ ngẫu nhiên trong [interval - jitter, interval + jitter]
+/// (mặc định 30±8s ≈ 22–38s) — chống pattern C2. Trước khi gửi: flush offline cache.
+/// Đồng bộ interval/jitter/renew_after từ response; rescan_requested → chạy inventory ngay.
+/// </summary>
+public sealed class HeartbeatService : BackgroundService
+{
+    private readonly AgentConfig _config;
+    private readonly ApiClient _api;
+    private readonly EndpointManager _endpoints;
+    private readonly EnrollCoordinator _enroll;
+    private readonly OfflineCache _cache;
+    private readonly InventoryCollector _inventory;
+    private readonly InventoryService _inventoryService;
+    private readonly ILogger<HeartbeatService> _logger;
+
+    public HeartbeatService(AgentConfig config, ApiClient api, EndpointManager endpoints,
+        EnrollCoordinator enroll, OfflineCache cache, InventoryCollector inventory,
+        InventoryService inventoryService, ILogger<HeartbeatService> logger)
+    {
+        _config = config;
+        _api = api;
+        _endpoints = endpoints;
+        _enroll = enroll;
+        _cache = cache;
+        _inventory = inventory;
+        _inventoryService = inventoryService;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        _logger.LogInformation("HeartbeatService khởi động (interval={I}s, jitter={J}s).",
+            _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (!AgentIdentity.IsEnrolled(_config))
+                {
+                    await _enroll.EnsureEnrolledAsync(ct);
+                }
+
+                if (AgentIdentity.IsEnrolled(_config))
+                {
+                    await FlushOfflineCacheAsync(ct);
+                    await SendHeartbeatAsync(ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Chu kỳ heartbeat lỗi.");
+            }
+
+            var delay = NextDelay();
+            try { await Task.Delay(delay, ct); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>Chu kỳ thực tế = interval ± jitter, ngẫu nhiên mỗi lần.</summary>
+    private TimeSpan NextDelay()
+    {
+        var interval = _config.HeartbeatIntervalSeconds;
+        var jitter = Math.Min(_config.HeartbeatJitterSeconds, interval - 1);
+        var min = Math.Max(5, interval - jitter);
+        var max = Math.Max(min + 1, interval + jitter);
+        var seconds = min + (Random.Shared.NextDouble() * (max - min));
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    /// <summary>Gửi 1 heartbeat (dùng cho --once).</summary>
+    public async Task<bool> SendOnceAsync(CancellationToken ct)
+    {
+        if (!AgentIdentity.IsEnrolled(_config)) return false;
+        return await SendHeartbeatAsync(ct);
+    }
+
+    private async Task<bool> SendHeartbeatAsync(CancellationToken ct)
+    {
+        var payload = new
+        {
+            logged_user = _inventory.GetLoggedUserSafe(),
+            uptime_sec = (long)(Environment.TickCount64 / 1000),
+            ip = _inventory.GetPrimaryIp(),
+        };
+
+        try
+        {
+            var resp = await _api.PostJsonAsync("/api/heartbeat", payload, ct, useClientCert: true, timeoutSeconds: 20);
+            if (!resp.Ok)
+            {
+                _logger.LogWarning("Heartbeat thất bại HTTP {(int)Status}: {Detail}", resp.Status, resp.Detail);
+                return false;
+            }
+
+            var body = resp.Body;
+            _logger.LogDebug("Heartbeat ok, server_time={Time}", body?["server_time"]?.GetValue<string>());
+
+            // Đồng bộ cấu hình từ server
+            bool changed = false;
+            if (body?["heartbeat_interval_seconds"] is not null)
+                changed |= SyncInt(body["heartbeat_interval_seconds"], v => _config.HeartbeatIntervalSeconds = v);
+            if (body?["heartbeat_jitter_seconds"] is not null)
+                changed |= SyncInt(body["heartbeat_jitter_seconds"], v => _config.HeartbeatJitterSeconds = v);
+            var renewAfter = body?["renew_after"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(renewAfter) && _config.RenewAfter != renewAfter)
+            {
+                _config.RenewAfter = renewAfter;
+                changed = true;
+            }
+            if (changed) _config.Save();
+
+            // Phase 3: on-demand rescan từ portal
+            if (body?["rescan_requested"]?.GetValue<bool>() == true)
+            {
+                _logger.LogInformation("Server yêu cầu rescan → chạy inventory ngay.");
+                _inventoryService.TriggerRescan();
+            }
+
+            return true;
+        }
+        catch (ApiTransportException ex)
+        {
+            _logger.LogWarning("Heartbeat không gửi được: {Msg}", ex.Message);
+            return false;
+        }
+    }
+
+    private bool SyncInt(System.Text.Json.Nodes.JsonNode? node, Action<int> setter)
+    {
+        try
+        {
+            var v = node?.GetValue<int>();
+            if (v is > 0) { setter(v.Value); return true; }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>Gửi bù offline cache khi online (giữ nguyên body — không thay đổi nội dung).</summary>
+    private async Task FlushOfflineCacheAsync(CancellationToken ct)
+    {
+        var pending = _cache.GetAll();
+        if (pending.Count == 0) return;
+
+        _logger.LogInformation("Flush offline cache: {Count} bản ghi đang chờ.", pending.Count);
+        foreach (var item in pending)
+        {
+            try
+            {
+                var resp = await _api.PostRawJsonAsync(item.Url, item.Body, ct, useClientCert: true, timeoutSeconds: 30);
+                if (resp.Ok)
+                {
+                    _cache.Delete(item.Id);
+                    _logger.LogInformation("Đã gửi bù offline bản ghi #{Id} → {Url}", item.Id, item.Url);
+                }
+                else
+                {
+                    var drop = _cache.IncrementAttempts(item.Id);
+                    _logger.LogWarning("Gửi bù #{Id} thất bại HTTP {(int)Status}: {Detail}{Drop}",
+                        item.Id, resp.Status, resp.Detail, drop ? " — quá số lần thử, bỏ." : "");
+                    if (drop) _cache.Delete(item.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                var drop = _cache.IncrementAttempts(item.Id);
+                _logger.LogWarning("Gửi bù #{Id} lỗi: {Msg}{Drop}", item.Id, ex.Message, drop ? " — quá số lần thử, bỏ." : "");
+                if (drop) _cache.Delete(item.Id);
+            }
+        }
+    }
+}

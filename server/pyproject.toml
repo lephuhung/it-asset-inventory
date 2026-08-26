@@ -1,0 +1,57 @@
+[project]
+name = "asset-inventory-server"
+version = "0.1.0"
+description = "Hệ thống quản lý tài sản máy tính — Server API (FastAPI)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "email-validator>=2.0.0",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29.0",
+    "alembic>=1.13.0",
+    "redis>=5.0.0",
+    "pyjwt>=2.8.0",
+    "bcrypt>=4.1.0",
+    "cryptography>=42.0.0",
+    "pyotp>=2.9.0",
+    "jinja2>=3.1.0",
+    "slowapi>=0.1.9",
+    "openpyxl>=3.1.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+lint.ignore = [
+    "B008",  # Depends() trong arg default — FastAPI idiom chuẩn
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

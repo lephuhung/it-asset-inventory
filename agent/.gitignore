@@ -1,0 +1,21 @@
+# Build artifacts
+bin/
+obj/
+publish/
+*.user
+
+# NuGet cache cục bộ (dùng khi offline)
+.nuget-packages/
+
+# Dữ liệu test
+.testdata*/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+logs/
+
+# IDE
+.vs/
+.idea/

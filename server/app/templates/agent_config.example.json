@@ -1,0 +1,31 @@
+{
+  // ⚠️ FILE CHUẨN CẤU HÌNH AGENT (bản mẫu) — agent dev dùng làm contract.
+  // Trong thực tế agent đọc file JSON này tại ProgramData\OrgInventoryAgent\config.json
+  // (xem KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md mục 3.3: cấu hình agent từ file local).
+  //
+  // CẤU HÌNH DO OPERATOR CHỈNH TRƯỚC KHI GIAO MÁY (2 mục quan trọng nhất):
+  //   1. "serverUrl"        → IP/host remote mà agent liên hệ (kênh mTLS heartbeat).
+  //   2. "heartbeatInterval"/"heartbeatJitter" → tần suất heartbeat (nếu muốn
+  //      đè cấu hình của server; mặc định để null → agent dùng config server trả về
+  //      qua enroll response / GET /api/agent/config).
+
+  "serverUrl": "https://agent.example.gov.vn",      // REMOTE HOST IP: đổi thành IP/tên miền server thật
+  "serverPort": 443,                                // mTLS qua 443 (nginx agent block)
+  "useProxy": false,                                // nếu máy ra internet qua proxy
+  "proxyUrl": null,
+
+  // ── Tần suất heartbeat (null = theo server; server mặc định 60s ± 15s jitter) ──
+  "heartbeatIntervalSeconds": null,                 // VD: 120 = heartbeat 2 phút 1 lần
+  "heartbeatJitterSeconds": null,                   // VD: 30 → ngẫu nhiên 90–150s
+  "inventoryIntervalHours": null,                   // null = theo server (24h)
+
+  // ── Khác ──
+  "renewBeforePercent": 70,                         // gia hạn client cert khi còn 70% vòng đời
+  "offlineCacheEnabled": true,                      // SQLite cache khi mất mạng (mục 3.4)
+  "logLevel": "info",                               // trace|debug|info|warn|error
+  "userAgent": "OrgInventoryAgent/0.1.0",
+
+  // Ghi chú bảo mật (mục 3.2 tài liệu gốc):
+  //   - KHÔNG chỉnh jitter=0 / interval cố định (bị coi là beaconing C2).
+  //   - Nếu đổi serverUrl sau khi enroll: agent vẫn giữ client cert cũ và tự renew.
+}

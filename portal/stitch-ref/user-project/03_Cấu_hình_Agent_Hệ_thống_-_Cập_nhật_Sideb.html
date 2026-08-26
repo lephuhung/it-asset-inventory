@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Agent Configuration - Asset Management Console</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: 'liga';
+            -webkit-font-smoothing: antialiased;
+        }
+    </style>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "inverse-primary": "#d0c4c4",
+                "on-primary-fixed-variant": "#4d4545",
+                "error-container": "#ffdad6",
+                "tertiary": "#6f5463",
+                "secondary-fixed-dim": "#d0c5ba",
+                "error": "#ba1a1a",
+                "surface-container-high": "#f3e6da",
+                "surface-container": "#f8ece0",
+                "outline": "#747878",
+                "surface-tint": "#655c5c",
+                "on-surface": "#201b13",
+                "on-secondary-fixed-variant": "#4d463d",
+                "tertiary-fixed": "#fcd9eb",
+                "secondary-fixed": "#ece1d5",
+                "tertiary-fixed-dim": "#dfbdcf",
+                "primary": "#635a5a",
+                "surface-container-lowest": "#ffffff",
+                "inverse-on-surface": "#fbefe3",
+                "on-primary": "#ffffff",
+                "surface-dim": "#e4d8cc",
+                "on-tertiary-container": "#fffbff",
+                "outline-variant": "#c4c7c7",
+                "on-error-container": "#93000a",
+                "primary-fixed-dim": "#d0c4c4",
+                "primary-fixed": "#eddfdf",
+                "on-error": "#ffffff",
+                "on-secondary": "#ffffff",
+                "secondary-container": "#eaded2",
+                "surface-bright": "#fff8f4",
+                "on-tertiary-fixed": "#291522",
+                "on-secondary-fixed": "#201b14",
+                "surface-container-highest": "#ede0d5",
+                "secondary": "#655d54",
+                "primary-container": "#7c7272",
+                "on-primary-container": "#fffbff",
+                "on-tertiary-fixed-variant": "#583f4e",
+                "inverse-surface": "#362f27",
+                "on-tertiary": "#ffffff",
+                "tertiary-container": "#896c7c",
+                "surface-container-low": "#fef1e5",
+                "on-primary-fixed": "#201a1a",
+                "on-background": "#201b13",
+                "on-secondary-container": "#696158",
+                "on-surface-variant": "#444748",
+                "surface": "#fff8f4",
+                "background": "#fff8f4",
+                "surface-variant": "#ede0d5"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.25rem",
+                "lg": "0.5rem",
+                "xl": "0.75rem",
+                "full": "9999px"
+        },
+        "spacing": {
+                "stack-md": "12px",
+                "gutter": "16px",
+                "stack-lg": "24px",
+                "unit": "8px",
+                "container-padding": "24px",
+                "stack-sm": "4px"
+        },
+        "fontFamily": {
+                "label-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "data-mono": [
+                        "Inter"
+                ],
+                "headline-xl": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "data-mono": [
+                        "13px",
+                        {
+                                "lineHeight": "18px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "500"
+                        }
+                ],
+                "headline-xl": [
+                        "30px",
+                        {
+                                "lineHeight": "36px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+</head>
+<body class="bg-background min-h-screen text-on-surface font-body-md selection:bg-primary-fixed selection:text-on-primary-fixed">
+<aside class="fixed left-0 top-0 h-full w-[260px] bg-slate-900 flex flex-col h-full py-stack-lg border-r border-slate-800 z-50">
+<div class="px-container-padding mb-stack-lg">
+<h1 class="font-headline-md text-headline-md font-bold text-white">AssetManager</h1>
+<p class="font-body-md text-body-md text-slate-400 mt-stack-sm">Enterprise Infrastructure</p>
+</div>
+<nav class="flex-1 flex flex-col gap-stack-sm px-unit">
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</a>
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">desktop_windows</span>
+<span class="font-body-md text-body-md">Assets</span>
+</a>
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg border-l-4 border-blue-500 bg-slate-800 text-white font-bold transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">settings_input_component</span>
+<span class="font-body-md text-body-md">Agent Config</span>
+</a>
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">admin_panel_settings</span>
+<span class="font-body-md text-body-md">User Access</span>
+</a>
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">file_download</span>
+<span class="font-body-md text-body-md">Installers</span>
+</a>
+</nav>
+<div class="mt-auto px-unit flex flex-col gap-stack-sm pt-stack-lg border-t border-slate-800">
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">history</span>
+<span class="font-body-md text-body-md">System Logs</span>
+</a>
+<a class="flex items-center gap-gutter px-gutter py-stack-md rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined text-[20px]">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</a>
+<div class="px-gutter mt-stack-md">
+<button class="w-full py-unit px-gutter rounded-lg bg-slate-800 text-slate-200 font-label-md text-label-md hover:bg-slate-700 transition-colors cursor-pointer flex items-center justify-center gap-unit">
+<span class="material-symbols-outlined text-[16px]">support_agent</span>
+                    Support Portal
+                </button>
+</div>
+<div class="flex items-center gap-gutter px-gutter py-stack-md mt-stack-sm">
+<img alt="System Administrator" class="w-8 h-8 rounded-full bg-slate-800 object-cover" data-alt="A small, professional headshot photo of a system administrator in a clean, modern style." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDoGiJMrIrukj1Yw43nqoqiKBCNPaeBrjmGslaApEn5jmQtCJ6B04H1CCduQn-_SgIXz28q65yfR427SoD8mGpLAZ7WJHgKj8X6M77A_1swbYQv-5avSXuIvJZDe-1_sXoF4bmniFIJe_F0EWm9JsrQwjzTyjvKFkK8YO7n43jFmt-_DsCs2ezjMqzYW1WxGpuzZ6_axZn37U7AcvdDaA7gAx0Q4jn7DPIxNnIbi_yM_Eu167F2M8FK"/>
+<div class="flex flex-col">
+<span class="font-label-md text-label-md text-white">Admin User</span>
+<span class="font-body-md text-[11px] text-slate-400">SuperAdmin</span>
+</div>
+</div>
+</div>
+</aside>
+<header class="docked full-width top-0 sticky z-40 bg-surface dark:bg-surface-container-lowest border-b border-outline-variant flex justify-between items-center h-16 px-container-padding ml-[260px] w-[calc(100%-260px)]">
+<div class="flex items-center gap-container-padding flex-1">
+<h2 class="font-headline-md text-headline-md text-on-surface font-black hidden lg:block">Asset Management Console</h2>
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline-variant text-[20px]">search</span>
+<input class="w-full pl-10 pr-4 py-1.5 rounded-full border border-outline-variant bg-surface-container-low focus:bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-body-md text-body-md text-on-surface placeholder:text-outline-variant" placeholder="Search agents..." type="text"/>
+</div>
+<nav class="hidden xl:flex items-center gap-stack-lg ml-auto">
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 transition-transform px-unit py-1 rounded font-body-lg text-body-lg" href="#">Network View</a>
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 transition-transform px-unit py-1 rounded font-body-lg text-body-lg" href="#">Security Logs</a>
+</nav>
+</div>
+<div class="flex items-center gap-gutter ml-stack-lg">
+<button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 transition-transform flex items-center justify-center relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-error rounded-full"></span>
+</button>
+<button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 transition-transform flex items-center justify-center">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+<div class="h-6 w-px bg-outline-variant mx-unit"></div>
+<button class="px-gutter py-2 rounded-lg bg-error-container text-on-error-container font-label-md text-label-md hover:bg-error hover:text-on-error transition-colors duration-150 active:scale-95">
+                Emergency Stop
+            </button>
+<button class="px-gutter py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors duration-150 active:scale-95 shadow-sm">
+                Deploy Agent
+            </button>
+<img alt="Admin Avatar" class="w-8 h-8 rounded-full bg-surface-container-highest border border-outline-variant ml-unit object-cover cursor-pointer hover:opacity-80 transition-opacity" data-alt="A small avatar image representing the current administrative user." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBNaUAKjGh0az-PZQ9IR3NeQXo6lMqdCXp3SEt0C7YFBSai81cjBc5JoNpVYVWVMAqFmd6Hv_3wKqEeKwjwnVcj-SikQXsgnJg1OwOBVKJl8LF4Z3OsuxeRO211FfN2Ex4njaY8kfkbA3-SnisHUXZaUR_yWFm0DyhFaHfHp1RNd0sSXASEcKNDFCXfRbzDPZP3nHm_kGSKY9uGAp2LuyJmn-_HfpGwYCG30Ghh3lOFmgLnoeI6HMj_"/>
+</div>
+</header>
+<main class="ml-[260px] p-container-padding w-[calc(100%-260px)] min-h-[calc(100vh-64px)] pb-24">
+<div class="max-w-6xl mx-auto space-y-container-padding">
+<div class="flex items-end justify-between border-b border-outline-variant pb-stack-md">
+<div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Agent Configuration</h1>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">Manage global settings, connection parameters, and distributed agent binaries.</p>
+</div>
+<div class="flex gap-gutter">
+<button class="px-gutter py-2 rounded border border-outline-variant text-on-surface font-label-md text-label-md hover:bg-surface-container-low transition-colors">
+                        Reset to Default
+                    </button>
+<button class="px-gutter py-2 rounded bg-primary text-on-primary font-label-md text-label-md hover:bg-primary/90 transition-colors shadow-sm flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">save</span>
+                        Save Changes
+                    </button>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-container-padding">
+<div class="lg:col-span-2 space-y-container-padding">
+<section class="bg-surface rounded-xl border border-outline-variant p-container-padding shadow-sm">
+<div class="flex items-center gap-2 mb-stack-lg border-b border-surface-variant pb-stack-md">
+<span class="material-symbols-outlined text-primary text-[24px]">router</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Connection Parameters</h3>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-stack-lg">
+<div class="space-y-stack-sm">
+<label class="font-label-md text-label-md text-on-surface-variant block">Primary Server IP Address</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline-variant text-[18px]">dns</span>
+<input class="w-full pl-10 pr-4 py-2 rounded-lg border border-outline-variant bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-data-mono text-data-mono text-on-surface" type="text" value="10.24.192.15"/>
+</div>
+<p class="font-body-md text-[12px] text-outline-variant">Agents will connect to this endpoint for instructions.</p>
+</div>
+<div class="space-y-stack-sm">
+<label class="font-label-md text-label-md text-on-surface-variant block">Secondary Server IP (Failover)</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline-variant text-[18px]">dns</span>
+<input class="w-full pl-10 pr-4 py-2 rounded-lg border border-outline-variant bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-data-mono text-data-mono text-on-surface" placeholder="Optional" type="text"/>
+</div>
+</div>
+<div class="space-y-stack-sm md:col-span-2">
+<label class="font-label-md text-label-md text-on-surface-variant block">Heartbeat Interval</label>
+<div class="flex items-center gap-gutter">
+<input class="w-24 px-3 py-2 rounded-lg border border-outline-variant bg-surface focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-data-mono text-data-mono text-on-surface text-center" max="1440" min="1" type="number" value="15"/>
+<span class="font-body-md text-body-md text-on-surface-variant">minutes</span>
+</div>
+<p class="font-body-md text-[12px] text-outline-variant">Lower intervals increase server load but improve responsiveness to critical commands.</p>
+</div>
+</div>
+</section>
+<section class="bg-surface rounded-xl border border-outline-variant p-container-padding shadow-sm">
+<div class="flex items-center gap-2 mb-stack-lg border-b border-surface-variant pb-stack-md">
+<span class="material-symbols-outlined text-tertiary text-[24px]">encrypted</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Security &amp; Encryption</h3>
+</div>
+<div class="space-y-stack-lg">
+<div class="space-y-stack-sm">
+<label class="font-label-md text-label-md text-on-surface-variant block">Global Master Encryption Key</label>
+<div class="relative max-w-md">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline-variant text-[18px]">key</span>
+<input class="w-full pl-10 pr-10 py-2 rounded-lg border border-outline-variant bg-surface-container-low focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all font-data-mono text-data-mono text-on-surface" readonly="" type="password" value="************************"/>
+<button class="absolute right-3 top-1/2 -translate-y-1/2 text-outline-variant hover:text-on-surface transition-colors cursor-pointer">
+<span class="material-symbols-outlined text-[18px]">visibility</span>
+</button>
+</div>
+<button class="mt-2 text-primary font-label-md text-label-md hover:underline">Rotate Master Key</button>
+</div>
+<div class="pt-stack-md border-t border-surface-variant flex items-center justify-between">
+<div>
+<h4 class="font-label-md text-label-md text-on-surface">Enforce Mutual TLS</h4>
+<p class="font-body-md text-[12px] text-outline-variant mt-1">Require client certificates for agent communication.</p>
+</div>
+<label class="relative inline-flex items-center cursor-pointer">
+<input checked="" class="sr-only peer" type="checkbox" value=""/>
+<div class="w-11 h-6 bg-outline-variant peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+</label>
+</div>
+</div>
+</section>
+</div>
+<div class="space-y-container-padding">
+<section class="bg-surface rounded-xl border border-outline-variant p-container-padding shadow-sm h-full">
+<div class="flex items-center justify-between mb-stack-lg border-b border-surface-variant pb-stack-md">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[24px]">system_update_alt</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Agent Versions</h3>
+</div>
+<button class="p-1 rounded hover:bg-surface-container-high text-primary transition-colors" title="Upload Installer">
+<span class="material-symbols-outlined">upload</span>
+</button>
+</div>
+<div class="space-y-stack-md">
+<div class="p-stack-md rounded-lg border border-primary-fixed bg-secondary-fixed/5">
+<div class="flex justify-between items-start">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md text-on-surface">v2.4.1</span>
+<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-primary-container text-on-primary-container uppercase tracking-wider">Current / Default</span>
+</div>
+<p class="font-body-md text-[12px] text-outline-variant mt-1">Released: Oct 24, 2023</p>
+</div>
+<button class="text-outline-variant hover:text-on-surface">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</div>
+<div class="p-stack-md rounded-lg border border-outline-variant bg-surface hover:bg-surface-container-low transition-colors group">
+<div class="flex justify-between items-start">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md text-on-surface-variant group-hover:text-on-surface">v2.4.0</span>
+<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-surface-variant text-on-surface-variant uppercase tracking-wider">Stable</span>
+</div>
+<p class="font-body-md text-[12px] text-outline-variant mt-1">Released: Sep 12, 2023</p>
+</div>
+<button class="text-outline-variant hover:text-on-surface opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</div>
+<div class="p-stack-md rounded-lg border border-outline-variant bg-surface hover:bg-surface-container-low transition-colors group">
+<div class="flex justify-between items-start">
+<div>
+<div class="flex items-center gap-2">
+<span class="font-label-md text-label-md text-on-surface-variant group-hover:text-on-surface">v2.3.8</span>
+<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-error-container/50 text-on-error-container uppercase tracking-wider">Deprecated</span>
+</div>
+<p class="font-body-md text-[12px] text-outline-variant mt-1">Released: Jan 05, 2023</p>
+</div>
+<button class="text-outline-variant hover:text-on-surface opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</div>
+</div>
+<div class="mt-stack-lg pt-stack-md border-t border-surface-variant">
+<button class="w-full py-2 rounded border border-dashed border-primary text-primary font-label-md text-label-md hover:bg-primary-fixed/20 transition-colors flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]">add</span>
+                                Upload New Installer
+                            </button>
+</div>
+</section>
+</div>
+</div>
+</div>
+</main>
+</body></html>

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Asset Management Console - User Management</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "inverse-primary": "#d0c4c4",
+                "on-primary-fixed-variant": "#4d4545",
+                "error-container": "#ffdad6",
+                "tertiary": "#6f5463",
+                "secondary-fixed-dim": "#d0c5ba",
+                "error": "#ba1a1a",
+                "surface-container-high": "#f3e6da",
+                "surface-container": "#f8ece0",
+                "outline": "#747878",
+                "surface-tint": "#655c5c",
+                "on-surface": "#201b13",
+                "on-secondary-fixed-variant": "#4d463d",
+                "tertiary-fixed": "#fcd9eb",
+                "secondary-fixed": "#ece1d5",
+                "tertiary-fixed-dim": "#dfbdcf",
+                "primary": "#635a5a",
+                "surface-container-lowest": "#ffffff",
+                "inverse-on-surface": "#fbefe3",
+                "on-primary": "#ffffff",
+                "surface-dim": "#e4d8cc",
+                "on-tertiary-container": "#fffbff",
+                "outline-variant": "#c4c7c7",
+                "on-error-container": "#93000a",
+                "primary-fixed-dim": "#d0c4c4",
+                "primary-fixed": "#eddfdf",
+                "on-error": "#ffffff",
+                "on-secondary": "#ffffff",
+                "secondary-container": "#eaded2",
+                "surface-bright": "#fff8f4",
+                "on-tertiary-fixed": "#291522",
+                "on-secondary-fixed": "#201b14",
+                "surface-container-highest": "#ede0d5",
+                "secondary": "#655d54",
+                "primary-container": "#7c7272",
+                "on-primary-container": "#fffbff",
+                "on-tertiary-fixed-variant": "#583f4e",
+                "inverse-surface": "#362f27",
+                "on-tertiary": "#ffffff",
+                "tertiary-container": "#896c7c",
+                "surface-container-low": "#fef1e5",
+                "on-primary-fixed": "#201a1a",
+                "on-background": "#201b13",
+                "on-secondary-container": "#696158",
+                "on-surface-variant": "#444748",
+                "surface": "#fff8f4",
+                "background": "#fff8f4",
+                "surface-variant": "#ede0d5"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.25rem",
+                "lg": "0.5rem",
+                "xl": "0.75rem",
+                "full": "9999px"
+        },
+        "spacing": {
+                "stack-md": "12px",
+                "gutter": "16px",
+                "stack-lg": "24px",
+                "unit": "8px",
+                "container-padding": "24px",
+                "stack-sm": "4px"
+        },
+        "fontFamily": {
+                "label-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "data-mono": [
+                        "Inter"
+                ],
+                "headline-xl": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "data-mono": [
+                        "13px",
+                        {
+                                "lineHeight": "18px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "500"
+                        }
+                ],
+                "headline-xl": [
+                        "30px",
+                        {
+                                "lineHeight": "36px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<style>
+        body { background-color: #F8FAFC; } /* Level 0 Base */
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md antialiased min-h-screen flex">
+<!-- SideNavBar Component -->
+<aside class="fixed left-0 top-0 h-full w-[260px] bg-[#0f172a] text-slate-300 font-body-md text-body-md flex flex-col py-stack-lg z-50">
+<div class="px-gutter mb-stack-lg flex items-center space-x-unit text-white">
+<span class="material-symbols-outlined text-3xl" style="font-variation-settings: 'FILL' 1;">security</span>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-white">AssetManager</h1>
+<p class="text-xs text-slate-400">Enterprise Infrastructure</p>
+</div>
+</div>
+<nav class="flex-1 space-y-stack-sm px-unit">
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">dashboard</span>
+<span class="">Dashboard</span>
+</a>
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">desktop_windows</span>
+<span class="">Assets</span>
+</a>
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">settings_input_component</span>
+<span class="">Agent Config</span>
+</a>
+<a class="flex items-center px-gutter py-unit rounded-lg border-l-4 border-blue-400 bg-white/10 text-white font-bold cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">admin_panel_settings</span>
+<span class="">User Access</span>
+</a>
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">file_download</span>
+<span class="">Installers</span>
+</a>
+</nav>
+<div class="px-unit mt-auto space-y-stack-sm">
+<div class="px-gutter py-unit flex items-center mb-stack-md border-t border-slate-700 pt-stack-md">
+<img alt="System Administrator" class="w-8 h-8 rounded-full mr-unit object-cover bg-slate-800" data-alt="A small, professional headshot of a system administrator in a brightly lit office setting, sharp focus, modern enterprise context." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBFYk1h6tv59EYbLMudKIPbBiNT3t-MMQZ0SgEgCBfzJHObuPcTPl3Lu6Q_AVyuUhMJc7grvXfpt-TYx0wC-4JDXtICWz3Sf_KYXhzo2bBs4xvfbezAbo7kqfF0lwDO_OVLp0Br8mxxUgS0apJaBFgUtpzEoY3D_-T9_hvE56vCiaqGOS24qOgbTL3EdWUISySNw1icHmfj2kHp05QfYoll_DHJpqB9qXlvSB-fqYeqBAzRO0xmxtLO"/>
+<div class="flex flex-col">
+<span class="text-sm font-semibold text-white truncate">Admin User</span>
+<span class="text-xs text-slate-400 truncate">sysadmin@corp.net</span>
+</div>
+</div>
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">history</span>
+<span class="">System Logs</span>
+</a>
+<a class="flex items-center px-gutter py-unit rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined mr-unit">settings</span>
+<span class="">Settings</span>
+</a>
+<button class="w-full mt-stack-md px-gutter py-unit bg-primary-container text-on-primary-container rounded-lg font-label-md text-label-md hover:bg-primary-container/90 transition-colors text-center">
+                Support Portal
+            </button>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 ml-[260px] flex flex-col min-h-screen">
+<!-- TopNavBar Component -->
+<header class="docked full-width top-0 sticky z-40 flex justify-between items-center h-16 px-container-padding bg-surface dark:bg-surface-container-lowest border-b border-outline-variant text-primary dark:text-primary-fixed-dim font-body-lg text-body-lg">
+<div class="flex items-center space-x-stack-lg h-full">
+<span class="font-headline-md text-headline-md text-on-surface font-black">Asset Management Console</span>
+<div class="relative ml-stack-lg hidden md:block w-64">
+<span class="material-symbols-outlined absolute left-unit top-1/2 transform -translate-y-1/2 text-outline">search</span>
+<input class="w-full pl-8 pr-unit py-1.5 bg-surface-container-low border border-outline-variant rounded-md text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="Search users or assets..." type="text"/>
+</div>
+<nav class="hidden lg:flex space-x-stack-md h-full items-center ml-stack-lg">
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 px-unit py-1 rounded" href="#">Network View</a>
+<a class="text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 px-unit py-1 rounded" href="#">Security Logs</a>
+</nav>
+</div>
+<div class="flex items-center space-x-unit">
+<button class="hidden md:flex items-center px-gutter py-1.5 border border-primary text-primary rounded-md font-label-md hover:bg-primary/5 transition-colors">
+                    Emergency Stop
+                </button>
+<button class="flex items-center px-gutter py-1.5 bg-primary text-on-primary rounded-md font-label-md hover:bg-primary/90 transition-colors shadow-sm">
+                    Deploy Agent
+                </button>
+<div class="flex space-x-1 border-l border-outline-variant pl-unit ml-unit">
+<button class="p-1 text-on-surface-variant hover:bg-surface-container-high rounded-full transition-colors relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-1 right-1 w-2 h-2 bg-error rounded-full"></span>
+</button>
+<button class="p-1 text-on-surface-variant hover:bg-surface-container-high rounded-full transition-colors">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Page Content Canvas -->
+<div class="flex-1 p-container-padding overflow-y-auto">
+<div class="mb-stack-lg flex justify-between items-end">
+<div>
+<h2 class="font-headline-xl text-headline-xl text-on-surface mb-stack-sm">User Access &amp; Agent Generation</h2>
+<p class="text-on-surface-variant font-body-md text-body-md max-w-2xl">Provision new user access tokens and generate pre-configured installation packages for remote asset deployment.</p>
+</div>
+</div>
+<div class="grid grid-cols-1 xl:grid-cols-12 gap-gutter">
+<!-- Form Section (Left Column) -->
+<div class="xl:col-span-5 flex flex-col gap-gutter">
+<!-- User Info Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter">
+<div class="flex items-center mb-stack-md border-b border-outline-variant pb-stack-sm">
+<span class="material-symbols-outlined text-primary mr-unit">person_add</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">New User Configuration</h3>
+</div>
+<form class="space-y-stack-md">
+<div>
+<label class="block font-label-md text-label-md text-on-surface-variant mb-1" for="fullName">Full Name</label>
+<input class="w-full px-unit py-2 bg-surface border border-outline-variant rounded-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" id="fullName" placeholder="e.g. Jane Doe" type="text"/>
+</div><div><label class="block font-label-md text-label-md text-on-surface-variant mb-1" for="phoneNumber">Phone Number</label><input class="w-full px-unit py-2 bg-surface border border-outline-variant rounded-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" id="phoneNumber" placeholder="e.g. +1 234 567 890" type="tel"/></div><div><label class="block font-label-md text-label-md text-on-surface-variant mb-1" for="department">Department (Phòng/ban)</label><input class="w-full px-unit py-2 bg-surface border border-outline-variant rounded-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" id="department" placeholder="e.g. IT Security" type="text"/></div>
+<div class="grid grid-cols-2 gap-unit">
+<div><label class="block font-label-md text-label-md text-on-surface-variant mb-1">Current Entity (Thuộc Đơn vị đang đăng nhập)</label><div class="w-full px-unit py-2 bg-surface-container-low border border-outline-variant rounded-md text-on-surface-variant font-medium">Engineering</div></div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface-variant mb-1" for="userRole">System Role</label>
+<select class="w-full px-unit py-2 bg-surface border border-outline-variant rounded-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" id="userRole">
+<option>Standard User</option>
+<option>Power User</option>
+<option>Local Admin</option>
+</select>
+</div>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface-variant mb-1" for="email">Email Address (For Token Delivery)</label>
+<input class="w-full px-unit py-2 bg-surface border border-outline-variant rounded-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary" id="email" placeholder="jane.doe@company.com" type="email"/>
+</div>
+<div class="pt-stack-sm mt-stack-md border-t border-outline-variant/50">
+<button class="w-full flex justify-center items-center px-gutter py-2.5 bg-primary text-on-primary rounded-md font-label-md hover:bg-primary/90 transition-colors shadow-sm group" type="button">
+<span class="material-symbols-outlined mr-2 group-hover:rotate-180 transition-transform duration-500">settings_b_roll</span>
+                                    Generate Custom Agent Installer
+                                </button>
+<p class="text-xs text-on-surface-variant mt-2 text-center">Generates a unique .exe bound to this user profile.</p>
+</div>
+</form>
+</div>
+<!-- Distribution Card -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-gutter opacity-50 pointer-events-none transition-opacity duration-300" id="distributionCard">
+<div class="flex items-center mb-stack-md border-b border-outline-variant pb-stack-sm">
+<span class="material-symbols-outlined text-secondary mr-unit">send</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Distribute Installer</h3>
+</div>
+<div class="space-y-stack-sm">
+<div class="bg-surface-container-low p-unit rounded border border-outline-variant/50 flex justify-between items-center">
+<span class="font-data-mono text-data-mono text-on-surface-variant truncate mr-unit">https://dl.assetmanager.net/pkg/xyz123...</span>
+<button class="p-1 hover:bg-surface-variant rounded text-primary" title="Copy Link">
+<span class="material-symbols-outlined text-sm">content_copy</span>
+</button>
+</div>
+<button class="w-full flex justify-center items-center px-gutter py-2 border border-outline text-on-surface rounded-md font-label-md hover:bg-surface-variant transition-colors">
+<span class="material-symbols-outlined mr-2">mail</span>
+                                Send Email Invitation
+                            </button>
+</div>
+</div>
+</div>
+<!-- Recent Tokens List (Right Column) -->
+<div class="xl:col-span-7 bg-surface-container-lowest border border-outline-variant rounded-xl flex flex-col overflow-hidden">
+<div class="p-gutter border-b border-outline-variant flex justify-between items-center bg-surface-container-low/50">
+<div class="flex items-center">
+<span class="material-symbols-outlined text-tertiary mr-unit">key</span>
+<h3 class="font-headline-md text-headline-md text-on-surface">Active Deployment Tokens</h3>
+</div>
+<button class="text-primary font-label-md text-label-md hover:underline">View All History</button>
+</div>
+<div class="flex-1 overflow-y-auto p-0">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-low sticky top-0 z-10 border-b border-outline-variant">
+<tr>
+<th class="py-2 px-gutter font-label-md text-label-md text-on-surface-variant font-medium">User / Unit</th>
+<th class="py-2 px-gutter font-label-md text-label-md text-on-surface-variant font-medium">Token ID</th>
+<th class="py-2 px-gutter font-label-md text-label-md text-on-surface-variant font-medium">Status</th>
+<th class="py-2 px-gutter font-label-md text-label-md text-on-surface-variant font-medium">Expires</th>
+<th class="py-2 px-gutter text-right font-label-md text-label-md text-on-surface-variant font-medium">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/50">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-variant/30 transition-colors group">
+<td class="py-stack-md px-gutter">
+<div class="font-medium text-on-surface">Robert Chen</div>
+<div class="text-xs text-on-surface-variant">Engineering</div>
+</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-secondary">
+                                        TK-982A-4B1C
+                                    </td>
+<td class="py-stack-md px-gutter">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-secondary-fixed text-on-secondary-fixed">
+<span class="w-1.5 h-1.5 bg-primary rounded-full mr-1.5"></span>
+                                            Active
+                                        </span>
+</td>
+<td class="py-stack-md px-gutter text-sm text-on-surface-variant">
+                                        In 24 hours
+                                    </td>
+<td class="py-stack-md px-gutter text-right">
+<button class="p-1 text-outline hover:text-error transition-colors" title="Revoke Token">
+<span class="material-symbols-outlined text-sm">block</span>
+</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-variant/30 transition-colors group">
+<td class="py-stack-md px-gutter">
+<div class="font-medium text-on-surface">Sarah Jenkins</div>
+<div class="text-xs text-on-surface-variant">Finance</div>
+</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-secondary">
+                                        TK-331F-9X88
+                                    </td>
+<td class="py-stack-md px-gutter">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-error-container text-on-error-container">
+                                            Expired
+                                        </span>
+</td>
+<td class="py-stack-md px-gutter text-sm text-on-surface-variant">
+                                        2 days ago
+                                    </td>
+<td class="py-stack-md px-gutter text-right">
+<button class="p-1 text-outline hover:text-primary transition-colors" title="Regenerate">
+<span class="material-symbols-outlined text-sm">refresh</span>
+</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-variant/30 transition-colors group">
+<td class="py-stack-md px-gutter">
+<div class="font-medium text-on-surface">Michael Torres</div>
+<div class="text-xs text-on-surface-variant">Sales</div>
+</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-secondary">
+                                        TK-110P-2M2Q
+                                    </td>
+<td class="py-stack-md px-gutter">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-surface-variant text-on-surface-variant">
+<span class="w-1.5 h-1.5 bg-outline rounded-full mr-1.5"></span>
+                                            Used
+                                        </span>
+</td>
+<td class="py-stack-md px-gutter text-sm text-on-surface-variant">
+                                        --
+                                    </td>
+<td class="py-stack-md px-gutter text-right">
+<button class="p-1 text-outline hover:text-primary transition-colors" title="View Asset">
+<span class="material-symbols-outlined text-sm">desktop_windows</span>
+</button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+</main>
+<script>
+        // Simple interaction to simulate generating a token and enabling the distribution card
+        document.querySelector('button[type="button"]').addEventListener('click', function() {
+            const btn = this;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span class="material-symbols-outlined animate-spin mr-2">progress_activity</span> Generating...';
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            
+            setTimeout(() => {
+                btn.innerHTML = '<span class="material-symbols-outlined mr-2">check_circle</span> Generated Successfully';
+                btn.classList.remove('bg-primary', 'hover:bg-primary/90');
+                btn.classList.add('bg-tertiary', 'hover:bg-tertiary/90');
+                
+                const distCard = document.getElementById('distributionCard');
+                distCard.classList.remove('opacity-50', 'pointer-events-none');
+                
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.classList.remove('bg-tertiary', 'hover:bg-tertiary/90', 'opacity-75', 'cursor-not-allowed');
+                    btn.classList.add('bg-primary', 'hover:bg-primary/90');
+                }, 3000);
+            }, 1500);
+        });
+    </script>
+</body></html>

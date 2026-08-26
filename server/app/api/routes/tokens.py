@@ -1,0 +1,188 @@
+"""Route tokens — portal sinh/liệt kê/revoke token enroll."""
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import require_admin, visible_org_ids
+from app.core.audit import append_audit
+from app.core.config import settings
+from app.core.security import generate_enroll_token, hash_token
+from app.db.models import EnrollToken, TokenStatus, User
+from app.db.session import get_db
+from app.schemas import (
+    BulkTokenRequest,
+    BulkTokenResponse,
+    TokenCreateRequest,
+    TokenCreateResponse,
+    TokenListItem,
+    TokenRevokeRequest,
+)
+from app.services.phone_encryption import encrypt_phone, mask_phone
+
+router = APIRouter(prefix="/api/tokens", tags=["tokens"])
+
+
+def _install_command(token: str) -> str:
+    return f'powershell -EP Bypass -c "irm {settings.portal_url}/i/{token} | iex"'
+
+
+@router.post("/bulk", response_model=BulkTokenResponse)
+async def create_tokens_bulk(
+    body: BulkTokenRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import hàng loạt (bulk import CSV — mục 4.4): 1 dòng = 1 token = 1 máy."""
+    visible = await visible_org_ids(db, admin)
+    if str(body.org_id) not in visible:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền sinh token cho tổ chức này")
+
+    expires = datetime.now(UTC) + timedelta(hours=body.ttl_hours)
+    tokens_out: list[TokenCreateResponse] = []
+    for item in body.items:
+        token = generate_enroll_token()
+        row = EnrollToken(
+            token_hash=hash_token(token),
+            org_id=body.org_id,
+            created_by=admin.id,
+            full_name=item.full_name,
+            department=item.department,
+            position=item.position,
+            email=item.email,
+            phone_encrypted=encrypt_phone(item.phone) if item.phone else None,
+            note=item.note,
+            expires_at=expires,
+            status=TokenStatus.PENDING.value,
+        )
+        db.add(row)
+        tokens_out.append(
+            TokenCreateResponse(token=token, install_command=_install_command(token), expires_at=expires)
+        )
+    await append_audit(
+        db,
+        action="token.bulk_create",
+        actor=str(admin.id),
+        target=f"org:{body.org_id}:{len(tokens_out)}",
+        ip=request.client.host if request.client else None,
+    )
+    await db.commit()
+    return BulkTokenResponse(created=len(tokens_out), tokens=tokens_out)
+
+
+@router.post("", response_model=TokenCreateResponse)
+async def create_token(
+    body: TokenCreateRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sinh token enroll (1 token = 1 máy, TTL mặc định 72h)."""
+    # Chỉ sinh token cho tổ chức trong phạm vi quyền (org mình + cấp dưới)
+    visible = await visible_org_ids(db, admin)
+    if str(body.org_id) not in visible:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền sinh token cho tổ chức này")
+    token = generate_enroll_token()
+    expires = datetime.now(UTC) + timedelta(hours=body.ttl_hours)
+    row = EnrollToken(
+        token_hash=hash_token(token),
+        org_id=body.org_id,
+        created_by=admin.id,
+        full_name=body.full_name,
+        department=body.department,
+        position=body.position,
+        email=body.email,
+        phone_encrypted=encrypt_phone(body.phone) if body.phone else None,
+        note=body.note,
+        expires_at=expires,
+        status=TokenStatus.PENDING.value,
+    )
+    db.add(row)
+    await append_audit(
+        db,
+        action="token.create",
+        actor=str(admin.id),
+        target=str(row.id),
+        ip=request.client.host if request.client else None,
+    )
+    await db.commit()
+
+    # install command — server render install.ps1 động tại /i/{token}
+    from app.core.config import settings
+
+    command = f'powershell -EP Bypass -c "irm {settings.portal_url}/i/{token} | iex"'
+    return TokenCreateResponse(token=token, install_command=command, expires_at=expires)
+
+
+@router.get("", response_model=list[TokenListItem])
+async def list_tokens(
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+    org_id: uuid.UUID | None = None,
+):
+    q = select(EnrollToken)
+    visible = await visible_org_ids(db, admin)
+    q = q.where(EnrollToken.org_id.in_(visible))
+    if org_id:
+        if str(org_id) not in visible:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền xem token của tổ chức này")
+        q = q.where(EnrollToken.org_id == org_id)
+    rows = (await db.execute(q.order_by(EnrollToken.expires_at.desc()))).scalars().all()
+
+    # Lazy-expire: token còn "pending" nhưng đã quá hạn → đánh dấu expired để phễu
+    # triển khai và KPI "token hết hạn" luôn đúng logic (không chờ enroll chạm vào).
+    now = datetime.now(UTC)
+    expired_ids: list[uuid.UUID] = []
+    for r in rows:
+        if r.status == TokenStatus.PENDING.value and r.expires_at.replace(tzinfo=UTC) < now:
+            r.status = TokenStatus.EXPIRED.value
+            expired_ids.append(r.id)
+    if expired_ids:
+        await db.commit()
+        for r in rows:  # refresh status sau commit
+            await db.refresh(r)
+
+    return [
+        TokenListItem(
+            id=r.id,
+            full_name=r.full_name,
+            department=r.department,
+            email=r.email,
+            phone_masked=mask_phone(r.phone_encrypted),
+            status=TokenStatus(r.status),
+            expires_at=r.expires_at,
+            created_at=r.created_at if hasattr(r, "created_at") else r.expires_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/revoke")
+async def revoke_token(
+    body: TokenRevokeRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    row = (
+        await db.execute(select(EnrollToken).where(EnrollToken.id == body.token_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Token không tồn tại")
+    visible = await visible_org_ids(db, admin)
+    if str(row.org_id) not in visible:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền thu hồi token này")
+    if row.status == TokenStatus.USED.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Token đã dùng — không revoke được")
+    row.status = TokenStatus.REVOKED.value
+    await append_audit(
+        db, action="token.revoke", actor=str(admin.id), target=str(row.id),
+        ip=request.client.host if request.client else None,
+    )
+    await db.commit()
+    return {"ok": True}

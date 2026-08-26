@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+
+<html class="light" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Xuất báo cáo - IT Asset Inventory</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary-container": "#eeefff",
+                        "outline-variant": "#c3c6d7",
+                        "on-surface-variant": "#434655",
+                        "primary-container": "#2563eb",
+                        "surface-container-low": "#f2f4f6",
+                        "outline": "#737686",
+                        "bad": "#e11d48",
+                        "ok": "#10b981",
+                        "primary-fixed": "#dbe1ff",
+                        "on-primary-fixed": "#00174b",
+                        "surface-dim": "#d8dadc",
+                        "ink-muted": "#475569",
+                        "inverse-surface": "#2d3133",
+                        "primary": "#004ac6",
+                        "surface-muted": "#f8fafc",
+                        "on-tertiary": "#ffffff",
+                        "border": "#e2e8f0",
+                        "brand-50": "#eff6ff",
+                        "surface-tint": "#0053db",
+                        "on-surface": "#191c1e",
+                        "tertiary": "#943700",
+                        "surface": "#ffffff",
+                        "ink-subtle": "#94a3b8",
+                        "inverse-on-surface": "#eff1f3",
+                        "border-soft": "#f1f5f9",
+                        "secondary": "#1d4ed8",
+                        "on-tertiary-container": "#ffede6",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "on-secondary-fixed": "#001551",
+                        "tertiary-fixed-dim": "#ffb596",
+                        "tertiary-fixed": "#ffdbcd",
+                        "secondary-fixed": "#dce1ff",
+                        "surface-bright": "#f7f9fb",
+                        "error-container": "#ffdad6",
+                        "on-secondary": "#ffffff",
+                        "surface-variant": "#e0e3e5",
+                        "on-tertiary-fixed": "#360f00",
+                        "background": "#f7f9fb",
+                        "surface-container-lowest": "#ffffff",
+                        "brand-100": "#dbeafe",
+                        "surface-container-high": "#e6e8ea",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "error": "#ba1a1a",
+                        "tertiary-container": "#bc4800",
+                        "on-background": "#191c1e",
+                        "surface-container-highest": "#e0e3e5",
+                        "secondary-fixed-dim": "#b7c4ff",
+                        "on-secondary-container": "#fffbff",
+                        "surface-container": "#eceef0",
+                        "ink": "#0f172a",
+                        "warn": "#d97706",
+                        "on-tertiary-fixed-variant": "#7d2d00",
+                        "on-error": "#ffffff",
+                        "on-secondary-fixed-variant": "#0039b5",
+                        "inverse-primary": "#b4c5ff",
+                        "on-error-container": "#93000a",
+                        "secondary-container": "#4069f2",
+                        "on-primary": "#ffffff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "card-padding": "1.25rem",
+                        "sidebar-width": "16rem",
+                        "page-margin-desktop": "2rem",
+                        "max-content-width": "1320px",
+                        "section-gap": "1.5rem",
+                        "header-height": "3.5rem"
+                    },
+                    "fontFamily": {
+                        "label-xs": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "hint": ["Inter"]
+                    },
+                    "fontSize": {
+                        "label-xs": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "headline-md": ["15px", { "lineHeight": "22px", "fontWeight": "600" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-lg": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "hint": ["11px", { "lineHeight": "14px", "fontWeight": "400" }]
+                    },
+                    "boxShadow": {
+                        "card": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+                        "pop": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)"
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .tbl-wrap { overflow-x: auto; min-width: 0; }
+        .tbl-wrap::-webkit-scrollbar { height: 6px; }
+        .tbl-wrap::-webkit-scrollbar-track { background: transparent; }
+        .tbl-wrap::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-sm text-body-sm flex h-screen overflow-hidden antialiased">
+<!-- Sidebar -->
+<aside class="w-sidebar-width bg-surface border-r border-border flex flex-col h-full flex-shrink-0 z-20">
+<!-- Logo Area -->
+<div class="h-header-height flex items-center px-4 border-b border-soft">
+<div class="w-8 h-8 bg-primary rounded-DEFAULT flex items-center justify-center text-on-primary font-headline-md text-headline-md mr-3 shadow-sm">
+                IT
+            </div>
+<div>
+<h1 class="font-headline-md text-headline-md text-on-surface">Asset Inventory</h1>
+<p class="font-hint text-hint text-ink-muted">Enterprise Portal</p>
+</div>
+</div>
+<!-- Navigation -->
+<nav class="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+<!-- Group 1 -->
+<div>
+<h2 class="font-label-xs text-label-xs text-ink-subtle uppercase tracking-wider mb-2 px-3">Tổng quan</h2>
+<ul class="space-y-0.5">
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="dashboard">dashboard</span>
+                            Dashboard
+                        </a>
+</li>
+</ul>
+</div>
+<!-- Group 2 -->
+<div>
+<h2 class="font-label-xs text-label-xs text-ink-subtle uppercase tracking-wider mb-2 px-3">Quản lý tài sản</h2>
+<ul class="space-y-0.5">
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="computer">computer</span>
+                            Máy tính
+                        </a>
+</li>
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="memory">memory</span>
+                            Máy in
+                        </a>
+</li>
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="key">key</span>
+                            Token triển khai
+                        </a>
+</li>
+</ul>
+</div>
+<!-- Group 3 -->
+<div>
+<h2 class="font-label-xs text-label-xs text-ink-subtle uppercase tracking-wider mb-2 px-3">Báo cáo</h2>
+<ul class="space-y-0.5">
+<li>
+<a class="flex items-center px-3 py-2 bg-brand-50 text-primary font-headline-md text-headline-md rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3" data-icon="description">description</span>
+                            Xuất báo cáo
+                        </a>
+</li>
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="event_busy">event_busy</span>
+                            Windows EOL
+                        </a>
+</li>
+</ul>
+</div>
+<!-- Group 4 -->
+<div>
+<h2 class="font-label-xs text-label-xs text-ink-subtle uppercase tracking-wider mb-2 px-3">Vận hành</h2>
+<ul class="space-y-0.5">
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="history">history</span>
+                            Audit log
+                        </a>
+</li>
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="shield_person">shield_person</span>
+                            Bảo mật tài khoản
+                        </a>
+</li>
+<li>
+<a class="flex items-center px-3 py-2 text-ink-muted hover:bg-surface-container-low hover:text-on-surface rounded-DEFAULT transition-colors group" href="#">
+<span class="material-symbols-outlined text-[20px] mr-3 opacity-70 group-hover:opacity-100" data-icon="gavel">gavel</span>
+                            Thông báo tuân thủ
+                        </a>
+</li>
+</ul>
+</div>
+</nav>
+<!-- User Card -->
+<div class="p-4 border-t border-soft bg-surface-muted">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-3">
+<div class="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-headline-md text-headline-md">
+                        Q
+                    </div>
+<div>
+<p class="font-headline-md text-headline-md text-on-surface leading-tight">Quản trị viên HT</p>
+<span class="inline-block mt-0.5 px-1.5 py-0.5 rounded-DEFAULT bg-[#f1f5f9] text-ink-muted font-label-xs text-label-xs border border-border">Admin toàn cục</span>
+</div>
+</div>
+<button class="text-ink-muted hover:text-bad transition-colors p-1" title="Đăng xuất">
+<span class="material-symbols-outlined text-[20px]" data-icon="logout">logout</span>
+</button>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col min-w-0 bg-background relative overflow-y-auto">
+<!-- Header -->
+<header class="h-header-height sticky top-0 z-30 bg-surface/90 backdrop-blur-md border-b border-border px-page-margin-desktop flex items-center justify-between shadow-sm">
+<h2 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Xuất báo cáo</h2>
+<div class="flex items-center bg-[#ecfdf5] border border-[#a7f3d0] text-ok px-2.5 py-1 rounded-full shadow-sm">
+<span class="relative flex h-2 w-2 mr-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-ok opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-ok"></span>
+</span>
+<span class="font-label-xs text-label-xs uppercase">Realtime</span>
+</div>
+</header>
+<!-- Scrollable Canvas -->
+<div class="flex-1 p-6 lg:p-page-margin-desktop">
+<div class="max-w-max-content-width mx-auto space-y-section-gap">
+<!-- Báo cáo danh sách máy Card -->
+<section class="bg-surface rounded-lg shadow-card border border-soft overflow-hidden">
+<div class="px-5 py-4 border-b border-soft bg-surface-muted flex items-center justify-between">
+<h3 class="font-headline-md text-headline-md text-on-surface flex items-center">
+<span class="material-symbols-outlined mr-2 text-ink-muted" data-icon="filter_alt">filter_alt</span>
+                            Báo cáo danh sách máy
+                        </h3>
+</div>
+<div class="p-card-padding">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-5">
+<!-- Cơ quan Select -->
+<div>
+<label class="block font-label-xs text-label-xs text-ink-muted mb-1.5">Cơ quan</label>
+<select class="w-full h-9 px-3 rounded-DEFAULT border-border bg-surface text-on-surface focus:ring-2 focus:ring-primary focus:border-primary font-body-sm text-body-sm">
+<option>Tất cả cơ quan</option>
+<option>Khối Văn phòng</option>
+<option>Khối Kỹ thuật</option>
+</select>
+</div>
+<!-- Trạng thái Select -->
+<div>
+<label class="block font-label-xs text-label-xs text-ink-muted mb-1.5">Trạng thái</label>
+<select class="w-full h-9 px-3 rounded-DEFAULT border-border bg-surface text-on-surface focus:ring-2 focus:ring-primary focus:border-primary font-body-sm text-body-sm">
+<option>Tất cả trạng thái</option>
+<option>Active</option>
+<option>Offline</option>
+<option>Warning</option>
+</select>
+</div>
+<!-- Tìm kiếm Input -->
+<div>
+<label class="block font-label-xs text-label-xs text-ink-muted mb-1.5">Tìm kiếm</label>
+<div class="relative">
+<span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-ink-muted">
+<span class="material-symbols-outlined text-[18px]" data-icon="search">search</span>
+</span>
+<input class="w-full h-9 pl-9 pr-3 rounded-DEFAULT border-border bg-surface text-on-surface focus:ring-2 focus:ring-primary focus:border-primary font-body-sm text-body-sm" placeholder="Hostname, IP..." type="text"/>
+</div>
+</div>
+</div>
+<div class="flex flex-col sm:flex-row sm:items-center justify-between pt-4 border-t border-soft gap-4">
+<label class="flex items-center space-x-2 cursor-pointer group">
+<input class="w-4 h-4 rounded-sm border-outline text-primary focus:ring-primary" type="checkbox"/>
+<span class="font-body-sm text-body-sm text-on-surface group-hover:text-primary transition-colors">Hiện đầy đủ số điện thoại</span>
+<span class="font-hint text-hint text-ink-muted italic">(chỉ dành cho admin)</span>
+</label>
+<button class="flex items-center justify-center px-4 h-9 bg-primary hover:bg-[#003ea8] text-on-primary rounded-DEFAULT font-headline-md text-headline-md shadow-sm transition-colors focus:ring-2 focus:ring-offset-2 focus:ring-primary">
+<span class="material-symbols-outlined text-[18px] mr-2" data-icon="download">download</span>
+                                Xuất Excel
+                            </button>
+</div>
+</div>
+</section>
+<!-- Xem trước dữ liệu Card -->
+<section class="bg-surface rounded-lg shadow-card border border-soft overflow-hidden">
+<div class="px-5 py-4 border-b border-soft bg-surface-muted flex items-center justify-between">
+<h3 class="font-headline-md text-headline-md text-on-surface flex items-center">
+<span class="material-symbols-outlined mr-2 text-ink-muted" data-icon="table_view">table_view</span>
+                            Xem trước dữ liệu
+                        </h3>
+<span class="font-hint text-hint text-ink-muted">Hiển thị 5 kết quả đầu tiên</span>
+</div>
+<div class="p-0">
+<div class="tbl-wrap">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-muted border-b border-soft">
+<tr>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">Hostname</th>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">Trạng thái</th>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">OS</th>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">RAM</th>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">Người dùng</th>
+<th class="px-5 py-3 font-label-xs text-label-xs text-ink-muted uppercase whitespace-nowrap">Số điện thoại</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-soft">
+<tr class="hover:bg-surface-container-low transition-colors">
+<td class="px-5 py-3 font-headline-md text-headline-md text-on-surface whitespace-nowrap">PC-VP-001</td>
+<td class="px-5 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#ecfdf5] text-ok border border-[#a7f3d0] font-label-xs text-label-xs">
+                                                Active
+                                            </span>
+</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">Win 10 Pro</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">16 GB</td>
+<td class="px-5 py-3 text-on-surface whitespace-nowrap">Nguyen Van A</td>
+<td class="px-5 py-3 text-ink-muted font-mono text-xs whitespace-nowrap">098****123</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors">
+<td class="px-5 py-3 font-headline-md text-headline-md text-on-surface whitespace-nowrap">PC-KT-042</td>
+<td class="px-5 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-error-container text-[#93000a] border border-[#ffb4ab] font-label-xs text-label-xs">
+                                                Offline
+                                            </span>
+</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">Ubuntu 22.04</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">32 GB</td>
+<td class="px-5 py-3 text-on-surface whitespace-nowrap">Tran Thi B</td>
+<td class="px-5 py-3 text-ink-muted font-mono text-xs whitespace-nowrap">091****456</td>
+</tr>
+<tr class="hover:bg-surface-container-low transition-colors">
+<td class="px-5 py-3 font-headline-md text-headline-md text-on-surface whitespace-nowrap">LAP-GD-003</td>
+<td class="px-5 py-3 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-[#fffbeb] text-warn border border-[#fde68a] font-label-xs text-label-xs">
+                                                Warning
+                                            </span>
+</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">Win 11 Pro</td>
+<td class="px-5 py-3 text-ink-muted whitespace-nowrap">16 GB</td>
+<td class="px-5 py-3 text-on-surface whitespace-nowrap">Le Van C</td>
+<td class="px-5 py-3 text-ink-muted font-mono text-xs whitespace-nowrap">090****789</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="px-5 py-3 bg-[#f8fafc] border-t border-soft">
+<p class="font-hint text-hint text-ink-muted flex items-center">
+<span class="material-symbols-outlined text-[16px] mr-1.5" data-icon="info">info</span>
+                            Mỗi lượt xuất báo cáo đều được ghi lại trong nhật ký hệ thống (Audit log).
+                        </p>
+</div>
+</section>
+</div>
+</div>
+</main>
+</body></html>

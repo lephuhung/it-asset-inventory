@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AssetManager - Inventory Analytics</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "secondary-fixed": "#d3e4fe",
+                      "surface-variant": "#e3e1eb",
+                      "surface-container-highest": "#e3e1eb",
+                      "inverse-surface": "#2f3037",
+                      "on-primary-container": "#a8b8ff",
+                      "secondary-container": "#d0e1fb",
+                      "on-secondary-fixed": "#0b1c30",
+                      "primary-fixed": "#dde1ff",
+                      "primary": "#00288e",
+                      "on-primary-fixed": "#001453",
+                      "surface-container-lowest": "#ffffff",
+                      "outline-variant": "#c4c5d5",
+                      "tertiary-container": "#872d00",
+                      "background": "#fbf8ff",
+                      "on-secondary-fixed-variant": "#38485d",
+                      "inverse-on-surface": "#f1f0fa",
+                      "on-primary": "#ffffff",
+                      "on-tertiary-fixed": "#380d00",
+                      "on-secondary": "#ffffff",
+                      "surface-container-low": "#f4f2fc",
+                      "surface-container-high": "#e8e7f1",
+                      "error-container": "#ffdad6",
+                      "surface-tint": "#3755c3",
+                      "on-secondary-container": "#54647a",
+                      "inverse-primary": "#b8c4ff",
+                      "tertiary": "#611e00",
+                      "surface-dim": "#dad9e3",
+                      "on-tertiary-fixed-variant": "#802a00",
+                      "on-tertiary": "#ffffff",
+                      "primary-container": "#1e40af",
+                      "error": "#ba1a1a",
+                      "secondary": "#505f76",
+                      "tertiary-fixed": "#ffdbce",
+                      "on-surface": "#1a1b22",
+                      "surface": "#fbf8ff",
+                      "on-surface-variant": "#444653",
+                      "on-tertiary-container": "#ffa583",
+                      "on-primary-fixed-variant": "#173bab",
+                      "on-error-container": "#93000a",
+                      "surface-bright": "#fbf8ff",
+                      "surface-container": "#eeedf7",
+                      "secondary-fixed-dim": "#b7c8e1",
+                      "on-background": "#1a1b22",
+                      "on-error": "#ffffff",
+                      "tertiary-fixed-dim": "#ffb59a",
+                      "outline": "#757684",
+                      "primary-fixed-dim": "#b8c4ff"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "container-padding": "24px",
+                      "stack-sm": "4px",
+                      "unit": "8px",
+                      "stack-lg": "24px",
+                      "gutter": "16px",
+                      "stack-md": "12px"
+              },
+              "fontFamily": {
+                      "headline-md": [
+                              "Inter"
+                      ],
+                      "label-md": [
+                              "Inter"
+                      ],
+                      "data-mono": [
+                              "Inter"
+                      ],
+                      "body-lg": [
+                              "Inter"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "body-md": [
+                              "Inter"
+                      ],
+                      "headline-xl": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "headline-md": [
+                              "20px",
+                              {
+                                      "lineHeight": "28px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "label-md": [
+                              "12px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "data-mono": [
+                              "13px",
+                              {
+                                      "lineHeight": "18px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "500"
+                              }
+                      ],
+                      "body-lg": [
+                              "16px",
+                              {
+                                      "lineHeight": "24px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-lg": [
+                              "24px",
+                              {
+                                      "lineHeight": "32px",
+                                      "letterSpacing": "-0.01em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "body-md": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "headline-xl": [
+                              "30px",
+                              {
+                                      "lineHeight": "36px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1;
+        }
+        /* Lightweight chart simulation styles */
+        .pie-chart {
+            background: conic-gradient(#00288e 0% 45%, #1e40af 45% 75%, #dde1ff 75% 100%);
+            border-radius: 50%;
+        }
+        .bar-chart-container {
+            display: flex;
+            align-items: flex-end;
+            height: 100%;
+            gap: 8px;
+        }
+        .bar-chart-bar {
+            background-color: #00288e;
+            width: 100%;
+            border-radius: 4px 4px 0 0;
+            transition: height 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md text-body-md antialiased h-screen flex overflow-hidden">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-full w-[260px] bg-slate-900 flex flex-col py-stack-lg border-r border-slate-800">
+<div class="px-gutter mb-stack-lg flex items-center gap-3">
+<img alt="AssetGuard Logo" class="w-10 h-10 rounded-md" src="https://lh3.googleusercontent.com/aida/AEtjO1WWm329_214tTQ4r0EuvivXgBXrR4hhl2PZmuLQnP1mDr5LS_HlRmcPtQx6bOuTF6n6pCTuldz91t43QZH7cXiIbGAco1sXiaRL6x6QX-rnIyFzHM_QY-WRFVyS6LOujXPc6opmGtAh8kwivfcPqkiURnU0IYcAchngUXe2opqcOY6vl7Z6MPAR9xkjEQ9s57Egvcvgrf2ICbahHX2uQw2_TUEQgzzj9GPLC2gM1uBCrY4Z626Ve2ZLaVs"/>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-white">AssetManager</h1>
+<p class="font-label-md text-label-md text-slate-400">Enterprise Infrastructure</p>
+</div>
+</div>
+<nav class="flex-1 px-unit">
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+                        Dashboard
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded border-l-4 border-white bg-white/10 text-white font-bold cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined fill" data-icon="desktop_windows">desktop_windows</span>
+                        Assets
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="settings_input_component">settings_input_component</span>
+                        Agent Config
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="admin_panel_settings">admin_panel_settings</span>
+                        User Access
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="file_download">file_download</span>
+                        Installers
+                    </a>
+</li>
+</ul>
+</nav>
+<div class="px-unit mt-auto">
+<ul class="space-y-1 mb-4">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+                        System Logs
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+                        Settings
+                    </a>
+</li>
+</ul>
+<div class="px-3 py-4 border-t border-slate-700/50 flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-slate-700 text-white flex items-center justify-center font-bold">
+                    SA
+                </div>
+<div>
+<p class="font-label-md text-label-md text-white">System Administrator</p>
+<a class="font-label-md text-label-md text-slate-300 hover:text-white hover:underline" href="#">Support Portal</a>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 ml-[260px] flex flex-col h-full overflow-hidden bg-background">
+<!-- TopNavBar -->
+<header class="bg-surface dark:bg-surface-container-lowest flex justify-between items-center h-16 px-container-padding border-b border-outline-variant sticky top-0 z-40 w-full">
+<div class="flex items-center gap-stack-lg">
+<h2 class="font-headline-md text-headline-md text-on-surface font-black">Asset Management Console</h2>
+<div class="hidden md:flex relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline" data-icon="search">search</span>
+<input class="pl-10 pr-4 py-2 bg-surface-container-low border border-outline-variant rounded-md text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none w-64 transition-all" placeholder="Search assets, IP, or hostname..." type="text"/>
+</div>
+</div>
+<nav class="hidden lg:flex items-center gap-gutter h-full">
+<a class="h-full flex items-center px-2 text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Network View</a>
+<a class="h-full flex items-center px-2 text-primary font-bold border-b-2 border-primary pb-1 cursor-pointer active:scale-95 transition-transform" href="#">Inventory Analytics</a>
+<a class="h-full flex items-center px-2 text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Security Logs</a>
+</nav>
+<div class="flex items-center gap-unit">
+<button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-full transition-all duration-150 cursor-pointer active:scale-95 transition-transform">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 text-on-surface-variant hover:bg-surface-container-high rounded-full transition-all duration-150 cursor-pointer active:scale-95 transition-transform">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+<div class="h-6 w-px bg-outline-variant mx-2"></div>
+<button class="bg-error text-on-error px-4 py-2 rounded-md font-label-md text-label-md hover:bg-on-error-container transition-colors cursor-pointer active:scale-95 transition-transform">
+                    Emergency Stop
+                </button>
+<button class="bg-primary text-on-primary px-4 py-2 rounded-md font-label-md text-label-md hover:bg-primary-container transition-colors cursor-pointer active:scale-95 transition-transform">
+                    Deploy Agent
+                </button>
+</div>
+</header>
+<!-- Scrollable Content -->
+<div class="flex-1 overflow-y-auto p-container-padding space-y-stack-lg">
+<div class="flex justify-between items-end">
+<div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Thống kê Tài sản &amp; Cấu hình</h1>
+<p class="text-on-surface-variant mt-1">Overview of managed hardware and software distributions.</p>
+</div>
+<div class="flex gap-2">
+<button class="px-3 py-1.5 border border-outline-variant rounded bg-surface hover:bg-surface-container-low text-body-md flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">calendar_today</span>
+                        Last 30 Days
+                    </button>
+<button class="px-3 py-1.5 border border-outline-variant rounded bg-surface hover:bg-surface-container-low text-body-md flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">download</span>
+                        Export
+                    </button>
+</div>
+</div>
+<!-- KPI Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- Total Assets -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md relative overflow-hidden flex flex-col justify-between h-32 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-primary">
+<div class="flex justify-between items-start">
+<h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Tổng số máy tính</h3>
+<span class="material-symbols-outlined text-primary">computer</span>
+</div>
+<div>
+<div class="font-headline-xl text-headline-xl text-on-surface">12,458</div>
+<div class="flex items-center gap-1 text-surface-tint mt-1">
+<span class="material-symbols-outlined text-[16px]">trending_up</span>
+<span class="font-data-mono text-data-mono">+2.4% vs last month</span>
+</div>
+</div>
+</div>
+<!-- Weak Config -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md relative overflow-hidden flex flex-col justify-between h-32 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-error">
+<div class="flex justify-between items-start">
+<h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Máy tính cấu hình yếu (Cần nâng cấp)</h3>
+<span class="material-symbols-outlined text-error">warning</span>
+</div>
+<div>
+<div class="font-headline-xl text-headline-xl text-on-surface">1,204</div>
+<div class="flex items-center gap-1 text-error mt-1">
+<span class="font-data-mono text-data-mono">9.6% of total fleet</span>
+</div>
+</div>
+</div>
+<!-- Win 11 Adoption -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md relative overflow-hidden flex flex-col justify-between h-32 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-surface-tint">
+<div class="flex justify-between items-start">
+<h3 class="font-label-md text-label-md text-on-surface-variant uppercase">Tỷ lệ Windows 11</h3>
+<span class="material-symbols-outlined text-surface-tint">upgrade</span>
+</div>
+<div>
+<div class="font-headline-xl text-headline-xl text-on-surface">68.2%</div>
+<div class="flex items-center gap-1 text-surface-tint mt-1">
+<span class="material-symbols-outlined text-[16px]">trending_up</span>
+<span class="font-data-mono text-data-mono">+12% this quarter</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Charts Row 1 -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
+<!-- OS Distribution Pie Chart -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md flex flex-col">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Thống kê theo Hệ điều hành</h3>
+<div class="flex-1 flex items-center justify-center gap-8 min-h-[250px]">
+<div class="w-48 h-48 pie-chart relative shadow-sm">
+<div class="absolute inset-4 bg-surface-container-lowest rounded-full flex items-center justify-center">
+<span class="font-headline-lg text-headline-lg font-bold text-on-surface">OS</span>
+</div>
+</div>
+<div class="space-y-3">
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-primary"></div>
+<span class="text-body-md text-on-surface">Windows 11 (45%)</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-primary-container"></div>
+<span class="text-body-md text-on-surface">Windows 10 (30%)</span>
+</div>
+<div class="flex items-center gap-2">
+<div class="w-3 h-3 rounded-full bg-primary-fixed"></div>
+<span class="text-body-md text-on-surface">Windows Server (25%)</span>
+</div>
+</div>
+</div>
+</div>
+<!-- RAM Distribution Bar Chart -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md flex flex-col">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Thống kê cấu hình RAM</h3>
+<div class="flex-1 min-h-[250px] flex flex-col justify-end relative pl-8 pb-6">
+<!-- Y-Axis labels -->
+<div class="absolute left-0 top-0 bottom-6 flex flex-col justify-between text-label-md text-outline py-2">
+<span>6k</span>
+<span>4k</span>
+<span>2k</span>
+<span>0</span>
+</div>
+<!-- Chart Area -->
+<div class="border-l border-b border-outline-variant h-full w-full relative">
+<!-- Grid lines -->
+<div class="absolute w-full border-t border-outline-variant/30 top-[33%]"></div>
+<div class="absolute w-full border-t border-outline-variant/30 top-[66%]"></div>
+<div class="bar-chart-container px-4 justify-around h-[calc(100%-1px)]">
+<div class="w-12 h-[20%] bar-chart-bar relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-inverse-surface text-surface-container-lowest text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">1,245</div>
+</div>
+<div class="w-12 h-[65%] bar-chart-bar relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-inverse-surface text-surface-container-lowest text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">5,200</div>
+</div>
+<div class="w-12 h-[80%] bar-chart-bar relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-inverse-surface text-surface-container-lowest text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">6,013</div>
+</div>
+<div class="w-12 h-[15%] bar-chart-bar relative group">
+<div class="absolute -top-8 left-1/2 -translate-x-1/2 bg-inverse-surface text-surface-container-lowest text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">800</div>
+</div>
+</div>
+</div>
+<!-- X-Axis labels -->
+<div class="absolute bottom-0 left-8 right-0 flex justify-around text-label-md text-on-surface pt-2 px-4">
+<span class="w-12 text-center">≤ 8GB</span>
+<span class="w-12 text-center">16GB</span>
+<span class="w-12 text-center">32GB</span>
+<span class="w-12 text-center">64GB+</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Charts Row 2 & Table -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+<!-- CPU Distribution Bar Chart (Spans 1 col) -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md flex flex-col lg:col-span-1">
+<h3 class="font-headline-md text-headline-md text-on-surface mb-stack-md">Thống kê CPU</h3>
+<div class="flex-1 min-h-[250px] flex flex-col justify-end relative pl-8 pb-6">
+<!-- Y-Axis labels -->
+<div class="absolute left-0 top-0 bottom-6 flex flex-col justify-between text-label-md text-outline py-2">
+<span>5k</span>
+<span>2.5k</span>
+<span>0</span>
+</div>
+<!-- Chart Area -->
+<div class="border-l border-b border-outline-variant h-full w-full relative">
+<!-- Grid lines -->
+<div class="absolute w-full border-t border-outline-variant/30 top-[50%]"></div>
+<div class="bar-chart-container px-2 justify-around h-[calc(100%-1px)]">
+<div class="w-8 h-[30%] bar-chart-bar relative group bg-surface-tint"></div>
+<div class="w-8 h-[75%] bar-chart-bar relative group bg-surface-tint"></div>
+<div class="w-8 h-[40%] bar-chart-bar relative group bg-surface-tint"></div>
+<div class="w-8 h-[10%] bar-chart-bar relative group bg-surface-tint"></div>
+</div>
+</div>
+<!-- X-Axis labels -->
+<div class="absolute bottom-0 left-8 right-0 flex justify-around text-label-md text-on-surface pt-2 px-2">
+<span class="w-8 text-center text-[10px]">i5</span>
+<span class="w-8 text-center text-[10px]">i7</span>
+<span class="w-8 text-center text-[10px]">i9</span>
+<span class="w-8 text-center text-[10px]">Xeon</span>
+</div>
+</div>
+</div>
+<!-- Department Summary Table (Spans 2 cols) -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg p-stack-md flex flex-col lg:col-span-2 overflow-hidden">
+<div class="flex justify-between items-center mb-stack-md">
+<h3 class="font-headline-md text-headline-md text-on-surface">Thống kê theo Đơn vị</h3>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-outline text-[18px]">search</span>
+<input class="pl-8 pr-3 py-1 bg-surface-container-low border border-outline-variant rounded text-body-md focus:border-primary outline-none w-48 text-sm" placeholder="Tìm đơn vị..." type="text"/>
+</div>
+</div>
+<div class="flex-1 overflow-auto rounded border border-outline-variant">
+<table class="w-full text-left border-collapse">
+<thead class="bg-surface-container-high sticky top-0 z-10 shadow-sm">
+<tr>
+<th class="p-3 font-label-md text-label-md text-on-surface-variant uppercase border-b border-outline-variant w-1/3">Tên Đơn vị</th>
+<th class="p-3 font-label-md text-label-md text-on-surface-variant uppercase border-b border-outline-variant text-right">Tổng số máy</th>
+<th class="p-3 font-label-md text-label-md text-on-surface-variant uppercase border-b border-outline-variant text-right">Cần nâng cấp</th>
+<th class="p-3 font-label-md text-label-md text-on-surface-variant uppercase border-b border-outline-variant text-right">Tỷ lệ Win 11</th>
+<th class="p-3 font-label-md text-label-md text-on-surface-variant uppercase border-b border-outline-variant text-center">Trạng thái</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/50 font-data-mono text-data-mono">
+<tr class="hover:bg-secondary-fixed/20 transition-colors">
+<td class="p-3 font-body-md text-on-surface">UBND Thành phố</td>
+<td class="p-3 text-right">1,245</td>
+<td class="p-3 text-right text-error font-medium">85</td>
+<td class="p-3 text-right">82%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-green-500" title="Healthy"></span>
+</td>
+</tr>
+<tr class="hover:bg-secondary-fixed/20 transition-colors bg-surface/50">
+<td class="p-3 font-body-md text-on-surface">Sở Kế hoạch &amp; Đầu tư</td>
+<td class="p-3 text-right">850</td>
+<td class="p-3 text-right text-error font-medium">120</td>
+<td class="p-3 text-right">65%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-yellow-500" title="Warning"></span>
+</td>
+</tr>
+<tr class="hover:bg-secondary-fixed/20 transition-colors">
+<td class="p-3 font-body-md text-on-surface">Sở Tài chính</td>
+<td class="p-3 text-right">920</td>
+<td class="p-3 text-right text-error font-medium">45</td>
+<td class="p-3 text-right">91%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-green-500" title="Healthy"></span>
+</td>
+</tr>
+<tr class="hover:bg-secondary-fixed/20 transition-colors bg-surface/50">
+<td class="p-3 font-body-md text-on-surface">Sở Thông tin &amp; Truyền thông</td>
+<td class="p-3 text-right">450</td>
+<td class="p-3 text-right text-error font-medium">12</td>
+<td class="p-3 text-right">98%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-green-500" title="Healthy"></span>
+</td>
+</tr>
+<tr class="hover:bg-secondary-fixed/20 transition-colors">
+<td class="p-3 font-body-md text-on-surface">Sở Giáo dục &amp; Đào tạo</td>
+<td class="p-3 text-right">3,500</td>
+<td class="p-3 text-right text-error font-medium">650</td>
+<td class="p-3 text-right">45%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-error" title="Critical"></span>
+</td>
+</tr>
+<tr class="hover:bg-secondary-fixed/20 transition-colors bg-surface/50">
+<td class="p-3 font-body-md text-on-surface">Sở Y tế</td>
+<td class="p-3 text-right">2,800</td>
+<td class="p-3 text-right text-error font-medium">420</td>
+<td class="p-3 text-right">52%</td>
+<td class="p-3 text-center">
+<span class="inline-flex items-center justify-center w-2 h-2 rounded-full bg-yellow-500" title="Warning"></span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

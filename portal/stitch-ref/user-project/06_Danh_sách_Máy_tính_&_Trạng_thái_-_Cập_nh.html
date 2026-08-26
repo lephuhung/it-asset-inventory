@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Asset Management Console - Assets</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "inverse-primary": "#d0c4c4",
+                "on-primary-fixed-variant": "#4d4545",
+                "error-container": "#ffdad6",
+                "tertiary": "#6f5463",
+                "secondary-fixed-dim": "#d0c5ba",
+                "error": "#ba1a1a",
+                "surface-container-high": "#f3e6da",
+                "surface-container": "#f8ece0",
+                "outline": "#747878",
+                "surface-tint": "#655c5c",
+                "on-surface": "#201b13",
+                "on-secondary-fixed-variant": "#4d463d",
+                "tertiary-fixed": "#fcd9eb",
+                "secondary-fixed": "#ece1d5",
+                "tertiary-fixed-dim": "#dfbdcf",
+                "primary": "#635a5a",
+                "surface-container-lowest": "#ffffff",
+                "inverse-on-surface": "#fbefe3",
+                "on-primary": "#ffffff",
+                "surface-dim": "#e4d8cc",
+                "on-tertiary-container": "#fffbff",
+                "outline-variant": "#c4c7c7",
+                "on-error-container": "#93000a",
+                "primary-fixed-dim": "#d0c4c4",
+                "primary-fixed": "#eddfdf",
+                "on-error": "#ffffff",
+                "on-secondary": "#ffffff",
+                "secondary-container": "#eaded2",
+                "surface-bright": "#fff8f4",
+                "on-tertiary-fixed": "#291522",
+                "on-secondary-fixed": "#201b14",
+                "surface-container-highest": "#ede0d5",
+                "secondary": "#655d54",
+                "primary-container": "#7c7272",
+                "on-primary-container": "#fffbff",
+                "on-tertiary-fixed-variant": "#583f4e",
+                "inverse-surface": "#362f27",
+                "on-tertiary": "#ffffff",
+                "tertiary-container": "#896c7c",
+                "surface-container-low": "#fef1e5",
+                "on-primary-fixed": "#201a1a",
+                "on-background": "#201b13",
+                "on-secondary-container": "#696158",
+                "on-surface-variant": "#444748",
+                "surface": "#fff8f4",
+                "background": "#fff8f4",
+                "surface-variant": "#ede0d5"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.25rem",
+                "lg": "0.5rem",
+                "xl": "0.75rem",
+                "full": "9999px"
+        },
+        "spacing": {
+                "stack-md": "12px",
+                "gutter": "16px",
+                "stack-lg": "24px",
+                "unit": "8px",
+                "container-padding": "24px",
+                "stack-sm": "4px"
+        },
+        "fontFamily": {
+                "label-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "data-mono": [
+                        "Inter"
+                ],
+                "headline-xl": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "data-mono": [
+                        "13px",
+                        {
+                                "lineHeight": "18px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "500"
+                        }
+                ],
+                "headline-xl": [
+                        "30px",
+                        {
+                                "lineHeight": "36px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body-md h-screen overflow-hidden flex">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-full w-[260px] bg-slate-900 flex flex-col py-stack-lg z-50">
+<div class="px-gutter mb-stack-lg flex items-center gap-unit">
+<span class="material-symbols-outlined text-white text-[32px]">shield</span>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-white">AssetManager</h1>
+<p class="font-label-md text-label-md text-slate-400">Enterprise Infrastructure</p>
+</div>
+</div>
+<ul class="flex-1 flex flex-col gap-stack-sm px-unit">
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-body-md text-body-md">Dashboard</span>
+</li>
+<!-- Active Tab: Assets -->
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md border-l-4 border-white bg-white/10 text-white font-bold hover:bg-white/20 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined fill">desktop_windows</span>
+<span class="font-body-md text-body-md">Assets</span>
+</li>
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">settings_input_component</span>
+<span class="font-body-md text-body-md">Agent Config</span>
+</li>
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">admin_panel_settings</span>
+<span class="font-body-md text-body-md">User Access</span>
+</li>
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">file_download</span>
+<span class="font-body-md text-body-md">Installers</span>
+</li>
+</ul>
+<div class="px-unit mt-auto flex flex-col gap-stack-sm">
+<ul class="border-t border-slate-700 pt-stack-sm">
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">history</span>
+<span class="font-body-md text-body-md">System Logs</span>
+</li>
+<li class="px-gutter py-unit rounded flex items-center gap-stack-md text-slate-300 hover:text-white hover:bg-white/10 transition-colors duration-200 cursor-pointer active:opacity-80">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-body-md text-body-md">Settings</span>
+</li>
+</ul>
+<div class="px-gutter mt-stack-md flex items-center gap-stack-md">
+<img alt="System Administrator" class="w-8 h-8 rounded-full object-cover border border-slate-700" data-alt="A detailed portrait of a system administrator in a high-tech server room environment, sharp focus, professional lighting, modern corporate aesthetic. The overall mood is focused and technical." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCrnjy8zelJt9Wz_6OK8kProYzMGh_HPzZzg6l_A-0M77iKOtnWmpkh7fjvcrq2Zg-orL4EybgsdFWOM3PrO2u9RPjBttZRYd9fTZG6__bJdVXnx9-h1qJFn54K_s-gMQ9I80Wi9_sOyLrUnSiWb0fWTB_LXDArUMk_SRawoPL5NZ_498p4q4XGa3UXB5vFpkUJqeO7IBboZA7PHuTNjPWHiZTDwKZSIo1ukGIYszNtR1g4omj3qm_m"/>
+<button class="flex-1 py-2 bg-blue-600 text-white rounded font-label-md text-label-md hover:bg-blue-700 transition-colors cursor-pointer active:opacity-80">Support Portal</button>
+</div>
+</div>
+</nav>
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col ml-[260px] w-[calc(100%-260px)] h-full overflow-hidden">
+<!-- TopNavBar -->
+<header class="docked full-width top-0 sticky z-40 border-b border-outline-variant flat no shadows bg-surface dark:bg-surface-container-lowest flex justify-between items-center h-16 px-container-padding">
+<div class="flex items-center gap-stack-lg flex-1">
+<div class="font-headline-md text-headline-md text-on-surface font-black mr-stack-lg">Asset Management Console</div>
+<!-- Search Bar (on_left) -->
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline">search</span>
+<input class="w-full pl-10 pr-3 py-1.5 bg-surface-container-low border border-outline-variant rounded focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary font-body-md text-body-md text-on-surface placeholder:text-outline" placeholder="Search resources..." type="text"/>
+</div>
+<nav class="hidden md:flex gap-stack-lg h-full">
+<a class="h-full flex items-center text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 px-unit" href="#">Network View</a>
+<a class="h-full flex items-center text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95 px-unit" href="#">Security Logs</a>
+</nav>
+</div>
+<div class="flex items-center gap-gutter">
+<div class="flex items-center gap-stack-sm text-on-surface-variant">
+<button class="p-2 rounded-full hover:bg-surface-container-high transition-all duration-150 active:scale-95"><span class="material-symbols-outlined">notifications</span></button>
+<button class="p-2 rounded-full hover:bg-surface-container-high transition-all duration-150 active:scale-95"><span class="material-symbols-outlined">help_outline</span></button>
+</div>
+<div class="h-6 w-px bg-outline-variant mx-unit"></div>
+<div class="flex items-center gap-stack-sm">
+<button class="px-4 py-2 border border-error text-error rounded font-label-md text-label-md hover:bg-error-container hover:border-error transition-colors">Emergency Stop</button>
+<button class="px-4 py-2 bg-primary text-on-primary rounded font-label-md text-label-md hover:bg-primary/90 transition-colors shadow-sm">Deploy Agent</button>
+</div>
+<img alt="Admin Avatar" class="w-8 h-8 rounded-full border border-outline-variant/50 ml-unit cursor-pointer" data-alt="A detailed portrait of an IT administrator avatar, clean vector style, subtle corporate colors, soft lighting, professional appearance." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBB3xQDlZyCrNL5IDyps-s587bXWFO50_4yd8gP_kgTQg_F_phZlFixwB0hH4li1vapYjJarkhD8X-ISQr4pHH2GBwUDlBHzIotZKlBMM8ofWq-2W59hu9N1-nKoi71jl-BZMn2ORtWYfWL9eovbDiOb7MvsxlHG4eFuioSzIcjQco_pvJ_TxMyh7UozxgGiNPmKy-yuSFSPXL_02S8wWw9AzHK0-UyPrCt71oymO59DoQabMzFGTNo"/>
+</div>
+</header>
+<!-- Canvas -->
+<main class="flex-1 overflow-auto bg-background p-container-padding">
+<div class="max-w-7xl mx-auto space-y-stack-lg">
+<!-- Header & Controls -->
+<div class="flex flex-col sm:flex-row sm:items-end justify-between gap-gutter">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">Asset Inventory</h2>
+<p class="font-body-md text-body-md text-on-surface-variant mt-1">Manage and monitor all deployed Windows endpoints across the organization.</p>
+</div>
+<div class="flex items-center gap-stack-md">
+<div class="flex items-center border border-outline-variant rounded bg-surface-container-lowest overflow-hidden">
+<span class="material-symbols-outlined text-outline px-2 text-sm">filter_alt</span>
+<select class="bg-transparent border-none py-1.5 pl-1 pr-6 font-body-md text-body-md text-on-surface focus:ring-0 cursor-pointer">
+<option value="">All Entities</option>
+<option value="ubnd">UBND</option>
+<option value="so">Sở</option>
+</select>
+</div>
+<div class="flex items-center border border-outline-variant rounded bg-surface-container-lowest overflow-hidden">
+<span class="material-symbols-outlined text-outline px-2 text-sm">wifi</span>
+<select class="bg-transparent border-none py-1.5 pl-1 pr-6 font-body-md text-body-md text-on-surface focus:ring-0 cursor-pointer">
+<option value="">All Statuses</option>
+<option value="online">Online</option>
+<option value="offline">Offline</option>
+<option value="idle">Idle</option>
+</select>
+</div>
+<button class="p-2 border border-outline-variant rounded bg-surface-container-lowest hover:bg-surface-container-low text-on-surface-variant transition-colors"><span class="material-symbols-outlined text-[20px]">refresh</span></button>
+</div>
+</div>
+<!-- Data Table -->
+<div class="bg-surface-container-lowest border border-outline-variant rounded-lg overflow-hidden shadow-sm">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="border-b border-outline-variant bg-surface-container-low font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">
+<th class="py-stack-md px-gutter font-semibold">Computer ID</th>
+<th class="py-stack-md px-gutter font-semibold">User Name</th>
+<th class="py-stack-md px-gutter font-semibold">Entity</th>
+<th class="py-stack-md px-gutter font-semibold">IP Address</th>
+<th class="py-stack-md px-gutter font-semibold">Last Heartbeat</th>
+<th class="py-stack-md px-gutter font-semibold">Status</th>
+<th class="py-stack-md px-gutter font-semibold text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="font-body-md text-body-md text-on-surface divide-y divide-outline-variant/30">
+<!-- Row 1 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group">
+<td class="py-stack-md px-gutter font-data-mono text-data-mono">WKSTN-A01-UBND</td>
+<td class="py-stack-md px-gutter">Nguyen Van A</td>
+<td class="py-stack-md px-gutter text-on-surface-variant">UBND Quận 1</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-on-surface-variant">192.168.1.105</td>
+<td class="py-stack-md px-gutter text-on-surface-variant text-sm">2 mins ago</td>
+<td class="py-stack-md px-gutter">
+<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary-fixed/50 border border-primary-fixed text-primary font-label-md text-xs">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+                                            Online
+                                        </div>
+</td>
+<td class="py-stack-md px-gutter text-right">
+<div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="Remote Command"><span class="material-symbols-outlined text-[18px]">terminal</span></button>
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="View Details"><span class="material-symbols-outlined text-[18px]">visibility</span></button>
+</div>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group bg-surface-container-low/30">
+<td class="py-stack-md px-gutter font-data-mono text-data-mono">SRV-DB-02</td>
+<td class="py-stack-md px-gutter">System</td>
+<td class="py-stack-md px-gutter text-on-surface-variant">Sở TT&amp;TT</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-on-surface-variant">10.0.5.22</td>
+<td class="py-stack-md px-gutter text-on-surface-variant text-sm">1 hr ago</td>
+<td class="py-stack-md px-gutter">
+<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-surface-variant border border-outline-variant text-on-surface-variant font-label-md text-xs">
+<div class="w-2 h-2 rounded-full bg-outline"></div>
+                                            Idle
+                                        </div>
+</td>
+<td class="py-stack-md px-gutter text-right">
+<div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="Remote Command"><span class="material-symbols-outlined text-[18px]">terminal</span></button>
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="View Details"><span class="material-symbols-outlined text-[18px]">visibility</span></button>
+</div>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group border-l-2 border-error">
+<td class="py-stack-md px-gutter font-data-mono text-data-mono pl-[14px]">LPT-FIN-88</td>
+<td class="py-stack-md px-gutter">Tran Thi B</td>
+<td class="py-stack-md px-gutter text-on-surface-variant">Sở Tài Chính</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-on-surface-variant">192.168.2.45</td>
+<td class="py-stack-md px-gutter text-error text-sm font-medium">3 days ago</td>
+<td class="py-stack-md px-gutter">
+<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-error-container border border-error-container text-on-error-container font-label-md text-xs">
+<div class="w-2 h-2 rounded-full bg-error"></div>
+                                            Offline
+                                        </div>
+</td>
+<td class="py-stack-md px-gutter text-right">
+<div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="Remote Command"><span class="material-symbols-outlined text-[18px]">terminal</span></button>
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="View Details"><span class="material-symbols-outlined text-[18px]">visibility</span></button>
+</div>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-primary-fixed/30 transition-colors group bg-surface-container-low/30">
+<td class="py-stack-md px-gutter font-data-mono text-data-mono">WKSTN-B12-UBND</td>
+<td class="py-stack-md px-gutter">Le Van C</td>
+<td class="py-stack-md px-gutter text-on-surface-variant">UBND Quận 3</td>
+<td class="py-stack-md px-gutter font-data-mono text-data-mono text-on-surface-variant">192.168.1.210</td>
+<td class="py-stack-md px-gutter text-on-surface-variant text-sm">5 mins ago</td>
+<td class="py-stack-md px-gutter">
+<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary-fixed/50 border border-primary-fixed text-primary font-label-md text-xs">
+<div class="w-2 h-2 rounded-full bg-primary"></div>
+                                            Online
+                                        </div>
+</td>
+<td class="py-stack-md px-gutter text-right">
+<div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="Remote Command"><span class="material-symbols-outlined text-[18px]">terminal</span></button>
+<button class="p-1.5 text-on-surface-variant hover:text-primary hover:bg-primary-fixed/50 rounded transition-colors" title="View Details"><span class="material-symbols-outlined text-[18px]">visibility</span></button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Pagination (simplified) -->
+<div class="border-t border-outline-variant bg-surface-container-lowest px-gutter py-unit flex items-center justify-between">
+<span class="font-body-md text-sm text-on-surface-variant">Showing 1 to 4 of 2,405 entries</span>
+<div class="flex items-center gap-2">
+<button class="p-1 border border-outline-variant rounded text-outline-variant disabled:opacity-50"><span class="material-symbols-outlined text-[20px]">chevron_left</span></button>
+<button class="p-1 border border-outline-variant rounded text-on-surface hover:bg-surface-container-low transition-colors"><span class="material-symbols-outlined text-[20px]">chevron_right</span></button>
+</div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

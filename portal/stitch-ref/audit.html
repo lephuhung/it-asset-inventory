@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+
+<html lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Audit log - Asset Inventory</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "surface-container-highest": "#e0e3e5",
+                      "primary-fixed": "#dbe1ff",
+                      "surface-muted": "#f8fafc",
+                      "secondary-fixed-dim": "#b7c4ff",
+                      "on-secondary": "#ffffff",
+                      "ok": "#10b981",
+                      "on-primary-container": "#eeefff",
+                      "on-background": "#191c1e",
+                      "surface-container-high": "#e6e8ea",
+                      "ink-subtle": "#94a3b8",
+                      "tertiary-fixed": "#ffdbcd",
+                      "surface": "#ffffff",
+                      "on-secondary-container": "#fffbff",
+                      "warn": "#d97706",
+                      "on-tertiary-fixed": "#360f00",
+                      "border": "#e2e8f0",
+                      "outline-variant": "#c3c6d7",
+                      "surface-tint": "#0053db",
+                      "on-tertiary-container": "#ffede6",
+                      "on-primary-fixed-variant": "#003ea8",
+                      "brand-100": "#dbeafe",
+                      "surface-bright": "#f7f9fb",
+                      "surface-container": "#eceef0",
+                      "on-tertiary": "#ffffff",
+                      "on-surface": "#191c1e",
+                      "inverse-surface": "#2d3133",
+                      "bad": "#e11d48",
+                      "tertiary-container": "#bc4800",
+                      "outline": "#737686",
+                      "tertiary-fixed-dim": "#ffb596",
+                      "surface-variant": "#e0e3e5",
+                      "on-error": "#ffffff",
+                      "surface-container-lowest": "#ffffff",
+                      "error-container": "#ffdad6",
+                      "primary": "#004ac6",
+                      "secondary-fixed": "#dce1ff",
+                      "on-surface-variant": "#434655",
+                      "surface-dim": "#d8dadc",
+                      "on-secondary-fixed-variant": "#0039b5",
+                      "inverse-on-surface": "#eff1f3",
+                      "tertiary": "#943700",
+                      "ink-muted": "#475569",
+                      "secondary": "#1d4ed8",
+                      "primary-fixed-dim": "#b4c5ff",
+                      "on-secondary-fixed": "#001551",
+                      "primary-container": "#2563eb",
+                      "on-primary": "#ffffff",
+                      "on-error-container": "#93000a",
+                      "border-soft": "#f1f5f9",
+                      "brand-50": "#eff6ff",
+                      "on-tertiary-fixed-variant": "#7d2d00",
+                      "error": "#ba1a1a",
+                      "surface-container-low": "#f2f4f6",
+                      "secondary-container": "#4069f2",
+                      "inverse-primary": "#b4c5ff",
+                      "background": "#f7f9fb",
+                      "on-primary-fixed": "#00174b",
+                      "ink": "#0f172a"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.25rem",
+                      "lg": "0.5rem",
+                      "xl": "0.75rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "header-height": "3.5rem",
+                      "card-padding": "1.25rem",
+                      "max-content-width": "1320px",
+                      "sidebar-width": "16rem",
+                      "page-margin-desktop": "2rem",
+                      "section-gap": "1.5rem"
+              },
+              "fontFamily": {
+                      "label-xs": [
+                              "Inter"
+                      ],
+                      "headline-md": [
+                              "Inter"
+                      ],
+                      "headline-lg": [
+                              "Inter"
+                      ],
+                      "body-sm": [
+                              "Inter"
+                      ],
+                      "hint": [
+                              "Inter"
+                      ]
+              },
+              "fontSize": {
+                      "label-xs": [
+                              "11px",
+                              {
+                                      "lineHeight": "16px",
+                                      "letterSpacing": "0.05em",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "headline-md": [
+                              "15px",
+                              {
+                                      "lineHeight": "22px",
+                                      "fontWeight": "600"
+                              }
+                      ],
+                      "headline-lg": [
+                              "22px",
+                              {
+                                      "lineHeight": "28px",
+                                      "letterSpacing": "-0.02em",
+                                      "fontWeight": "700"
+                              }
+                      ],
+                      "body-sm": [
+                              "14px",
+                              {
+                                      "lineHeight": "20px",
+                                      "fontWeight": "400"
+                              }
+                      ],
+                      "hint": [
+                              "11px",
+                              {
+                                      "lineHeight": "14px",
+                                      "fontWeight": "400"
+                              }
+                      ]
+              }
+      },
+          },
+        }
+      </script>
+<style>
+        .tbl-wrap {
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-sm min-h-screen flex">
+<!-- SideNavBar -->
+<aside class="w-sidebar-width h-screen fixed left-0 top-0 bg-surface dark:bg-surface-container-low border-r border-border dark:border-outline-variant shadow-sm dark:shadow-none flex flex-col z-40 hidden md:flex">
+<div class="flex items-center gap-3 p-4 border-b border-border dark:border-outline-variant">
+<div class="w-8 h-8 rounded bg-primary text-on-primary flex items-center justify-center font-bold text-headline-md font-headline-md">IT</div>
+<div>
+<h1 class="text-headline-md font-headline-md font-bold text-primary dark:text-primary-fixed">Asset Inventory</h1>
+<p class="text-label-xs font-label-xs text-ink-muted">Enterprise Portal</p>
+</div>
+</div>
+<nav class="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
+<!-- Items from JSON -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">dashboard</span>
+<span>Tong quan</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">laptop_mac</span>
+<span>May tinh</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">qr_code</span>
+<span>May ma</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">key</span>
+<span>Token trien khai</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">assessment</span>
+<span>Xuat bao cao</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">history</span>
+<span>Windows EOL</span>
+</a>
+<!-- Active state based on JSON intent matching "Audit Log" -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-primary dark:text-primary-fixed font-semibold bg-brand-50 dark:bg-primary-container/20 opacity-80 duration-150 text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">event_note</span>
+<span>Audit log</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">security</span>
+<span>Bao mat tai khoan</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-md text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined text-[20px]">notification_important</span>
+<span>Thong bao tuan thu</span>
+</a>
+</nav>
+<div class="p-4 border-t border-border dark:border-outline-variant mt-auto">
+<div class="flex items-center gap-3 px-2 py-2 rounded-md hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors cursor-pointer">
+<div class="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center text-label-xs font-label-xs">Q</div>
+<div class="flex flex-col">
+<span class="text-body-sm font-body-sm font-semibold text-on-surface">Quan tri vien he thong</span>
+<span class="text-hint font-hint text-ink-subtle">Admin toan cuc</span>
+</div>
+<span class="material-symbols-outlined text-ink-muted ml-auto">account_circle</span>
+</div>
+</div>
+</aside>
+<!-- Main Content Wrapper -->
+<div class="flex-1 flex flex-col md:ml-sidebar-width min-w-0">
+<!-- TopAppBar -->
+<header class="h-14 sticky top-0 z-50 w-full bg-surface/80 dark:bg-surface-container/80 backdrop-blur-md border-b border-border dark:border-outline-variant flex justify-between items-center px-page-margin-desktop">
+<div class="flex items-center gap-4">
+<h2 class="text-headline-lg font-headline-lg text-primary dark:text-primary-fixed">Audit log</h2>
+<div class="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-ok rounded-full border border-emerald-200">
+<span class="w-2 h-2 rounded-full bg-ok animate-pulse"></span>
+<span class="text-label-xs font-label-xs">Realtime</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-ink-muted hover:text-primary transition-colors rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="p-2 text-ink-muted hover:text-primary transition-colors rounded-full hover:bg-surface-container">
+<span class="material-symbols-outlined">settings</span>
+</button>
+</div>
+</header>
+<!-- Main Canvas -->
+<main class="flex-1 max-w-max-content-width w-full mx-auto p-page-margin-desktop space-y-section-gap">
+<!-- Intro Section -->
+<section class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+<div>
+<h3 class="text-headline-md font-headline-md text-on-surface mb-1">System Audit Trail</h3>
+<p class="text-body-sm font-body-sm text-ink-muted max-w-2xl">All system events are recorded in an append-only ledger. Changes to log entries are cryptographically prevented to ensure full non-repudiation and compliance.</p>
+</div>
+<div class="flex items-center gap-2 bg-white px-4 py-2 rounded-lg border border-border shadow-sm">
+<span class="material-symbols-outlined text-ok">verified_user</span>
+<span class="text-label-xs font-label-xs text-on-surface">Hash chain:</span>
+<span class="text-label-xs font-label-xs text-ok">OK</span>
+</div>
+</section>
+<!-- Filter Card -->
+<section class="bg-surface rounded-lg border border-border shadow-sm p-card-padding">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+<div class="flex flex-col gap-1.5">
+<label class="text-label-xs font-label-xs text-ink-muted">Loại hành động</label>
+<select class="w-full h-10 px-3 rounded border border-border bg-surface text-body-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none text-on-surface">
+<option>Tất cả</option>
+<option>Authentication</option>
+<option>Asset Management</option>
+<option>Configuration</option>
+</select>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="text-label-xs font-label-xs text-ink-muted">Người thực hiện</label>
+<input class="w-full h-10 px-3 rounded border border-border bg-surface text-body-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none text-on-surface placeholder:text-ink-subtle" placeholder="Tên hoặc Email..." type="text"/>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="text-label-xs font-label-xs text-ink-muted">Khoảng thời gian</label>
+<input class="w-full h-10 px-3 rounded border border-border bg-surface text-body-sm focus:ring-2 focus:ring-primary focus:border-primary outline-none text-on-surface" type="date"/>
+</div>
+<div>
+<button class="w-full h-10 bg-primary text-on-primary rounded font-semibold text-body-sm hover:bg-primary-container transition-colors">Áp dụng</button>
+</div>
+</div>
+</section>
+<!-- Table Card -->
+<section class="bg-surface rounded-lg border border-border shadow-sm overflow-hidden flex flex-col">
+<div class="px-5 py-4 border-b border-border flex justify-between items-center">
+<h3 class="text-headline-md font-headline-md text-on-surface">Nhật ký (Audit Log)</h3>
+<button class="flex items-center gap-1.5 text-label-xs font-label-xs text-primary hover:text-primary-container">
+<span class="material-symbols-outlined text-[16px]">download</span>
+                        Xuất CSV
+                    </button>
+</div>
+<div class="p-5 flex-1 min-h-0 relative">
+<div class="tbl-wrap h-full border rounded border-border">
+<table class="w-full text-left border-collapse min-w-[900px]">
+<thead class="bg-surface-muted sticky top-0 z-10">
+<tr>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">THỜI GIAN</th>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">ACTOR</th>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">HÀNH ĐỘNG</th>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">ĐỐI TƯỢNG</th>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">IP ADDRESS</th>
+<th class="py-3 px-4 text-label-xs font-label-xs text-ink-muted border-b border-border whitespace-nowrap">REQUEST ID</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-border-soft">
+<tr class="hover:bg-surface-muted transition-colors">
+<td class="py-3 px-4 text-body-sm text-on-surface whitespace-nowrap">2023-10-27 14:32:01</td>
+<td class="py-3 px-4 text-body-sm text-on-surface font-medium whitespace-nowrap">sysadmin@corp.local</td>
+<td class="py-3 px-4 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 text-ok border border-emerald-100 text-[11px] font-semibold">Login Success</span>
+</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted whitespace-nowrap">System Portal</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted font-mono text-[13px] whitespace-nowrap">192.168.1.105</td>
+<td class="py-3 px-4 text-hint text-ink-subtle font-mono whitespace-nowrap">req_8f7d9a2b</td>
+</tr>
+<tr class="hover:bg-surface-muted transition-colors">
+<td class="py-3 px-4 text-body-sm text-on-surface whitespace-nowrap">2023-10-27 14:35:12</td>
+<td class="py-3 px-4 text-body-sm text-on-surface font-medium whitespace-nowrap">sysadmin@corp.local</td>
+<td class="py-3 px-4 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-100 text-[11px] font-semibold">Update Asset</span>
+</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted whitespace-nowrap">LT-MAC-004</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted font-mono text-[13px] whitespace-nowrap">192.168.1.105</td>
+<td class="py-3 px-4 text-hint text-ink-subtle font-mono whitespace-nowrap">req_3c4e5f6g</td>
+</tr>
+<tr class="hover:bg-surface-muted transition-colors">
+<td class="py-3 px-4 text-body-sm text-on-surface whitespace-nowrap">2023-10-27 15:10:45</td>
+<td class="py-3 px-4 text-body-sm text-on-surface font-medium whitespace-nowrap">auditor@corp.local</td>
+<td class="py-3 px-4 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold">Export Report</span>
+</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted whitespace-nowrap">Compliance 2023-Q3</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted font-mono text-[13px] whitespace-nowrap">10.0.4.52</td>
+<td class="py-3 px-4 text-hint text-ink-subtle font-mono whitespace-nowrap">req_9h8g7f6e</td>
+</tr>
+<tr class="hover:bg-surface-muted transition-colors bg-red-50/30">
+<td class="py-3 px-4 text-body-sm text-on-surface whitespace-nowrap">2023-10-27 16:05:22</td>
+<td class="py-3 px-4 text-body-sm text-on-surface font-medium whitespace-nowrap">unknown</td>
+<td class="py-3 px-4 whitespace-nowrap">
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-red-50 text-bad border border-red-100 text-[11px] font-semibold">Failed Login</span>
+</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted whitespace-nowrap">System Portal</td>
+<td class="py-3 px-4 text-body-sm text-ink-muted font-mono text-[13px] whitespace-nowrap">203.0.113.42</td>
+<td class="py-3 px-4 text-hint text-ink-subtle font-mono whitespace-nowrap">req_1a2b3c4d</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<!-- Footer Note -->
+<footer class="mt-8 text-center pb-8">
+<p class="text-hint font-hint text-ink-subtle max-w-3xl mx-auto">
+                    Note: This audit log is an immutable, append-only record. Log entries are cryptographically anchored periodically to an external secure storage layer to prevent tampering. Request IDs can be used to trace full transaction lifecycles in the central SIEM.
+                </p>
+</footer>
+</main>
+</div>
+</body></html>

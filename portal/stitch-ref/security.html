@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+
+<html class="light" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Bảo mật tài khoản - Asset Inventory</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary": "#ffffff",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "on-tertiary-fixed": "#360f00",
+                        "surface-container": "#eceef0",
+                        "error": "#ba1a1a",
+                        "secondary-container": "#4069f2",
+                        "on-background": "#191c1e",
+                        "on-tertiary": "#ffffff",
+                        "surface-dim": "#d8dadc",
+                        "on-secondary-fixed": "#001551",
+                        "tertiary-container": "#bc4800",
+                        "surface": "#ffffff",
+                        "on-error": "#ffffff",
+                        "on-surface": "#191c1e",
+                        "brand-100": "#dbeafe",
+                        "on-tertiary-container": "#ffede6",
+                        "ok": "#10b981",
+                        "surface-variant": "#e0e3e5",
+                        "tertiary-fixed-dim": "#ffb596",
+                        "ink": "#0f172a",
+                        "on-secondary-container": "#fffbff",
+                        "inverse-surface": "#2d3133",
+                        "ink-subtle": "#94a3b8",
+                        "secondary": "#1d4ed8",
+                        "tertiary": "#943700",
+                        "bad": "#e11d48",
+                        "inverse-primary": "#b4c5ff",
+                        "surface-container-high": "#e6e8ea",
+                        "tertiary-fixed": "#ffdbcd",
+                        "border": "#e2e8f0",
+                        "surface-container-lowest": "#ffffff",
+                        "on-primary-fixed": "#00174b",
+                        "inverse-on-surface": "#eff1f3",
+                        "background": "#f7f9fb",
+                        "brand-50": "#eff6ff",
+                        "primary": "#004ac6",
+                        "surface-bright": "#f7f9fb",
+                        "ink-muted": "#475569",
+                        "error-container": "#ffdad6",
+                        "on-primary-container": "#eeefff",
+                        "primary-container": "#2563eb",
+                        "border-soft": "#f1f5f9",
+                        "primary-fixed": "#dbe1ff",
+                        "outline": "#737686",
+                        "on-error-container": "#93000a",
+                        "outline-variant": "#c3c6d7",
+                        "warn": "#d97706",
+                        "secondary-fixed-dim": "#b7c4ff",
+                        "surface-muted": "#f8fafc",
+                        "surface-tint": "#0053db",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "on-primary": "#ffffff",
+                        "on-secondary-fixed-variant": "#0039b5",
+                        "on-surface-variant": "#434655",
+                        "on-tertiary-fixed-variant": "#7d2d00",
+                        "surface-container-highest": "#e0e3e5",
+                        "secondary-fixed": "#dce1ff",
+                        "surface-container-low": "#f2f4f6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "sidebar-width": "16rem",
+                        "section-gap": "1.5rem",
+                        "page-margin-desktop": "2rem",
+                        "card-padding": "1.25rem",
+                        "max-content-width": "1320px",
+                        "header-height": "3.5rem"
+                    },
+                    "fontFamily": {
+                        "hint": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "label-xs": ["Inter"]
+                    },
+                    "fontSize": {
+                        "hint": ["11px", { "lineHeight": "14px", "fontWeight": "400" }],
+                        "headline-md": ["15px", { "lineHeight": "22px", "fontWeight": "600" }],
+                        "headline-lg": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "label-xs": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .tbl-wrap { overflow-x: auto; min-width: 0; }
+        .ring-animation { animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(2); opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-sm min-h-screen flex text-body-sm">
+<!-- SideNavBar -->
+<nav class="w-64 h-screen fixed left-0 top-0 border-r border-border dark:border-outline-variant shadow-sm dark:shadow-none bg-surface dark:bg-surface-container-low flex flex-col h-full py-4 z-40 hidden md:flex">
+<div class="px-6 mb-8 flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-primary-container text-on-primary-container flex items-center justify-center font-bold">
+                IT
+            </div>
+<div>
+<h1 class="text-headline-md font-headline-md font-bold text-primary dark:text-primary-fixed">Asset Inventory</h1>
+<p class="text-hint font-hint text-ink-subtle">Enterprise Portal</p>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto px-4 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+                Tong quan
+            </a>
+<div class="mt-4 mb-2 px-3 text-label-xs font-label-xs text-ink-subtle uppercase tracking-wider">Quản lý tài sản</div>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="laptop_mac">laptop_mac</span>
+                May tinh
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="qr_code">qr_code</span>
+                May ma
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="key">key</span>
+                Token trien khai
+            </a>
+<div class="mt-4 mb-2 px-3 text-label-xs font-label-xs text-ink-subtle uppercase tracking-wider">Báo cáo</div>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="assessment">assessment</span>
+                Xuat bao cao
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="history">history</span>
+                Windows EOL
+            </a>
+<div class="mt-4 mb-2 px-3 text-label-xs font-label-xs text-ink-subtle uppercase tracking-wider">Vận hành</div>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="event_note">event_note</span>
+                Audit log
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-primary dark:text-primary-fixed font-semibold bg-brand-50 dark:bg-primary-container/20 opacity-80 duration-150 text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="security" data-weight="fill" style="font-variation-settings: 'FILL' 1;">security</span>
+                Bao mat tai khoan
+            </a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-ink-muted dark:text-on-surface-variant hover:bg-surface-container dark:hover:bg-surface-container-high transition-colors text-body-sm font-body-sm" href="#">
+<span class="material-symbols-outlined" data-icon="notification_important">notification_important</span>
+                Thong bao tuan thu
+            </a>
+</div>
+<div class="mt-auto px-4 pt-4 border-t border-border">
+<div class="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-container-low">
+<div class="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center font-bold">Q</div>
+<div class="flex-1 min-w-0">
+<p class="text-body-sm font-body-sm font-medium truncate">Quan tri vien he thong</p>
+<p class="text-hint font-hint text-ink-subtle truncate">Admin toàn cục</p>
+</div>
+</div>
+</div>
+</nav>
+<!-- Main Content Wrapper -->
+<div class="flex-1 flex flex-col min-w-0 ml-0 md:ml-64 bg-slate-50">
+<!-- TopAppBar -->
+<header class="h-14 sticky top-0 z-30 w-full backdrop-blur-md border-b border-border dark:border-outline-variant bg-surface/80 dark:bg-surface-container/80 flex justify-between items-center px-page-margin-desktop">
+<div class="flex items-center gap-4">
+<h2 class="text-headline-md font-headline-md font-bold text-primary dark:text-primary-fixed">Bảo mật tài khoản</h2>
+<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200">
+<span class="relative flex h-2 w-2">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+</span>
+<span class="text-[10px] font-bold tracking-wide text-emerald-700 uppercase">Realtime</span>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<button class="p-2 rounded-full text-ink-muted hover:bg-surface-container hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-2 rounded-full text-ink-muted hover:bg-surface-container hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+</div>
+</header>
+<!-- Page Content -->
+<main class="flex-1 p-6 md:p-8 max-w-[1320px] mx-auto w-full min-w-0">
+<div class="flex flex-col gap-6">
+<!-- State 1: 2FA Enabled -->
+<div class="bg-surface border border-soft rounded-lg shadow-sm">
+<div class="px-5 py-4 border-b border-soft flex justify-between items-center">
+<div>
+<h3 class="text-headline-md font-headline-md text-ink">Xác thực 2 yếu tố (TOTP) - Đang hoạt động</h3>
+<p class="text-hint font-hint text-ink-subtle mt-1">Bảo vệ tài khoản bằng mã xác nhận động.</p>
+</div>
+<span class="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-label-xs font-label-xs border border-emerald-200">Đã bật</span>
+</div>
+<div class="p-5 flex flex-col gap-4">
+<p class="text-body-sm font-body-sm text-ink-muted">Tài khoản của bạn hiện đang được bảo vệ bởi xác thực 2 yếu tố. Bạn sẽ cần nhập mã từ ứng dụng xác thực mỗi khi đăng nhập.</p>
+<div class="flex items-center gap-3 mt-2">
+<button class="px-4 py-2 border border-rose-600 text-rose-600 rounded-md hover:bg-rose-50 transition-colors text-body-sm font-medium">Tắt 2FA</button>
+<button class="px-4 py-2 border border-slate-200 text-slate-700 rounded-md hover:bg-slate-50 transition-colors text-body-sm font-medium">Xem mã dự phòng</button>
+</div>
+</div>
+</div>
+<!-- State 2: 2FA Setup -->
+<div class="bg-surface border border-soft rounded-lg shadow-sm">
+<div class="px-5 py-4 border-b border-soft flex justify-between items-center">
+<div>
+<h3 class="text-headline-md font-headline-md text-ink">Thiết lập Xác thực 2 yếu tố (TOTP)</h3>
+<p class="text-hint font-hint text-ink-subtle mt-1">Cấu hình bảo mật cấp cao cho tài khoản admin.</p>
+</div>
+<span class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-label-xs font-label-xs border border-slate-200">Chưa bật</span>
+</div>
+<div class="p-5">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+<!-- Left: QR & Input -->
+<div class="flex flex-col gap-6">
+<ol class="list-decimal list-inside space-y-4 text-body-sm font-body-sm text-ink-muted">
+<li>Mở ứng dụng xác thực trên điện thoại (Google Authenticator, Authy, Microsoft Authenticator).</li>
+<li>Quét mã QR bên dưới hoặc nhập khóa thủ công.</li>
+<li>Nhập mã 6 số từ ứng dụng để xác nhận.</li>
+</ol>
+<div class="bg-slate-50 p-6 rounded-lg border border-slate-200 flex flex-col items-center gap-4">
+<div class="w-48 h-48 bg-white border border-slate-300 rounded flex items-center justify-center p-2">
+<!-- Placeholder for QR Code -->
+<div class="w-full h-full border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400">
+<span class="material-symbols-outlined text-4xl">qr_code_scanner</span>
+</div>
+</div>
+<div class="w-full">
+<label class="block text-label-xs font-label-xs text-ink-muted mb-1">Khóa thiết lập thủ công</label>
+<div class="flex gap-2">
+<input class="flex-1 bg-white border border-slate-200 rounded-md px-3 py-2 text-body-sm font-mono text-ink-muted focus:ring-2 focus:ring-primary-container outline-none" readonly="" type="text" value="JBSWY3DPEHPK3PXP"/>
+<button class="px-3 py-2 border border-slate-200 rounded-md hover:bg-slate-50 text-ink-muted" title="Copy">
+<span class="material-symbols-outlined text-sm">content_copy</span>
+</button>
+</div>
+</div>
+</div>
+<div>
+<label class="block text-label-xs font-label-xs text-ink-muted mb-1">Mã xác nhận (6 số)</label>
+<div class="flex gap-4 items-center">
+<input class="w-32 bg-white border border-slate-200 rounded-md px-3 py-2 text-headline-md tracking-[0.2em] text-center focus:ring-2 focus:ring-primary-container outline-none" maxlength="6" placeholder="000000" type="text"/>
+<button class="px-5 py-2 bg-primary text-white rounded-md hover:bg-primary/90 transition-colors font-medium">Xác nhận</button>
+</div>
+</div>
+</div>
+<!-- Right: Backup Codes -->
+<div class="border-l border-soft pl-0 lg:pl-8 mt-8 lg:mt-0">
+<h4 class="text-headline-md font-headline-md text-ink mb-2">Mã dự phòng</h4>
+<p class="text-body-sm font-body-sm text-ink-muted mb-4">Lưu lại các mã này ở nơi an toàn. Bạn có thể sử dụng chúng để đăng nhập nếu mất thiết bị xác thực.</p>
+<div class="bg-slate-50 rounded-lg border border-slate-200 p-4">
+<div class="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-body-sm text-ink">
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>abcd-1234</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>efgh-5678</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>ijkl-9012</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>mnop-3456</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>qrst-7890</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>uvwx-1234</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>yzab-5678</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>cdef-9012</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"><span>ghij-3456</span></div>
+<div class="flex items-center justify-between p-2 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors text-ink-muted line-through"><span>klmn-7890</span> <span class="text-xs ml-2 text-rose-500">Đã dùng</span></div>
+</div>
+<div class="mt-4 pt-4 border-t border-slate-200 flex justify-end gap-2">
+<button class="px-3 py-1.5 text-sm border border-slate-200 rounded text-slate-600 hover:bg-slate-100 flex items-center gap-1">
+<span class="material-symbols-outlined text-sm">print</span> In
+                                        </button>
+<button class="px-3 py-1.5 text-sm border border-slate-200 rounded text-slate-600 hover:bg-slate-100 flex items-center gap-1">
+<span class="material-symbols-outlined text-sm">download</span> Tải về .txt
+                                        </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div class="px-5 py-3 bg-slate-50 border-t border-soft rounded-b-lg flex items-center gap-2 text-hint font-hint text-ink-muted">
+<span class="material-symbols-outlined text-sm text-warn">info</span>
+                        2FA bắt buộc cho admin (mục 5.3)
+                    </div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

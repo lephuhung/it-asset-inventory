@@ -1,0 +1,270 @@
+using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Collectors;
+using OrgInventoryAgent.Crypto;
+using OrgInventoryAgent.Logging;
+using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Services;
+
+namespace OrgInventoryAgent;
+
+/// <summary>
+/// Agent Windows — IT Asset Inventory (Phase 1 MVP).
+/// Chạy như Windows Service (UseWindowsService) khi Windows; console trên Linux (dev/test).
+/// CLI flags: --data-dir, --enroll-token, --endpoint, --print-config, --print-fingerprint,
+/// --version, --once, --help.
+/// </summary>
+internal static class Program
+{
+    private static async Task<int> Main(string[] args)
+    {
+        var cli = CliArgs.Parse(args);
+        if (cli.ShowHelp)
+        {
+            PrintHelp();
+            return 0;
+        }
+
+        try { AppPaths.Initialize(cli.DataDir); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[fatal] {ex.Message}");
+            return 1;
+        }
+
+        if (cli.PrintVersion)
+        {
+            Console.WriteLine($"OrgInventoryAgent {AppInfo.Version}");
+            return 0;
+        }
+
+        if (cli.PrintFingerprint)
+        {
+            using var loggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole());
+            var fp = new FingerprintCollector(loggerFactory.CreateLogger<FingerprintCollector>()).Collect();
+            Console.WriteLine(JsonSerializer.Serialize(fp, new JsonSerializerOptions(Json.Options) { WriteIndented = true }));
+            return 0;
+        }
+
+        var config = AgentConfig.Load();
+
+        // Ghi đè endpoint từ CLI (dev/test)
+        if (!string.IsNullOrWhiteSpace(cli.Endpoint))
+            config.SetPrimaryEndpoint(cli.Endpoint);
+
+        // Token từ CLI được lưu vào config để service retry được (token 1 lần — xóa sau enroll)
+        if (!string.IsNullOrWhiteSpace(cli.EnrollToken))
+        {
+            config.Token = cli.EnrollToken;
+            config.Save();
+        }
+
+        if (cli.PrintConfig)
+        {
+            var masked = new
+            {
+                data_dir = AppPaths.DataDir,
+                endpoints = config.Endpoints,
+                heartbeat_interval_seconds = config.HeartbeatIntervalSeconds,
+                heartbeat_jitter_seconds = config.HeartbeatJitterSeconds,
+                inventory_interval_hours = config.InventoryIntervalHours,
+                renew_before_percent = config.RenewBeforePercent,
+                enrolled = config.Enrolled,
+                machine_id = config.MachineId,
+                token = config.Token is null ? null : (config.Token.Length > 12 ? config.Token[..4] + "…" : "***"),
+                client_cert_thumbprint = config.ClientCertThumbprint,
+                cert_store_location = config.CertStoreLocation,
+                renew_after = config.RenewAfter,
+                http_proxy = config.HttpProxy,
+                config_version = config.ConfigVersion,
+            };
+            Console.WriteLine(JsonSerializer.Serialize(masked, new JsonSerializerOptions { WriteIndented = true }));
+            return 0;
+        }
+
+        if (cli.Once)
+            return await RunOnceAsync(config);
+
+        return await RunServiceAsync(config);
+    }
+
+    // ── Chế độ service ────────────────────────────────────────────
+    private static async Task<int> RunServiceAsync(AgentConfig config)
+    {
+        var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
+
+        builder.Logging.ClearProviders();
+        builder.Logging.AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z' ";
+        });
+        builder.Logging.AddProvider(new FileLoggerProvider(AppPaths.LogsDir));
+
+        if (OperatingSystem.IsWindows())
+            builder.Services.AddWindowsService(o => o.ServiceName = "OrgInventoryAgent");
+
+        RegisterServices(builder, config, hosted: true);
+
+        using var host = builder.Build();
+
+        // Enroll sớm ngay khi khởi động (fire-and-forget; HeartbeatService retry nếu lỗi)
+        var coordinator = host.Services.GetRequiredService<EnrollCoordinator>();
+        _ = Task.Run(() => coordinator.EnsureEnrolledAsync(CancellationToken.None));
+
+        await host.RunAsync();
+        return 0;
+    }
+
+    // ── Chế độ --once (test/CI trên Linux) ─────────────────────────
+    private static async Task<int> RunOnceAsync(AgentConfig config)
+    {
+        using var loggerFactory = LoggerFactory.Create(b =>
+        {
+            b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z' "; });
+            b.AddProvider(new FileLoggerProvider(AppPaths.LogsDir));
+        });
+
+        var logger = loggerFactory.CreateLogger("once");
+
+        // Dựng DI thủ công (không chạy BackgroundService)
+        var keyStore = new KeyStore(loggerFactory.CreateLogger<KeyStore>());
+        var endpoints = new EndpointManager(config, loggerFactory.CreateLogger<EndpointManager>());
+        var cache = new OfflineCache(loggerFactory.CreateLogger<OfflineCache>());
+        var fingerprint = new FingerprintCollector(loggerFactory.CreateLogger<FingerprintCollector>());
+        var inventoryCollector = new InventoryCollector(loggerFactory.CreateLogger<InventoryCollector>());
+        var api = new ApiClient(config, endpoints, keyStore, loggerFactory.CreateLogger<ApiClient>());
+        var enrollClient = new EnrollClient(api, loggerFactory.CreateLogger<EnrollClient>());
+        var coordinator = new EnrollCoordinator(config, api, enrollClient, endpoints, keyStore,
+            fingerprint, inventoryCollector, loggerFactory.CreateLogger<EnrollCoordinator>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+
+        try
+        {
+            if (!await coordinator.EnsureEnrolledAsync(cts.Token))
+            {
+                logger.LogError("--once: enroll chưa thành công — dừng.");
+                return 1;
+            }
+
+            var inv = new InventoryService(config, api, endpoints, coordinator, cache, inventoryCollector,
+                loggerFactory.CreateLogger<InventoryService>());
+            var hb = new HeartbeatService(config, api, endpoints, coordinator, cache, inventoryCollector, inv,
+                loggerFactory.CreateLogger<HeartbeatService>());
+
+            var hbOk = await hb.SendOnceAsync(cts.Token);
+            logger.LogInformation("--once heartbeat: {Ok}", hbOk ? "OK" : "FAIL");
+            var invOk = await inv.SendOnceAsync(cts.Token);
+            logger.LogInformation("--once inventory: {Ok}", invOk ? "OK" : "FAIL");
+
+            return hbOk && invOk ? 0 : 2;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError("--once lỗi: {Msg}", ex.Message);
+            return 1;
+        }
+        finally
+        {
+            api.Dispose();
+            cache.Dispose();
+        }
+    }
+
+    private static void RegisterServices(HostApplicationBuilder builder, AgentConfig config, bool hosted)
+    {
+        builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton<KeyStore>();
+        builder.Services.AddSingleton<EndpointManager>();
+        builder.Services.AddSingleton<OfflineCache>();
+        builder.Services.AddSingleton<FingerprintCollector>();
+        builder.Services.AddSingleton<InventoryCollector>();
+        builder.Services.AddSingleton<ApiClient>();
+        builder.Services.AddSingleton<EnrollClient>();
+        builder.Services.AddSingleton<EnrollCoordinator>();
+        builder.Services.AddSingleton<HeartbeatService>();
+        builder.Services.AddSingleton<InventoryService>();
+        builder.Services.AddSingleton<RenewService>();
+        builder.Services.AddSingleton<ConfigSyncService>();
+
+        if (hosted)
+        {
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<HeartbeatService>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<InventoryService>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<RenewService>());
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<ConfigSyncService>());
+        }
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine("""
+            OrgInventoryAgent — IT Asset Inventory agent (Phase 1)
+
+            Usage:
+              OrgInventoryAgent [options]
+
+            Options:
+              --data-dir <path>       Thư mục dữ liệu (config/cache/log). Mặc định:
+                                      Windows: %ProgramData%\OrgInventory
+                                      Linux:   ~/.local/share/OrgInventory
+                                      (hoặc env ORGINVENTORY_DATA_DIR)
+              --enroll-token <token>  Token enroll (1 lần). Lưu vào config tới khi enroll xong.
+              --endpoint <url>        Endpoint server (primary). Ghi đè config.
+              --print-config          In cấu hình hiện tại (token được che) rồi thoát.
+              --print-fingerprint     Thu thập và in fingerprint 3 nguồn rồi thoát.
+              --version               In phiên bản.
+              --once                  Chạy 1 lần: enroll → heartbeat → inventory rồi thoát (test/CI).
+              --help                  Hướng dẫn này.
+
+            Config: %ProgramData%\OrgInventory\config.json (Windows)
+            Log:    %ProgramData%\OrgInventory\logs\agent.log
+            Cache:  %ProgramData%\OrgInventory\cache.db (SQLite — offline cache)
+            """);
+    }
+}
+
+/// <summary>Parse CLI args đơn giản (--key value / --flag).</summary>
+internal sealed class CliArgs
+{
+    public string? DataDir { get; private set; }
+    public string? EnrollToken { get; private set; }
+    public string? Endpoint { get; private set; }
+    public bool PrintConfig { get; private set; }
+    public bool PrintFingerprint { get; private set; }
+    public bool PrintVersion { get; private set; }
+    public bool Once { get; private set; }
+    public bool ShowHelp { get; private set; }
+
+    public static CliArgs Parse(string[] args)
+    {
+        var cli = new CliArgs();
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            string? Next() => i + 1 < args.Length ? args[++i] : null;
+
+            switch (arg)
+            {
+                case "--data-dir": cli.DataDir = Next(); break;
+                case "--enroll-token": cli.EnrollToken = Next(); break;
+                case "--endpoint": cli.Endpoint = Next(); break;
+                case "--print-config": cli.PrintConfig = true; break;
+                case "--print-fingerprint": cli.PrintFingerprint = true; break;
+                case "--version": cli.PrintVersion = true; break;
+                case "--once": cli.Once = true; break;
+                case "--help":
+                case "-h":
+                    cli.ShowHelp = true;
+                    break;
+                default:
+                    Console.Error.WriteLine($"[warn] Bỏ qua tham số không biết: {arg}");
+                    break;
+            }
+        }
+        return cli;
+    }
+}

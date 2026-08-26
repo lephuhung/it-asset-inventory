@@ -1,0 +1,74 @@
+# install.ps1 — chạy bởi: irm {{ portal_url }}/i/{{ token }} | iex
+# Yêu cầu: PowerShell 5.1+ (Windows 10/11), quyền Administrator.
+# Quy trình: kiểm tra quyền → tải MSI → verify SHA256 + chữ ký → msiexec /qn.
+
+$ErrorActionPreference = 'Stop'
+$token = '{{ token }}'
+$baseUrl = '{{ portal_url }}'
+$msiUrl = "$baseUrl/download/agent.msi"
+$msiPath = Join-Path $env:TEMP "agent-$token.msi"
+$logPath = Join-Path $env:TEMP 'agent-install.log'
+
+Write-Host ''
+Write-Host '=== IT ASSET INVENTORY — CÀI ĐẶT AGENT ===' -ForegroundColor Cyan
+Write-Host ''
+
+# 1. Kiểm tra quyền Administrator
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host '[LỖI] Cần chạy PowerShell với quyền Administrator.' -ForegroundColor Red
+    Write-Host '       Chuột phải vào PowerShell -> "Run as administrator", rồi chạy lại lệnh.' -ForegroundColor Yellow
+    exit 1
+}
+
+# 2. Thông báo tuân thủ (mục 7.4 tài liệu gốc)
+Write-Host 'Dữ liệu agent thu thập (chỉ đọc):' -ForegroundColor White
+Write-Host '  - Cấu hình máy: OS, CPU, RAM, ổ cứng, GPU, mainboard, BIOS' -ForegroundColor Gray
+Write-Host '  - Mạng: hostname, IP, MAC (phát hiện dual-homed)' -ForegroundColor Gray
+Write-Host '  - Phần mềm đã cài, trạng thái Antivirus / Windows Update' -ForegroundColor Gray
+Write-Host '  - User đang đăng nhập, trạng thái online/offline' -ForegroundColor Gray
+Write-Host 'KHÔNG thu thập: nội dung liên lạc, lịch sử web, phím gõ, ảnh màn hình.' -ForegroundColor Green
+Write-Host "Chi tiết: $baseUrl/compliance" -ForegroundColor Cyan
+Write-Host ''
+Write-Host 'Nếu bạn không đồng ý với việc thu thập dữ liệu, hãy đóng cửa sổ này.' -ForegroundColor Yellow
+Start-Sleep -Seconds 3
+
+# 3. Tải MSI
+Write-Host "[1/4] Đang tải agent từ $msiUrl ..." -ForegroundColor Cyan
+try {
+    Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing -TimeoutSec 60
+} catch {
+    Write-Host "[LỖI] Không tải được MSI: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
+# 4. Verify SHA256 + chữ ký Authenticode
+Write-Host '[2/4] Xác thực chữ ký số ...' -ForegroundColor Cyan
+$sig = Get-AuthenticodeSignature -FilePath $msiPath
+if ($sig.Status -ne 'Valid') {
+    Write-Host "[LỖI] Chữ ký số không hợp lệ (Status: $($sig.Status)). Đã dừng cài đặt." -ForegroundColor Red
+    Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+Write-Host "      ✓ Chữ ký hợp lệ: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+
+# 5. Cài đặt silent — MSI nhận TOKEN qua property (agent tự enroll sau khi cài)
+Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
+$install = Start-Process msiexec.exe -ArgumentList @(
+    '/i', "`"$msiPath`"", '/qn', '/norestart',
+    "TOKEN=$token", "/L*V", "`"$logPath`""
+) -Wait -PassThru
+
+if ($install.ExitCode -ne 0) {
+    Write-Host "[LỖI] Cài đặt thất bại (exit code: $($install.ExitCode)). Log: $logPath" -ForegroundColor Red
+    exit 1
+}
+
+# 6. Hoàn tất
+Write-Host '[4/4] Hoàn tất.' -ForegroundColor Cyan
+Write-Host ''
+Write-Host '✔ Cài đặt thành công!' -ForegroundColor Green
+Write-Host '  Agent đang tự enroll và bắt đầu gửi heartbeat (khoảng 30 giây/lần).' -ForegroundColor Gray
+Write-Host '  Trạng thái máy sẽ hiển thị trên dashboard của quản trị viên.' -ForegroundColor Gray
+exit 0

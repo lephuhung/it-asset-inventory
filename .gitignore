@@ -1,0 +1,40 @@
+# ── Python ──
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Node / Next.js ──
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.pnpm-store/
+.npm-cache/
+
+# ── .NET ──
+**/bin/
+**/obj/
+*.user
+.nuget-packages/
+.dotnet-cli-home/
+.dotnet/
+
+# ── Env / secrets ──
+.env
+.env.local
+*.pem
+*.key
+*.crt
+*.csr
+deploy/certs/*
+!deploy/certs/gen-dev-certs.sh
+
+# ── DB local ──
+*.db
+*.sqlite
+*.sqlite3

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OrgInventory Agent — MSI (WiX Toolset v4+).
+
+  Cài Windows Service qua SCM chuẩn (ServiceInstall/ServiceControl), ghi config mặc định
+  vào registry HKLM\SOFTWARE\OrgInventory (agent đọc ở lần chạy đầu khi chưa có config.json),
+  nhận ENROLL_TOKEN / ENDPOINTS / HTTP_PROXY từ dòng lệnh msiexec (public + Secure).
+
+  Build: installer\build-msi.ps1 (cần WiX trên Windows — không build được trên Linux).
+
+  Dùng thủ công:
+    wix build installer\Product.wxs -d AgentExe=path\OrgInventoryAgent.exe -o OrgInventoryAgent.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <?define AgentExe = "OrgInventoryAgent.exe" ?>
+  <?define UpgradeCode = "A3E2F1B0-9C8D-4E5F-8A7B-6C5D4E3F2A1B" ?>
+
+  <Package Name="OrgInventory Agent"
+           Manufacturer="OrgInventory"
+           Version="1.0.0"
+           UpgradeCode="$(var.UpgradeCode)"
+           Language="1033"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="IT Asset Inventory agent (Phase 1): thu thập cấu hình máy, fingerprint đa nguồn, mTLS." />
+
+    <!-- Upgrade sạch bản cũ -->
+    <MajorUpgrade DowngradeErrorMessage="Phiên bản mới hơn của OrgInventory Agent đã được cài đặt." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Icon cho Add/Remove Programs -->
+    <Icon Id="app.ico" SourceFile="..\Assets\agent.ico" />
+    <Property Id="ARPPRODUCTICON" Value="app.ico" />
+
+    <!-- Properties truyền từ msiexec (Secure: giữ được qua custom action / service) -->
+    <Property Id="ENROLL_TOKEN" Secure="yes" />
+    <Property Id="ENDPOINTS" Secure="yes" />
+    <Property Id="HTTP_PROXY" Secure="yes" />
+
+    <!-- Thư mục cài: Program Files (x64) -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="OrgInventory" />
+    </StandardDirectory>
+
+    <!-- Component: exe + service SCM -->
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="AgentExeComponent" Guid="7C4F2A91-3B5E-4D8A-9C1F-0A2B3C4D5E6F">
+        <File Id="AgentExeFile" Source="$(var.AgentExe)" KeyPath="yes" />
+
+        <!-- Đăng ký Windows Service qua SCM chuẩn (LocalSystem → đọc được WMI + cert store LocalMachine) -->
+        <ServiceInstall Id="ServiceInstall"
+                        Name="OrgInventoryAgent"
+                        DisplayName="OrgInventory Agent"
+                        Description="IT Asset Inventory agent: thu thập cấu hình máy, fingerprint đa nguồn, mTLS. Read-only WMI/Registry, zero-GUI."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Interactive="no" />
+        <ServiceControl Id="ServiceControl"
+                        Name="OrgInventoryAgent"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Component: config bootstrap → registry (agent đọc khi chưa có config.json) -->
+    <ComponentGroup Id="RegistryComponents">
+      <Component Id="RegistryConfigComponent" Directory="INSTALLFOLDER" Guid="8D5E3B72-4C6F-4E9A-B2D0-1C3D4E5F6A7B">
+        <RegistryKey Root="HKLM" Key="SOFTWARE\OrgInventory">
+          <!-- Endpoints: danh sách server, phân tách bằng dấu phẩy. VD https://agent.gov.vn,https://backup.gov.vn -->
+          <RegistryValue Name="Endpoints" Value="[ENDPOINTS]" Type="string" KeyPath="yes" />
+          <RegistryValue Name="EnrollToken" Value="[ENROLL_TOKEN]" Type="string" />
+          <RegistryValue Name="HttpProxy" Value="[HTTP_PROXY]" Type="string" />
+        </RegistryKey>
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main" Title="OrgInventory Agent" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="RegistryComponents" />
+    </Feature>
+
+  </Package>
+</Wix>

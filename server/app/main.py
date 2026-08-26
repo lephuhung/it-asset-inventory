@@ -1,0 +1,142 @@
+"""FastAPI app entry point."""
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from app.api.routes import (
+    agent_config,
+    alert_rules,
+    api_keys,
+    audit,
+    auth,
+    compliance,
+    drifts,
+    enroll,
+    heartbeat,
+    install,
+    inventory,
+    machines,
+    offline_import,
+    org_rules,
+    orgs,
+    renew,
+    reports,
+    self_service,
+    stats,
+    tokens,
+    users,
+    ws,
+)
+from app.core.config import settings
+
+# ── Logging ───────────────────────────────────────────────────
+# Uvicorn không cấu hình handler cho logger của ứng dụng → log từ service
+# (monitor, realtime...) bị "nuốt" im lặng. Gắn handler chuẩn cho root logger.
+_LOGGING_CONFIGURED = False
+
+
+def _configure_logging() -> None:
+    global _LOGGING_CONFIGURED
+    if _LOGGING_CONFIGURED:
+        return
+    root = logging.getLogger()
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+        )
+        root.addHandler(handler)
+    root.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+    _LOGGING_CONFIGURED = True
+
+
+limiter = Limiter(key_func=get_remote_address)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _configure_logging()
+
+    # Seed admin + danh sách tổ chức cấp tỉnh (UBND xã, Sở ban ngành) khi khởi động (dev/khởi tạo)
+    if settings.app_env in ("dev", "test"):
+        from app.db.seed_orgs import seed_all
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            await auth.seed_admin(db)
+            await seed_all(db)
+
+    # Background monitor: phát hiện offline + đảm bảo partition heartbeats
+    from app.services.monitor import start_monitor
+
+    monitor_task = await start_monitor()
+    try:
+        yield
+    finally:
+        monitor_task.cancel()
+        try:
+            await monitor_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(
+    title="IT Asset Inventory API",
+    version="0.1.0",
+    description="Hệ thống quản lý tài sản máy tính — API cho agent + portal",
+    lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"detail": "Quá nhiều yêu cầu — vui lòng thử lại sau"})
+
+
+app.include_router(auth.router)
+app.include_router(enroll.router)
+app.include_router(heartbeat.router)
+app.include_router(inventory.router)
+app.include_router(tokens.router)
+app.include_router(machines.router)
+app.include_router(stats.router)
+app.include_router(orgs.router)
+app.include_router(org_rules.router)
+app.include_router(alert_rules.router)
+app.include_router(self_service.router)
+app.include_router(drifts.router)
+app.include_router(offline_import.router)
+app.include_router(api_keys.router)
+app.include_router(api_keys.public_router)
+app.include_router(audit.router)
+app.include_router(compliance.router)
+app.include_router(reports.router)
+app.include_router(agent_config.router)
+app.include_router(renew.router)
+app.include_router(install.router)
+app.include_router(ws.router)
+app.include_router(users.router)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "app": "asset-inventory-server"}

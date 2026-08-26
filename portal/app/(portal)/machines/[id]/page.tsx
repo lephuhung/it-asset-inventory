@@ -1,0 +1,416 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import {
+  ArrowLeft,
+  Cpu,
+  Fingerprint,
+  HardDrive,
+  Monitor,
+  Network,
+  Package,
+  RefreshCw,
+  ShieldCheck,
+  StickyNote,
+} from "lucide-react";
+import { api } from "@/lib/api";
+import type { MachineDetail, NetworkInterface } from "@/lib/types";
+import { useAuth } from "@/components/auth-context";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  Field,
+  Input,
+  PageHeader,
+  Select,
+  Spinner,
+  StatusDot,
+} from "@/components/ui";
+import {
+  LIFECYCLE_META,
+  MACHINE_STATUS_META,
+  formatBytes,
+  formatDateTime,
+  timeAgo,
+} from "@/lib/format";
+import { EOL_STATUS_META, getWindowsEol } from "@/lib/eol";
+import { MachineTimelineSection } from "@/components/machine-timeline";
+
+function kv(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function SpecRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-50 py-2 text-sm last:border-0">
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <span className="min-w-0 break-words text-right font-medium text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+export default function MachineDetailPage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+  const { user } = useAuth();
+
+  const [machine, setMachine] = useState<MachineDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [lifecycle, setLifecycle] = useState<string>("");
+  const [note, setNote] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const m = await api.get<MachineDetail>(`/machines/${id}`);
+      setMachine(m);
+      setLifecycle(m.lifecycle);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Không tải được chi tiết máy");
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const isAdmin = user?.role === "super_admin" || user?.role === "org_admin" || user?.role === "admin_global" || user?.role === "admin_org";
+
+  const runAction = async (action: string, body?: unknown) => {
+    if (!machine) return;
+    setActionBusy(action);
+    setActionError(null);
+    try {
+      await api.post(`/machines/${machine.id}/${action}`, body ?? {});
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Thao tác thất bại");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const saveLifecycle = async () => {
+    if (!machine || !lifecycle) return;
+    setActionBusy("lifecycle");
+    setActionError(null);
+    try {
+      await api.patch(`/machines/${machine.id}/lifecycle`, {
+        lifecycle,
+        note: note || null,
+      });
+      setNote("");
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Cập nhật vòng đời thất bại");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  if (loading && !machine) return <Spinner label="Đang tải chi tiết máy…" />;
+  if (error)
+    return <ErrorBanner message={error} onRetry={() => void load()} />;
+  if (!machine) return <EmptyState icon={<Monitor className="size-10" />} title="Máy không tồn tại" />;
+
+  const meta = MACHINE_STATUS_META[machine.status];
+  const life = LIFECYCLE_META[machine.lifecycle] ?? { label: machine.lifecycle, badge: "bg-slate-100 text-slate-500 ring-slate-500/20" };
+  const spec = machine.latest_spec;
+  const eol = spec ? getWindowsEol(spec.os_name, spec.os_build) : null;
+  const disks = (spec?.disks ?? []) as Array<Record<string, unknown>>;
+  const network = (spec?.network ?? []) as NetworkInterface[];
+  const software = (spec?.installed_software ?? []) as Array<Record<string, unknown>>;
+  const security = spec?.security;
+
+  return (
+    <div>
+      <Link href="/machines" className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+        <ArrowLeft className="size-4" /> Về danh sách máy
+      </Link>
+
+      <PageHeader
+        title={machine.hostname ?? "(chưa đặt tên)"}
+        description={
+          <span className="font-mono text-xs">{machine.machine_uuid}</span>
+        }
+        actions={
+          <>
+            <Badge className={meta.badge}>
+              <StatusDot className={meta.dot} />
+              {meta.label}
+            </Badge>
+            <Badge className={life.badge}>{life.label}</Badge>
+            <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">
+              {machine.is_vm ? "Máy ảo" : "Vật lý"}
+            </Badge>
+          </>
+        }
+      />
+
+      {eol && (
+        <div className="mb-4">
+          <Badge className={EOL_STATUS_META[eol.status].badge}>
+            EOL: {eol.release} — {eol.note}
+          </Badge>
+        </div>
+      )}
+
+      {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Cấu hình phần cứng" subtitle={spec ? `Snapshot lúc ${formatDateTime(spec.collected_at)}` : "Chưa có snapshot inventory"}>
+          {!spec ? (
+            <p className="text-sm text-slate-500">Agent chưa gửi inventory cho máy này.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              <SpecRow label="Hệ điều hành" value={kv(spec.os_name)} />
+              <SpecRow label="Phiên bản / Build" value={spec.os_version ? `${kv(spec.os_version)} (build ${kv(spec.os_build)})` : kv(spec.os_build)} />
+              <SpecRow label="Kiến trúc" value={kv(spec.os_arch)} />
+              <SpecRow label="CPU" value={
+                <span className="flex items-center justify-end gap-1">
+                  <Cpu className="size-3.5 text-slate-400" />
+                  {kv((spec.cpu as Record<string, unknown>)?.model ?? spec.cpu)}
+                </span>
+              } />
+              <SpecRow label="RAM" value={`${kv(spec.ram_gb)} GB`} />
+              <SpecRow label="GPU" value={kv((spec.gpu as Record<string, unknown>)?.model ?? spec.gpu)} />
+              {spec.mainboard && <SpecRow label="Mainboard" value={kv(spec.mainboard)} />}
+              {spec.bios && <SpecRow label="BIOS" value={kv(spec.bios)} />}
+              {disks.length > 0 && (
+                <div className="py-2 text-sm">
+                  <span className="text-slate-500">Ổ đĩa ({disks.length})</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {disks.map((d, i) => (
+                      <li key={i} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5">
+                        <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
+                          <HardDrive className="size-3.5 shrink-0 text-slate-400" />
+                          <span className="truncate">{kv(d.model)}</span>
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                          {formatBytes(Number(d.size_bytes ?? d.size ?? 0))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card title="Mạng & người dùng">
+          {network.length === 0 ? (
+            <p className="text-sm text-slate-500">Chưa có dữ liệu mạng.</p>
+          ) : (
+            <div className="tbl-wrap">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs uppercase text-slate-400">
+                    <th className="py-1.5 pr-3 font-semibold whitespace-nowrap">Card mạng</th>
+                    <th className="py-1.5 pr-3 font-semibold whitespace-nowrap">IP</th>
+                    <th className="py-1.5 font-semibold whitespace-nowrap">MAC</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {network.map((n, i) => (
+                    <tr key={i} className="border-b border-slate-50">
+                      <td className="py-2 pr-3 text-slate-700">
+                        <span className="flex items-center gap-1.5">
+                          <Network className="size-3.5 text-slate-400" />
+                          {kv(n.name)}
+                        </span>
+                        {n.is_dual_homed && (
+                          <Badge className="mt-1 bg-rose-50 text-rose-700 ring-rose-600/20">
+                            ⚠️ Dual-homed
+                          </Badge>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 font-mono text-xs text-slate-600">{kv(n.ip)}</td>
+                      <td className="py-2 font-mono text-xs text-slate-500">{kv(n.mac)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="mt-3 border-t border-slate-100 pt-3">
+            <SpecRow label="Người dùng đang đăng nhập" value={kv(spec?.logged_user)} />
+          </div>
+
+          <div className="mt-3 border-t border-slate-100 pt-3">
+            <SpecRow
+              label="Cá nhân sở hữu"
+              value={
+                machine.assigned_user_name
+                  ? `${machine.assigned_user_name}${machine.phone_masked ? ` (ĐT: ${machine.phone_masked})` : ""}`
+                  : "Chưa gán"
+              }
+            />
+            <SpecRow label="Tổ chức" value={machine.org_name ?? "—"} />
+            <SpecRow label="Enroll lúc" value={formatDateTime(machine.enrolled_at)} />
+            <SpecRow label="Lần cuối online" value={timeAgo(machine.last_seen_at)} />
+          </div>
+        </Card>
+
+        <Card title="Trạng thái bảo mật" subtitle="Antivirus, Windows Update, cấu hình rủi ro (Phase 2)">
+          {!security ? (
+            <p className="text-sm text-slate-500">
+              Agent chưa gửi dữ liệu bảo mật (có ở Phase 2: WMI SecurityCenter2, BitLocker, RDP…).
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              <SpecRow
+                label="Antivirus"
+                value={
+                  (security.antivirus ?? []).length > 0
+                    ? (security.antivirus as Array<Record<string, unknown>>)
+                        .map((a) => kv(a.displayName ?? a))
+                        .join(", ")
+                    : "Chưa phát hiện"
+                }
+              />
+              <SpecRow label="Windows Update" value={kv(security.windows_update_status)} />
+              <SpecRow label="BitLocker" value={kv(security.bitlocker)} />
+              <SpecRow
+                label="RDP mở"
+                value={
+                  security.rdp_enabled === null || security.rdp_enabled === undefined
+                    ? "—"
+                    : security.rdp_enabled
+                      ? "⚠️ Đang bật"
+                      : "Đã tắt"
+                }
+              />
+              {(security.smarts ?? []).length > 0 && (
+                <div className="py-2 text-sm">
+                  <span className="text-slate-500">Sức khỏe ổ cứng (SMART)</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {(security.smarts as Array<Record<string, unknown>>).map((s, i) => (
+                      <li key={i} className="rounded-md bg-slate-50 px-2.5 py-1.5 text-slate-700">
+                        {kv(s.model ?? s.device ?? "Ổ đĩa")} — {kv(s.status ?? s.health)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card title="Phần mềm đã cài" subtitle="Software inventory (Phase 2)">
+          {software.length === 0 ? (
+            <p className="text-sm text-slate-500">Chưa có dữ liệu phần mềm.</p>
+          ) : (
+            <>
+              <p className="mb-2 text-xs text-slate-400">{software.length} phần mềm — phát hiện phần mềm không phép / không bản quyền.</p>
+              <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">
+                {software.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+                    <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
+                      <Package className="size-3.5 shrink-0 text-slate-400" />
+                      <span className="truncate">{kv(s.display_name ?? s.name)}</span>
+                    </span>
+                    <span className="shrink-0 text-xs text-slate-400">{kv(s.version)}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </Card>
+
+        <Card title="Fingerprint máy" subtitle="Định danh đa nguồn, dùng fuzzy-match khi enroll">
+          <pre className="max-h-80 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">
+            {JSON.stringify(machine.fingerprint ?? {}, null, 2)}
+          </pre>
+        </Card>
+
+        <Card title="Ghi chú" subtitle="Vòng đời tài sản & ghi chú quản trị">
+          <div className="flex items-start gap-2 text-sm text-slate-700">
+            <StickyNote className="mt-0.5 size-4 shrink-0 text-slate-400" />
+            {machine.note ? machine.note : "Chưa có ghi chú."}
+          </div>
+          <div className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+            <Fingerprint className="mt-0.5 size-4 shrink-0 text-slate-400" />
+            <span>
+              Fingerprint drift (đổi mainboard / ghost Win) sẽ hiện cảnh báo ở Phase 3 — admin duyệt
+              trên màn chuyên dụng.
+            </span>
+          </div>
+        </Card>
+      </div>
+
+      {isAdmin && (
+        <Card className="mt-5" title="Thao tác quản trị" subtitle="Vòng đời tài sản (#18), duyệt máy (#20), thu thập lại (#23)">
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div>
+              <Field label="Vòng đời tài sản">
+                <div className="flex gap-2">
+                  <Select value={lifecycle} onChange={(e) => setLifecycle(e.target.value)}>
+                    <option value="new">Mới cài</option>
+                    <option value="in_use">Đang dùng</option>
+                    <option value="in_repair">Sửa chữa</option>
+                    <option value="decommissioned">Thanh lý</option>
+                  </Select>
+                  <Button
+                    variant="secondary"
+                    loading={actionBusy === "lifecycle"}
+                    onClick={() => void saveLifecycle()}
+                    disabled={!lifecycle || lifecycle === machine.lifecycle}
+                  >
+                    Lưu
+                  </Button>
+                </div>
+              </Field>
+              <Field label="Ghi chú kèm (tùy chọn)" className="mt-2">
+                <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Lý do thay đổi…" />
+              </Field>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-slate-500">Duyệt máy (chờ approve)</p>
+              {machine.status === "pending" ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" loading={actionBusy === "approve"} onClick={() => void runAction("approve")}>
+                    ✅ Duyệt máy
+                  </Button>
+                  <Button variant="danger" size="sm" loading={actionBusy === "reject"} onClick={() => void runAction("reject", { note: "Từ chối từ portal" })}>
+                    Từ chối
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">Máy không ở trạng thái chờ duyệt.</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-slate-500">On-demand rescan (#23)</p>
+              <Button variant="secondary" size="sm" loading={actionBusy === "rescan"} onClick={() => void runAction("rescan")}>
+                <RefreshCw className="size-3.5" /> Yêu cầu agent thu thập lại
+              </Button>
+              <p className="text-xs text-slate-400">
+                Agent sẽ nhận cờ trong heartbeat kế tiếp và quét inventory ngay (không chờ chu kỳ).
+              </p>
+            </div>
+          </div>
+          {actionError && <p className="mt-3 text-sm text-rose-600">{actionError}</p>}
+        </Card>
+      )}
+
+      <div className="mt-5">
+        <MachineTimelineSection machineId={machine.id} />
+      </div>
+    </div>
+  );
+}

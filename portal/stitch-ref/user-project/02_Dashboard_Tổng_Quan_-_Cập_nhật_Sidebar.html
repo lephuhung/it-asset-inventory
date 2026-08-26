@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Dashboard - Asset Management Console</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "inverse-primary": "#d0c4c4",
+                "on-primary-fixed-variant": "#4d4545",
+                "error-container": "#ffdad6",
+                "tertiary": "#6f5463",
+                "secondary-fixed-dim": "#d0c5ba",
+                "error": "#ba1a1a",
+                "surface-container-high": "#f3e6da",
+                "surface-container": "#f8ece0",
+                "outline": "#747878",
+                "surface-tint": "#655c5c",
+                "on-surface": "#201b13",
+                "on-secondary-fixed-variant": "#4d463d",
+                "tertiary-fixed": "#fcd9eb",
+                "secondary-fixed": "#ece1d5",
+                "tertiary-fixed-dim": "#dfbdcf",
+                "primary": "#635a5a",
+                "surface-container-lowest": "#ffffff",
+                "inverse-on-surface": "#fbefe3",
+                "on-primary": "#ffffff",
+                "surface-dim": "#e4d8cc",
+                "on-tertiary-container": "#fffbff",
+                "outline-variant": "#c4c7c7",
+                "on-error-container": "#93000a",
+                "primary-fixed-dim": "#d0c4c4",
+                "primary-fixed": "#eddfdf",
+                "on-error": "#ffffff",
+                "on-secondary": "#ffffff",
+                "secondary-container": "#eaded2",
+                "surface-bright": "#fff8f4",
+                "on-tertiary-fixed": "#291522",
+                "on-secondary-fixed": "#201b14",
+                "surface-container-highest": "#ede0d5",
+                "secondary": "#655d54",
+                "primary-container": "#7c7272",
+                "on-primary-container": "#fffbff",
+                "on-tertiary-fixed-variant": "#583f4e",
+                "inverse-surface": "#362f27",
+                "on-tertiary": "#ffffff",
+                "tertiary-container": "#896c7c",
+                "surface-container-low": "#fef1e5",
+                "on-primary-fixed": "#201a1a",
+                "on-background": "#201b13",
+                "on-secondary-container": "#696158",
+                "on-surface-variant": "#444748",
+                "surface": "#fff8f4",
+                "background": "#fff8f4",
+                "surface-variant": "#ede0d5"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.25rem",
+                "lg": "0.5rem",
+                "xl": "0.75rem",
+                "full": "9999px"
+        },
+        "spacing": {
+                "stack-md": "12px",
+                "gutter": "16px",
+                "stack-lg": "24px",
+                "unit": "8px",
+                "container-padding": "24px",
+                "stack-sm": "4px"
+        },
+        "fontFamily": {
+                "label-md": [
+                        "Inter"
+                ],
+                "body-md": [
+                        "Inter"
+                ],
+                "headline-md": [
+                        "Inter"
+                ],
+                "body-lg": [
+                        "Inter"
+                ],
+                "headline-lg": [
+                        "Inter"
+                ],
+                "data-mono": [
+                        "Inter"
+                ],
+                "headline-xl": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "label-md": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "letterSpacing": "0.05em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-md": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-md": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "body-lg": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "headline-lg": [
+                        "24px",
+                        {
+                                "lineHeight": "32px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "600"
+                        }
+                ],
+                "data-mono": [
+                        "13px",
+                        {
+                                "lineHeight": "18px",
+                                "letterSpacing": "-0.01em",
+                                "fontWeight": "500"
+                        }
+                ],
+                "headline-xl": [
+                        "30px",
+                        {
+                                "lineHeight": "36px",
+                                "letterSpacing": "-0.02em",
+                                "fontWeight": "700"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .material-symbols-outlined.fill {
+            font-variation-settings: 'FILL' 1;
+        }
+        /* Custom Scrollbar for dense tables */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #c4c5d5;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-[#F8FAFC] text-on-background font-body-md min-h-screen overflow-x-hidden flex">
+<!-- SideNavBar Component -->
+<aside class="fixed left-0 top-0 h-full w-[260px] bg-slate-900 text-slate-300 font-body-md text-body-md flex flex-col py-stack-lg z-50">
+<div class="px-gutter mb-8 flex items-center gap-3">
+<span class="material-symbols-outlined fill text-[32px] text-white">security</span>
+<div>
+<h1 class="font-headline-md text-headline-md font-bold text-white">AssetManager</h1>
+<p class="text-label-md text-slate-400 opacity-80">Enterprise Infrastructure</p>
+</div>
+</div>
+<nav class="flex-1 px-unit space-y-1">
+<!-- Active: Dashboard -->
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-white bg-white/10 text-white font-bold cursor-pointer transition-colors duration-200" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span>Dashboard</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">desktop_windows</span>
+<span>Assets</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">settings_input_component</span>
+<span>Agent Config</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">admin_panel_settings</span>
+<span>User Access</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">file_download</span>
+<span>Installers</span>
+</a>
+</nav>
+<div class="mt-auto px-unit space-y-1">
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">history</span>
+<span>System Logs</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 rounded-DEFAULT border-l-4 border-transparent text-slate-400 hover:text-white hover:bg-white/5 transition-colors duration-200 cursor-pointer active:opacity-80" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span>Settings</span>
+</a>
+</div>
+<div class="px-gutter mt-6">
+<button class="w-full py-2 px-4 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-colors text-label-md">
+                Support Portal
+            </button>
+</div>
+</aside>
+<!-- Main Content Wrapper -->
+<div class="flex-1 ml-[260px] flex flex-col min-h-screen">
+<!-- TopNavBar Component -->
+<header class="bg-surface dark:bg-surface-container-lowest text-primary dark:text-primary-fixed-dim font-body-lg text-body-lg docked full-width top-0 sticky z-40 border-b border-outline-variant/30 flex justify-between items-center h-16 px-container-padding w-full shadow-sm">
+<div class="flex items-center gap-8 h-full">
+<div class="font-headline-md text-headline-md text-on-surface font-black">
+                    Asset Management Console
+                </div>
+<nav class="hidden md:flex items-center gap-6 h-full">
+<a class="text-on-surface-variant hover:text-primary transition-colors h-full flex items-center" href="#">Network View</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors h-full flex items-center" href="#">Security Logs</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative hidden sm:block">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-sm">search</span>
+<input class="pl-9 pr-4 py-1.5 rounded-full border border-outline-variant bg-surface-container-lowest text-body-md focus:border-primary focus:ring-1 focus:ring-primary outline-none w-64 transition-all" placeholder="Search assets..." type="text"/>
+</div>
+<div class="flex items-center gap-2">
+<button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high transition-all duration-150 active:scale-95">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+</div>
+<div class="flex items-center gap-3 border-l border-outline-variant/30 pl-4 ml-2">
+<button class="px-4 py-1.5 bg-primary text-on-primary rounded text-label-md hover:bg-primary/90 transition-colors">Deploy Agent</button>
+<button class="px-4 py-1.5 border border-error text-error rounded text-label-md hover:bg-error/10 transition-colors">Emergency Stop</button>
+<img alt="Admin Avatar" class="w-8 h-8 rounded-full border border-outline-variant object-cover ml-2" data-alt="A professional headshot of a system administrator in a brightly lit modern server room context. The lighting is soft and neutral, reflecting a corporate IT environment. The image is a small circular avatar with high contrast and sharp focus, typical of modern UI design." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCRT36AhjHQSp-reBcYJZE1STnuvXCO7Eu-loe0rvu7McqNVtsOw_19XZF07C81yPU_3TqQ71qsbFzvt7ZFjZ810afTcKZcRIrZsvsoCIlw8fyRdPLPfM31Cz_8bIX8kUkeEaz7N_2HDVE24q8uUEchvQMki18dd77va1QExOWQITSa2Xgzeo8sxTR7CkwohcXKvVSgp2CHqPT2x-CPmLfZnXUFjnq1v_JoRYdLb2UP3agQRzaTFwl3"/>
+</div>
+</div>
+</header>
+<!-- Page Content Canvas -->
+<main class="flex-1 p-container-padding space-y-stack-lg">
+<div class="flex justify-between items-end">
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">System Overview</h2>
+<p class="text-body-md text-on-surface-variant mt-1">SuperAdmin Dashboard • Live Infrastructure Status</p>
+</div>
+<div class="text-data-mono text-outline flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    Last Updated: Just now
+                </div>
+</div>
+<!-- Bento Grid - Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
+<!-- Total Computers -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg p-stack-lg relative overflow-hidden group">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-primary"></div>
+<div class="flex justify-between items-start mb-4">
+<span class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Total Endpoints</span>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-primary transition-colors">devices</span>
+</div>
+<div class="font-headline-xl text-headline-xl text-on-surface">14,258</div>
+<div class="mt-2 text-body-md text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-green-600 text-sm">trending_up</span>
+<span class="text-green-600 font-medium">+124</span> this week
+                    </div>
+</div>
+<!-- Online Now -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg p-stack-lg relative overflow-hidden group">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-green-500"></div>
+<div class="flex justify-between items-start mb-4">
+<span class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Online Now</span>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-green-500 transition-colors">wifi</span>
+</div>
+<div class="font-headline-xl text-headline-xl text-on-surface">12,890</div>
+<div class="mt-2 text-body-md text-on-surface-variant flex items-center gap-1">
+<div class="w-full bg-surface-container-high rounded-full h-1.5 mt-1">
+<div class="bg-green-500 h-1.5 rounded-full" style="width: 90%"></div>
+</div>
+</div>
+<div class="mt-1 text-data-mono text-outline-variant text-right text-xs">90.4% Availability</div>
+</div>
+<!-- Offline -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg p-stack-lg relative overflow-hidden group">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-error"></div>
+<div class="flex justify-between items-start mb-4">
+<span class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Offline</span>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-error transition-colors">wifi_off</span>
+</div>
+<div class="font-headline-xl text-headline-xl text-on-surface">1,368</div>
+<div class="mt-2 text-body-md text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-error text-sm">warning</span>
+<span class="text-error font-medium">+42</span> since yesterday
+                    </div>
+</div>
+<!-- Alarms -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg p-stack-lg relative overflow-hidden group">
+<div class="absolute left-0 top-0 bottom-0 w-1 bg-tertiary-container"></div>
+<div class="flex justify-between items-start mb-4">
+<span class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider">Heartbeat Alarms</span>
+<span class="material-symbols-outlined text-outline-variant group-hover:text-tertiary-container transition-colors">monitor_heart</span>
+</div>
+<div class="font-headline-xl text-headline-xl text-tertiary-container">24</div>
+<div class="mt-2 text-body-md text-on-surface-variant flex items-center gap-1">
+<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-error/10 text-error">Requires Action</span>
+</div>
+</div>
+</div>
+<!-- Complex Layout Area -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+<!-- Charts Section (Spans 2 columns) -->
+<div class="lg:col-span-2 bg-surface-container-lowest border border-outline-variant/50 rounded-lg flex flex-col">
+<div class="p-stack-md border-b border-outline-variant/30 flex justify-between items-center">
+<h3 class="font-headline-md text-base text-on-surface">Asset Distribution by Entity</h3>
+<div class="flex gap-2">
+<button class="px-2 py-1 text-label-md bg-surface-container-high rounded text-on-surface">UBND</button>
+<button class="px-2 py-1 text-label-md text-outline-variant hover:bg-surface-container-high rounded transition-colors">Sở/Ban/Ngành</button>
+</div>
+</div>
+<div class="p-stack-md flex-1 min-h-[300px] relative">
+<!-- Chart Placeholder -->
+<canvas id="distributionChart"></canvas>
+</div>
+</div>
+<!-- Recent Activity Feed -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg flex flex-col h-[400px]">
+<div class="p-stack-md border-b border-outline-variant/30 flex justify-between items-center">
+<h3 class="font-headline-md text-base text-on-surface">Latest Agent Pings</h3>
+<button class="text-primary text-label-md hover:underline">View All</button>
+</div>
+<div class="p-stack-md overflow-y-auto flex-1 space-y-4">
+<!-- Activity Item 1 -->
+<div class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-green-500 mt-1.5 flex-shrink-0"></div>
+<div class="flex-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-mono text-data-mono text-on-surface">PC-ADMIN-01</span>
+<span class="text-xs text-outline">1m ago</span>
+</div>
+<div class="text-label-md text-on-surface-variant font-normal">Sở Thông tin &amp; Truyền thông</div>
+<div class="text-xs text-outline font-data-mono mt-0.5">IP: 192.168.1.105</div>
+</div>
+</div>
+<!-- Activity Item 2 (Warning) -->
+<div class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-tertiary-container mt-1.5 flex-shrink-0"></div>
+<div class="flex-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-mono text-data-mono text-on-surface">LAPTOP-UB-42</span>
+<span class="text-xs text-outline">5m ago</span>
+</div>
+<div class="text-label-md text-on-surface-variant font-normal">UBND Quận 1</div>
+<div class="text-xs text-error font-data-mono mt-0.5">High CPU Usage</div>
+</div>
+</div>
+<!-- Activity Item 3 (Offline) -->
+<div class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-error mt-1.5 flex-shrink-0"></div>
+<div class="flex-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-mono text-data-mono text-on-surface">SRV-DATA-09</span>
+<span class="text-xs text-outline">12m ago</span>
+</div>
+<div class="text-label-md text-on-surface-variant font-normal">Trung tâm Dữ liệu</div>
+<div class="text-xs text-error font-data-mono mt-0.5">Connection Lost</div>
+</div>
+</div>
+<!-- Activity Item 4 -->
+<div class="flex items-start gap-3">
+<div class="w-2 h-2 rounded-full bg-green-500 mt-1.5 flex-shrink-0"></div>
+<div class="flex-1">
+<div class="flex justify-between items-baseline">
+<span class="font-data-mono text-data-mono text-on-surface">PC-KT-11</span>
+<span class="text-xs text-outline">15m ago</span>
+</div>
+<div class="text-label-md text-on-surface-variant font-normal">Sở Tài chính</div>
+<div class="text-xs text-outline font-data-mono mt-0.5">IP: 10.0.4.55</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Quick Data Table (Level 1 Elevation style) -->
+<div class="bg-surface-container-lowest border border-outline-variant/50 rounded-lg overflow-hidden">
+<div class="p-stack-md border-b border-outline-variant/30 flex justify-between items-center bg-surface/50">
+<h3 class="font-headline-md text-base text-on-surface">Critical Health Alerts</h3>
+<div class="flex gap-2">
+<button class="p-1 rounded hover:bg-surface-container-high text-outline-variant transition-colors"><span class="material-symbols-outlined text-sm">filter_list</span></button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="border-b border-outline-variant/30 text-label-md text-on-surface-variant uppercase tracking-wider bg-surface-container-lowest/50">
+<th class="py-3 px-4 font-semibold">Asset ID</th>
+<th class="py-3 px-4 font-semibold">Entity</th>
+<th class="py-3 px-4 font-semibold">Status</th>
+<th class="py-3 px-4 font-semibold">Issue</th>
+<th class="py-3 px-4 font-semibold text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="text-body-md">
+<tr class="border-b border-outline-variant/10 hover:bg-secondary-fixed/5 transition-colors group">
+<td class="py-3 px-4 font-data-mono font-medium text-on-surface">SRV-DATA-09</td>
+<td class="py-3 px-4 text-on-surface-variant">Trung tâm Dữ liệu</td>
+<td class="py-3 px-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-error/10 text-error">
+<span class="w-1.5 h-1.5 rounded-full bg-error"></span> Offline
+                                    </span>
+</td>
+<td class="py-3 px-4 text-on-surface-variant">Connection timeout &gt; 10m</td>
+<td class="py-3 px-4 text-right">
+<button class="p-1.5 rounded text-outline-variant hover:bg-surface-container-high hover:text-primary transition-colors opacity-0 group-hover:opacity-100"><span class="material-symbols-outlined text-[20px]">terminal</span></button>
+<button class="p-1.5 rounded text-outline-variant hover:bg-surface-container-high hover:text-primary transition-colors opacity-0 group-hover:opacity-100"><span class="material-symbols-outlined text-[20px]">settings</span></button>
+</td>
+</tr>
+<tr class="border-b border-outline-variant/10 hover:bg-secondary-fixed/5 transition-colors group">
+<td class="py-3 px-4 font-data-mono font-medium text-on-surface">LAPTOP-UB-42</td>
+<td class="py-3 px-4 text-on-surface-variant">UBND Quận 1</td>
+<td class="py-3 px-4">
+<span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-tertiary-container/10 text-tertiary-container">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary-container"></span> Warning
+                                    </span>
+</td>
+<td class="py-3 px-4 text-on-surface-variant">High CPU (98%)</td>
+<td class="py-3 px-4 text-right">
+<button class="p-1.5 rounded text-outline-variant hover:bg-surface-container-high hover:text-primary transition-colors opacity-0 group-hover:opacity-100"><span class="material-symbols-outlined text-[20px]">terminal</span></button>
+<button class="p-1.5 rounded text-outline-variant hover:bg-surface-container-high hover:text-primary transition-colors opacity-0 group-hover:opacity-100"><span class="material-symbols-outlined text-[20px]">settings</span></button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</main>
+</div>
+<script>
+        // Simple Chart.js initialization for visual representation
+        document.addEventListener('DOMContentLoaded', function() {
+            const ctx = document.getElementById('distributionChart').getContext('2d');
+            
+            // Minimalist styling for enterprise dashboard
+            Chart.defaults.font.family = 'Inter';
+            Chart.defaults.color = '#444653';
+            
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Quận 1', 'Quận 3', 'Quận 5', 'Quận 10', 'Tân Bình', 'Gò Vấp'],
+                    datasets: [{
+                        label: 'Active Agents',
+                        data: [1250, 840, 620, 950, 1100, 780],
+                        backgroundColor: '#00288e', // primary color
+                        borderRadius: 4,
+                        barPercentage: 0.6
+                    },
+                    {
+                        label: 'Offline Agents',
+                        data: [45, 12, 8, 24, 30, 15],
+                        backgroundColor: '#c4c5d5', // outline-variant color
+                        borderRadius: 4,
+                        barPercentage: 0.6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top',
+                            align: 'end',
+                            labels: {
+                                usePointStyle: true,
+                                boxWidth: 8
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: '#1a1b22',
+                            titleFont: { size: 13, family: 'Inter' },
+                            bodyFont: { size: 13, family: 'Inter' },
+                            padding: 12,
+                            cornerRadius: 4
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: {
+                                color: '#e8e7f1', // surface-container-high
+                                drawBorder: false
+                            },
+                            ticks: { font: { size: 12 } }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { font: { size: 12 } }
+                        }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                }
+            });
+        });
+    </script>
+</body></html>

@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Môi trường / bí mật
+.env
+dev.db
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# Artifact MSI (khi build)
+*.msi

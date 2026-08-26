@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Asset Inventory - Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error": "#ba1a1a",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "outline-variant": "#c3c6d7",
+                        "surface-variant": "#e0e3e5",
+                        "on-primary-fixed": "#00174b",
+                        "on-secondary": "#ffffff",
+                        "on-error": "#ffffff",
+                        "bad": "#e11d48",
+                        "on-surface-variant": "#434655",
+                        "on-error-container": "#93000a",
+                        "surface-tint": "#0053db",
+                        "warn": "#d97706",
+                        "tertiary-fixed": "#ffdbcd",
+                        "tertiary": "#943700",
+                        "inverse-surface": "#2d3133",
+                        "error-container": "#ffdad6",
+                        "surface-container-low": "#f2f4f6",
+                        "brand-50": "#eff6ff",
+                        "secondary-container": "#4069f2",
+                        "on-tertiary-fixed-variant": "#7d2d00",
+                        "ok": "#10b981",
+                        "surface-bright": "#f7f9fb",
+                        "on-primary-container": "#eeefff",
+                        "on-background": "#191c1e",
+                        "border": "#e2e8f0",
+                        "surface": "#ffffff",
+                        "secondary": "#1d4ed8",
+                        "surface-container-high": "#e6e8ea",
+                        "secondary-fixed-dim": "#b7c4ff",
+                        "ink-muted": "#475569",
+                        "brand-100": "#dbeafe",
+                        "on-secondary-fixed-variant": "#0039b5",
+                        "on-primary": "#ffffff",
+                        "on-tertiary-fixed": "#360f00",
+                        "secondary-fixed": "#dce1ff",
+                        "primary-fixed": "#dbe1ff",
+                        "primary-container": "#2563eb",
+                        "inverse-on-surface": "#eff1f3",
+                        "on-secondary-container": "#fffbff",
+                        "on-primary-fixed-variant": "#003ea8",
+                        "tertiary-container": "#bc4800",
+                        "surface-container-highest": "#e0e3e5",
+                        "inverse-primary": "#b4c5ff",
+                        "surface-muted": "#f8fafc",
+                        "ink": "#0f172a",
+                        "tertiary-fixed-dim": "#ffb596",
+                        "surface-container-lowest": "#ffffff",
+                        "on-secondary-fixed": "#001551",
+                        "surface-dim": "#d8dadc",
+                        "primary": "#004ac6",
+                        "background": "#f7f9fb",
+                        "outline": "#737686",
+                        "surface-container": "#eceef0",
+                        "on-surface": "#191c1e",
+                        "on-tertiary-container": "#ffede6",
+                        "border-soft": "#f1f5f9",
+                        "ink-subtle": "#94a3b8",
+                        "on-tertiary": "#ffffff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "card-padding": "1.25rem",
+                        "page-margin-desktop": "2rem",
+                        "header-height": "3.5rem",
+                        "sidebar-width": "16rem",
+                        "section-gap": "1.5rem",
+                        "max-content-width": "1320px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Inter", "sans-serif"],
+                        "headline-lg": ["Inter", "sans-serif"],
+                        "hint": ["Inter", "sans-serif"],
+                        "body-sm": ["Inter", "sans-serif"],
+                        "label-xs": ["Inter", "sans-serif"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["15px", { "lineHeight": "22px", "fontWeight": "600" }],
+                        "headline-lg": ["22px", { "lineHeight": "28px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "hint": ["11px", { "lineHeight": "14px", "fontWeight": "400" }],
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "label-xs": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "600" }]
+                    },
+                    "boxShadow": {
+                        "card": "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)",
+                        "pop": "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)"
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .bg-gradient-radial {
+            background-image: radial-gradient(circle at center, var(--tw-gradient-stops));
+        }
+    </style>
+</head>
+<body class="bg-background min-h-screen flex items-center justify-center p-4 relative overflow-hidden font-body-sm text-body-sm text-on-surface">
+<!-- Ambient Background -->
+<div class="absolute inset-0 pointer-events-none opacity-40">
+<div class="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-primary-fixed blur-[120px]"></div>
+<div class="absolute bottom-[-20%] right-[-10%] w-[40%] h-[40%] rounded-full bg-secondary-fixed blur-[100px]"></div>
+</div>
+<main class="w-full max-w-[440px] relative z-10">
+<!-- Login Card -->
+<div class="bg-surface rounded-xl shadow-pop border border-border-soft overflow-hidden">
+<!-- Header Section -->
+<div class="px-8 pt-10 pb-6 text-center border-b border-border-soft flex flex-col items-center gap-4">
+<div class="w-12 h-12 bg-primary rounded-lg flex items-center justify-center shadow-sm">
+<span class="font-headline-lg text-headline-lg text-on-primary">IT</span>
+</div>
+<div>
+<h1 class="font-headline-lg text-headline-lg text-ink mb-1">Asset Inventory</h1>
+<p class="font-body-sm text-body-sm text-ink-muted">Hệ thống quản lý tài sản máy tính</p>
+</div>
+</div>
+<!-- Content Section -->
+<div class="p-8">
+<!-- Login Form -->
+<form class="space-y-5" id="loginForm">
+<!-- Email Input -->
+<div>
+<label class="block font-label-xs text-label-xs text-ink-muted mb-1 uppercase" for="email">Email Address</label>
+<div class="relative">
+<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+<span class="material-symbols-outlined text-ink-subtle text-[18px]" data-icon="mail">mail</span>
+</div>
+<input class="w-full pl-10 pr-3 py-2 bg-surface border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition-shadow font-body-sm text-body-sm text-ink placeholder:text-ink-subtle" id="email" placeholder="admin@example.gov.vn" required="" type="email"/>
+</div>
+</div>
+<!-- Password Input -->
+<div>
+<div class="flex justify-between items-center mb-1">
+<label class="block font-label-xs text-label-xs text-ink-muted uppercase" for="password">Password</label>
+</div>
+<div class="relative">
+<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+<span class="material-symbols-outlined text-ink-subtle text-[18px]" data-icon="lock">lock</span>
+</div>
+<input class="w-full pl-10 pr-3 py-2 bg-surface border border-border rounded-lg focus:ring-2 focus:ring-primary focus:border-primary transition-shadow font-body-sm text-body-sm text-ink placeholder:text-ink-subtle" id="password" placeholder="••••••••" required="" type="password"/>
+</div>
+</div>
+<!-- Primary Action -->
+<button class="w-full py-2.5 px-4 bg-primary hover:bg-on-primary-fixed-variant text-on-primary font-headline-md text-headline-md rounded-lg shadow-sm transition-colors flex items-center justify-center gap-2" id="btn-login" type="button">
+                        Đăng nhập
+                        <span class="material-symbols-outlined text-[18px]" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</form>
+<!-- Divider -->
+<div class="relative my-8 hidden" id="divider-2fa">
+<div class="absolute inset-0 flex items-center">
+<div class="w-full border-t border-border-soft"></div>
+</div>
+<div class="relative flex justify-center text-sm">
+<span class="px-2 bg-surface text-ink-subtle font-label-xs text-label-xs uppercase">Security Validation</span>
+</div>
+</div>
+<!-- 2FA Section (Initially Hidden via opacity for simulation) -->
+<div class="mt-8 space-y-4 opacity-50 pointer-events-none transition-opacity duration-300" id="section-2fa">
+<div>
+<label class="block font-label-xs text-label-xs text-warn mb-1 uppercase flex items-center gap-1" for="totp">
+<span class="material-symbols-outlined text-[14px]" data-icon="shield">shield</span>
+                            Bắt buộc 2FA (TOTP) cho admin
+                        </label>
+<div class="relative">
+<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+<span class="material-symbols-outlined text-ink-subtle text-[18px]" data-icon="dialpad">dialpad</span>
+</div>
+<input class="w-full pl-10 pr-3 py-2 bg-surface border border-border rounded-lg focus:ring-2 focus:ring-warn focus:border-warn transition-shadow font-headline-md text-headline-md text-ink tracking-widest placeholder:text-ink-subtle placeholder:tracking-normal text-center" disabled="" id="totp" maxlength="6" placeholder="000000" type="text"/>
+</div>
+<p class="font-hint text-hint text-ink-subtle mt-1 text-center">Mở ứng dụng Authenticator để lấy mã 6 số</p>
+</div>
+<button class="w-full py-2.5 px-4 bg-surface border border-border hover:bg-surface-container-low text-ink font-headline-md text-headline-md rounded-lg shadow-sm transition-colors flex items-center justify-center gap-2" disabled="" id="btn-verify" type="button">
+                        Xác nhận
+                        <span class="material-symbols-outlined text-[18px]" data-icon="check_circle">check_circle</span>
+</button>
+</div>
+</div>
+<!-- Footer -->
+<div class="px-8 py-4 bg-surface-muted border-t border-border-soft">
+<p class="font-hint text-hint text-ink-subtle text-center flex items-center justify-center gap-1">
+<span class="material-symbols-outlined text-[12px]" data-icon="info">info</span>
+                    Read-only agent, không giám sát cá nhân (mục 6.6)
+                </p>
+</div>
+</div>
+</main>
+<script>
+        // Simple interaction to demonstrate the flow
+        document.getElementById('btn-login').addEventListener('click', function() {
+            // Disable login form slightly to show focus shift
+            document.getElementById('email').disabled = true;
+            document.getElementById('password').disabled = true;
+            this.classList.add('opacity-70', 'cursor-not-allowed');
+            this.innerHTML = `Đang xử lý... <span class="material-symbols-outlined animate-spin text-[18px]" data-icon="sync">sync</span>`;
+
+            setTimeout(() => {
+                // Enable 2FA section
+                const section2fa = document.getElementById('section-2fa');
+                const divider = document.getElementById('divider-2fa');
+                const totpInput = document.getElementById('totp');
+                const btnVerify = document.getElementById('btn-verify');
+
+                section2fa.classList.remove('opacity-50', 'pointer-events-none');
+                divider.classList.remove('hidden');
+                totpInput.disabled = false;
+                btnVerify.disabled = false;
+                
+                totpInput.focus();
+                
+                // Update login button to show success step 1
+                this.innerHTML = `Đã gửi yêu cầu 2FA <span class="material-symbols-outlined text-[18px]" data-icon="check">check</span>`;
+                this.classList.replace('bg-primary', 'bg-ok');
+                this.classList.replace('hover:bg-on-primary-fixed-variant', 'hover:bg-ok');
+            }, 800);
+        });
+
+        // Format TOTP input to only allow numbers
+        document.getElementById('totp').addEventListener('input', function(e) {
+            this.value = this.value.replace(/[^0-9]/g, '');
+        });
+    </script>
+</body></html>
