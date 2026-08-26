@@ -45,22 +45,26 @@ export const MACHINE_STATUS_META: Record<
   },
 };
 
-export const TOKEN_STATUS_META: Record<TokenStatus, { label: string; badge: string }> = {
+export const TOKEN_STATUS_META: Record<TokenStatus, { label: string; badge: string; dot: string }> = {
   pending: {
-    label: "⏳ Đã gửi, chờ cài",
+    label: "Đã gửi, chờ cài",
     badge: "bg-amber-50 text-amber-700 ring-amber-600/20",
+    dot: "bg-amber-500",
   },
   used: {
-    label: "✅ Đã dùng",
+    label: "Đã dùng",
     badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    dot: "bg-emerald-500",
   },
   revoked: {
-    label: "🚫 Đã thu hồi",
+    label: "Đã thu hồi",
     badge: "bg-rose-50 text-rose-700 ring-rose-600/20",
+    dot: "bg-rose-500",
   },
   expired: {
-    label: "❌ Hết hạn",
+    label: "Hết hạn",
     badge: "bg-zinc-100 text-zinc-500 ring-zinc-500/20",
+    dot: "bg-zinc-400",
   },
 };
 

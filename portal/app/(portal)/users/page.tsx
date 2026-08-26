@@ -187,13 +187,13 @@ export default function UsersPage() {
             <table className={TABLE}>
               <thead className={THEAD}>
                 <tr>
-                  <th className={TH}>Người dùng</th>
-                  <th className={TH}>Tổ chức</th>
-                  <th className={TH}>Vai trò</th>
-                  <th className={TH}>Trạng thái</th>
-                  <th className={TH}>2FA</th>
-                  <th className={TH}>Tạo lúc</th>
-                  <th className={`${TH} text-right`}>Thao tác</th>
+                  <th scope="col" className={TH}>Người dùng</th>
+                  <th scope="col" className={TH}>Tổ chức</th>
+                  <th scope="col" className={TH}>Vai trò</th>
+                  <th scope="col" className={TH}>Trạng thái</th>
+                  <th scope="col" className={TH}>2FA</th>
+                  <th scope="col" className={TH}>Tạo lúc</th>
+                  <th scope="col" className={`${TH} text-right`}>Thao tác</th>
                 </tr>
               </thead>
               <tbody>

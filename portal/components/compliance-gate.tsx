@@ -68,7 +68,7 @@ export function ComplianceGate({ disabled = false }: { disabled?: boolean }) {
       }}
       title={
         <span className="inline-flex items-center gap-2">
-          <FileText className="size-4 text-[#635a5a]" />
+          <FileText className="size-4 text-brand-600" />
           {notice?.title ?? "Thông báo tuân thủ"}
           {notice && <span className="text-xs text-slate-400">v{notice.version}</span>}
         </span>

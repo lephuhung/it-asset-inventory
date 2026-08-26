@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApiKey, ApiKeyCreated, Organization } from "@/lib/types";
 import { ORG_TYPE_META, flattenOrgTree, formatDateTime, timeAgo } from "@/lib/format";
@@ -9,9 +9,12 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
+  CopyButton,
   EmptyState,
   ErrorBanner,
   Field,
+  IconButton,
   Input,
   Modal,
   PageHeader,
@@ -25,30 +28,6 @@ import {
   TR_HOVER,
 } from "@/components/ui";
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-  return (
-    <Button variant="secondary" size="sm" onClick={() => void copy()}>
-      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
-      {copied ? "Đã copy" : "Copy"}
-    </Button>
-  );
-}
-
 /** API mở (#22, Phase 4) — quản lý API key (chỉ Super Admin). */
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -61,6 +40,8 @@ export default function ApiKeysPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
+  const [removing, setRemoving] = useState<ApiKey | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     try {
@@ -110,13 +91,17 @@ export default function ApiKeysPage() {
     }
   };
 
-  const remove = async (k: ApiKey) => {
-    if (!window.confirm(`Xóa API key "${k.name}"? Hệ thống dùng key này sẽ mất quyền truy cập.`)) return;
+  const remove = async () => {
+    if (!removing) return;
+    setRemoveBusy(true);
     try {
-      await api.delete(`/keys/${k.id}`);
+      await api.delete(`/keys/${removing.id}`);
+      setRemoving(null);
       await load(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Xóa thất bại");
+    } finally {
+      setRemoveBusy(false);
     }
   };
 
@@ -150,12 +135,12 @@ export default function ApiKeysPage() {
               <table className={TABLE}>
                 <thead className={THEAD}>
                   <tr>
-                    <th className={TH}>Tên</th>
-                    <th className={TH}>Scope</th>
-                    <th className={TH}>Phạm vi</th>
-                    <th className={TH}>Lần dùng cuối</th>
-                    <th className={TH}>Trạng thái</th>
-                    <th className={`${TH} text-right`}>Thao tác</th>
+                    <th scope="col" className={TH}>Tên</th>
+                    <th scope="col" className={TH}>Scope</th>
+                    <th scope="col" className={TH}>Phạm vi</th>
+                    <th scope="col" className={TH}>Lần dùng cuối</th>
+                    <th scope="col" className={TH}>Trạng thái</th>
+                    <th scope="col" className={`${TH} text-right`}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -178,9 +163,10 @@ export default function ApiKeysPage() {
                             {k.enabled ? "Vô hiệu" : "Bật"}
                           </Button>
                           <button
-                            onClick={() => void remove(k)}
-                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                            onClick={() => setRemoving(k)}
+                            className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                             title="Xóa key"
+                            aria-label={`Xóa API key ${k.name}`}
                           >
                             <Trash2 className="size-4" />
                           </button>
@@ -245,13 +231,33 @@ export default function ApiKeysPage() {
             <div className="flex justify-end">
               <CopyButton text={created.key} />
             </div>
-            <p className="rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
-              ⚠️ Key chỉ hiển thị <b>1 lần này</b>. Sao chép và lưu an toàn — server chỉ lưu hash
-              (SHA-256). Hết hạn bằng cách xóa key.
+            <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                Key chỉ hiển thị <b>1 lần này</b>. Sao chép và lưu an toàn — server chỉ lưu hash
+                (SHA-256). Hết hạn bằng cách xóa key.
+              </span>
             </p>
           </div>
         )}
       </Modal>
+
+      {/* Modal: xác nhận xóa key */}
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        title="Xóa API key"
+        danger
+        loading={removeBusy}
+        confirmLabel="Xóa key"
+        onConfirm={() => void remove()}
+        message={
+          <>
+            Key <b>{removing?.name}</b> sẽ bị vô hiệu hóa ngay lập tức — hệ thống đang dùng key này
+            sẽ mất quyền truy cập.
+          </>
+        }
+      />
     </div>
   );
 }

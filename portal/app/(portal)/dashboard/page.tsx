@@ -11,6 +11,7 @@ import {
   Card,
   EmptyState,
   ErrorBanner,
+  KpiCard,
   PageHeader,
   Spinner,
   StatusDot,
@@ -22,33 +23,6 @@ import {
   TABLE_WRAP,
 } from "@/components/ui";
 import { MACHINE_STATUS_META, timeAgo } from "@/lib/format";
-
-function KpiCard({
-  label,
-  value,
-  icon,
-  accent,
-  sub,
-}: {
-  label: string;
-  value: number | string;
-  icon: React.ReactNode;
-  accent: string;
-  sub?: string;
-}) {
-  return (
-    <div className="kpi-card flex h-24 flex-col justify-between p-4">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">{label}</p>
-        <span className={`flex size-7 items-center justify-center rounded-lg ${accent}`}>{icon}</span>
-      </div>
-      <div>
-        <p className="text-2xl font-bold tabular-nums text-slate-900">{value}</p>
-        {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
-      </div>
-    </div>
-  );
-}
 
 const EVENT_ICON: Record<string, string> = {
   online: "bg-emerald-500",
@@ -64,6 +38,7 @@ export default function DashboardPage() {
   const [recent, setRecent] = useState<MachineListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
   const load = useCallback(async (silent = false) => {
     try {
@@ -73,6 +48,7 @@ export default function DashboardPage() {
       ]);
       setStats(s);
       setRecent(m.slice(0, 10));
+      setUpdatedAt(new Date());
       setError(null);
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được dữ liệu");
@@ -98,7 +74,17 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="Dashboard tổng quan"
-        description="Số liệu dữ liệu sống theo thời gian thực — máy online/offline, phễu triển khai token"
+        description={
+          <>
+            Số liệu dữ liệu sống theo thời gian thực — máy online/offline, phễu triển khai token
+            {updatedAt && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                <Timer className="size-3" />
+                Cập nhật {updatedAt.toLocaleTimeString("vi-VN")}
+              </span>
+            )}
+          </>
+        }
       />
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
@@ -111,8 +97,8 @@ export default function DashboardPage() {
             <KpiCard
               label="Tổng máy"
               value={stats?.total_machines ?? 0}
-              icon={<Monitor className="size-4 text-[#635a5a]" />}
-              accent="bg-[#f5f5f5]"
+              icon={<Monitor className="size-4 text-brand-600" />}
+              accent="bg-brand-50"
             />
             <KpiCard
               label="Online"
@@ -159,7 +145,7 @@ export default function DashboardPage() {
                 actions={
                   <Link
                     href="/machines"
-                    className="inline-flex items-center gap-0.5 text-xs font-medium text-[#635a5a] hover:underline"
+                    className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
                   >
                     Xem tất cả <ChevronRight className="size-3.5" />
                   </Link>
@@ -177,11 +163,11 @@ export default function DashboardPage() {
                     <table className={TABLE}>
                       <thead className={THEAD}>
                         <tr>
-                          <th className={TH}>Hostname</th>
-                          <th className={TH}>Trạng thái</th>
-                          <th className={TH}>Vòng đời</th>
-                          <th className={TH}>Lần cuối online</th>
-                          <th className={TH}>Enroll</th>
+                          <th scope="col" className={TH}>Hostname</th>
+                          <th scope="col" className={TH}>Trạng thái</th>
+                          <th scope="col" className={TH}>Vòng đời</th>
+                          <th scope="col" className={TH}>Lần cuối online</th>
+                          <th scope="col" className={TH}>Enroll</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -192,7 +178,7 @@ export default function DashboardPage() {
                               <td className={TD}>
                                 <Link
                                   href={`/machines/${m.id}`}
-                                  className="font-medium text-[#635a5a] hover:underline"
+                                  className="font-medium text-brand-600 hover:underline"
                                 >
                                   {m.hostname ?? "(chưa đặt tên)"}
                                 </Link>
@@ -234,7 +220,12 @@ export default function DashboardPage() {
                   description="Khi máy bật/tắt (hoặc chuyển trạng thái), sự kiện sẽ xuất hiện tại đây."
                 />
               ) : (
-                <ul className="max-h-[26rem] divide-y divide-slate-100 overflow-y-auto">
+                <ul
+                  role="log"
+                  aria-live="polite"
+                  aria-label="Luồng sự kiện realtime"
+                  className="max-h-[26rem] divide-y divide-slate-100 overflow-y-auto"
+                >
                   {events.slice(0, 30).map((ev: MachineEvent, idx) => {
                     const meta = MACHINE_STATUS_META[ev.status] ?? MACHINE_STATUS_META.offline;
                     return (
@@ -263,7 +254,7 @@ export default function DashboardPage() {
                   Có {stats?.pending_tokens} token đã phát nhưng máy chưa cài — đôn đốc người dùng
                   chạy lệnh cài đặt để máy xuất hiện online.
                 </span>
-                <Link href="/tokens" className="font-medium text-[#635a5a] hover:underline">
+                <Link href="/tokens" className="font-medium text-brand-600 hover:underline">
                   Mở phễu triển khai →
                 </Link>
               </div>

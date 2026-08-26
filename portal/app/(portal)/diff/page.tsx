@@ -135,13 +135,13 @@ export default function DiffPage() {
               <table className={TABLE}>
                 <thead className={THEAD}>
                   <tr>
-                    <th className={TH}>Trường</th>
-                    <th className={TH}>
+                    <th scope="col" className={TH}>Trường</th>
+                    <th scope="col" className={TH}>
                       <Link href={`/machines/${a.id}`} className="text-blue-600 hover:underline">
                         {a.hostname ?? a.machine_uuid.slice(0, 8)}
                       </Link>
                     </th>
-                    <th className={TH}>
+                    <th scope="col" className={TH}>
                       <Link href={`/machines/${b.id}`} className="text-blue-600 hover:underline">
                         {b.hostname ?? b.machine_uuid.slice(0, 8)}
                       </Link>

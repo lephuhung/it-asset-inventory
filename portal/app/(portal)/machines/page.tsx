@@ -175,14 +175,15 @@ export default function MachinesPage() {
           <table className={TABLE}>
             <thead className={THEAD}>
               <tr>
-                <th className={TH}>Hostname</th>
-                <th className={TH}>UUID máy</th>
-                <th className={TH}>Trạng thái</th>
-                <th className={TH}>Vòng đời</th>
-                <th className={TH}>Loại</th>
-                <th className={TH}>Lần cuối online</th>
-                <th className={TH}>Enroll</th>
-                <th className={TH}></th>
+                <th scope="col" className={TH}>Hostname</th>
+                <th scope="col" className={TH}>UUID máy</th>
+                <th scope="col" className={TH}>Trạng thái</th>
+                <th scope="col" className={TH}>Vòng đời</th>
+                <th scope="col" className={TH}>Loại</th>
+                <th scope="col" className={TH}>Người dùng đăng nhập</th>
+                <th scope="col" className={TH}>Lần cuối online</th>
+                <th scope="col" className={TH}>Enroll</th>
+                <th scope="col" className={TH}></th>
               </tr>
             </thead>
             <tbody>
@@ -206,12 +207,19 @@ export default function MachinesPage() {
                       <Badge className={life.badge}>{life.label}</Badge>
                     </td>
                     <td className={TD}>{m.is_vm ? "Ảo" : "Vật lý"}</td>
+                    <td className={`${TD} text-xs`}>
+                      {m.logged_user ? (
+                        <span className="font-mono" title={m.logged_user}>{m.logged_user}</span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.last_seen_at)}</td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.enrolled_at)}</td>
                     <td className={TD}>
                       <Link
                         href={`/machines/${m.id}`}
-                        className="inline-flex items-center gap-0.5 text-xs font-medium text-[#635a5a] hover:underline"
+                        className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
                       >
                         Chi tiết <ChevronRight className="size-3.5" />
                       </Link>

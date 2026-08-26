@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
+  AlertTriangle,
+  CheckCircle2,
   Cpu,
   Fingerprint,
   HardDrive,
@@ -14,18 +16,21 @@ import {
   RefreshCw,
   ShieldCheck,
   StickyNote,
+  Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineDetail, NetworkInterface } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
   Badge,
+  BoolSwitch,
   Button,
   Card,
   EmptyState,
   ErrorBanner,
   Field,
   Input,
+  Modal,
   PageHeader,
   Select,
   Spinner,
@@ -41,17 +46,84 @@ import {
 import { EOL_STATUS_META, getWindowsEol } from "@/lib/eol";
 import { MachineTimelineSection } from "@/components/machine-timeline";
 
+/** "—" nếu rỗng; object → JSON. */
 function kv(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
+/** True nếu giá trị "rỗng" (null/undefined/chuỗi trống/"—") → ẩn dòng. */
+function isEmptyValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "" || v.trim() === "—";
+  return false;
+}
+
+/** Tóm tắt một object info (mainboard/BIOS) theo nhãn — chỉ lấy field không rỗng, bỏ null. */
+function infoSummary(value: unknown, labels: Record<string, string>): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value !== "object") return kv(value);
+  const parts: string[] = [];
+  for (const [key, label] of Object.entries(labels)) {
+    const v = (value as Record<string, unknown>)[key];
+    const text = v === null || v === undefined || v === "" ? "" : String(v).trim();
+    if (text) parts.push(label ? `${label} ${text}` : text);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+const MAINBOARD_LABELS: Record<string, string> = {
+  manufacturer: "NSX:",
+  product: "Model:",
+  serial: "S/N:",
+  version: "Rev:",
+};
+const BIOS_LABELS: Record<string, string> = {
+  vendor: "Hãng:",
+  version: "Phiên bản:",
+  release_date: "Ngày phát hành:",
+  smbios_version: "SMBIOS:",
+};
+
+/** Dòng thông tin — TỰ ẨN khi không có dữ liệu (không hiển thị dòng "—" thừa). */
 function SpecRow({ label, value }: { label: string; value: React.ReactNode }) {
+  if (isEmptyValue(value)) return null;
   return (
     <div className="flex items-start justify-between gap-4 border-b border-slate-50 py-2 text-sm last:border-0">
       <span className="shrink-0 text-slate-500">{label}</span>
       <span className="min-w-0 break-words text-right font-medium text-slate-800">{value}</span>
+    </div>
+  );
+}
+
+/** Dòng boolean — hiển thị công tắc + nhãn trạng thái; ẩn khi null/undefined. */
+function BoolRow({
+  label,
+  on,
+  onLabel = "Bật",
+  offLabel = "Tắt",
+  warnWhenOn = false,
+}: {
+  label: string;
+  on: boolean | null | undefined;
+  onLabel?: string;
+  offLabel?: string;
+  warnWhenOn?: boolean;
+}) {
+  if (on === null || on === undefined) return null;
+  const textClass = on
+    ? warnWhenOn
+      ? "text-rose-600"
+      : "text-emerald-700"
+    : "text-slate-400";
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-slate-50 py-2 text-sm last:border-0">
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <span className="flex items-center gap-2">
+        <span className={`text-xs font-medium ${textClass}`}>{on ? onLabel : offLabel}</span>
+        <BoolSwitch on={Boolean(on)} label={`${label}: ${on ? onLabel : offLabel}`} />
+      </span>
     </div>
   );
 }
@@ -68,6 +140,7 @@ export default function MachineDetailPage() {
   const [lifecycle, setLifecycle] = useState<string>("");
   const [note, setNote] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -134,6 +207,52 @@ export default function MachineDetailPage() {
   const software = (spec?.installed_software ?? []) as Array<Record<string, unknown>>;
   const security = spec?.security;
 
+  const antivirus = (security?.antivirus ?? []) as Array<Record<string, unknown>>;
+  const avLabel =
+    antivirus.length > 0
+      ? antivirus
+          .map((a) => {
+            const name = String(a.displayName ?? a.name ?? "").trim();
+            const status =
+              a.upToDate === true
+                ? "cập nhật"
+                : a.enabled === true
+                  ? "bật"
+                  : a.enabled === false
+                    ? "tắt"
+                    : typeof a.status === "string"
+                      ? a.status
+                      : "";
+            const label = `${name}${status ? ` (${status})` : ""}`.trim();
+            return label || "Antivirus (thiếu tên)";
+          })
+          .join(", ")
+      : null;
+
+  const weakProtocols = security?.weak_protocols
+    ? ([
+        ["smbv1_disabled", "SMBv1"],
+        ["tls10_disabled", "TLS 1.0"],
+        ["tls11_disabled", "TLS 1.1"],
+        ["ssl3_disabled", "SSL 3.0"],
+      ] as const)
+    : [];
+
+  const hasSecurity =
+    Boolean(security) &&
+    (avLabel !== null ||
+      !isEmptyValue(security?.windows_update_status) ||
+      !isEmptyValue(security?.bitlocker) ||
+      security?.rdp_enabled !== null ||
+      security?.firewall_enabled !== null ||
+      security?.uac_enabled !== null ||
+      security?.secure_boot_enabled !== null ||
+      security?.usb_storage_blocked !== null ||
+      weakProtocols.length > 0 ||
+      (security?.listening_ports?.length ?? 0) > 0 ||
+      (security?.startup_programs?.length ?? 0) > 0 ||
+      (security?.smarts?.length ?? 0) > 0);
+
   return (
     <div>
       <Link href="/machines" className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
@@ -155,6 +274,11 @@ export default function MachineDetailPage() {
             <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">
               {machine.is_vm ? "Máy ảo" : "Vật lý"}
             </Badge>
+            {isAdmin && (
+              <Button variant="secondary" size="sm" onClick={() => setAdminOpen(true)}>
+                <Wrench className="size-3.5" /> Quản trị
+              </Button>
+            )}
           </>
         }
       />
@@ -169,6 +293,11 @@ export default function MachineDetailPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
+      {/* Timeline bật/tắt — đặt lên đầu trang theo yêu cầu */}
+      <div className="mb-5">
+        <MachineTimelineSection machineId={machine.id} />
+      </div>
+
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Cấu hình phần cứng" subtitle={spec ? `Snapshot lúc ${formatDateTime(spec.collected_at)}` : "Chưa có snapshot inventory"}>
           {!spec ? (
@@ -176,18 +305,24 @@ export default function MachineDetailPage() {
           ) : (
             <div className="divide-y divide-slate-100">
               <SpecRow label="Hệ điều hành" value={kv(spec.os_name)} />
-              <SpecRow label="Phiên bản / Build" value={spec.os_version ? `${kv(spec.os_version)} (build ${kv(spec.os_build)})` : kv(spec.os_build)} />
+              <SpecRow
+                label="Phiên bản / Build"
+                value={spec.os_version ? `${spec.os_version} (build ${kv(spec.os_build)})` : kv(spec.os_build)}
+              />
               <SpecRow label="Kiến trúc" value={kv(spec.os_arch)} />
-              <SpecRow label="CPU" value={
-                <span className="flex items-center justify-end gap-1">
-                  <Cpu className="size-3.5 text-slate-400" />
-                  {kv((spec.cpu as Record<string, unknown>)?.model ?? spec.cpu)}
-                </span>
-              } />
-              <SpecRow label="RAM" value={`${kv(spec.ram_gb)} GB`} />
+              <SpecRow
+                label="CPU"
+                value={
+                  <span className="flex items-center justify-end gap-1">
+                    <Cpu className="size-3.5 text-slate-400" />
+                    {kv((spec.cpu as Record<string, unknown>)?.model ?? spec.cpu)}
+                  </span>
+                }
+              />
+              {spec.ram_gb != null && <SpecRow label="RAM" value={`${spec.ram_gb} GB`} />}
               <SpecRow label="GPU" value={kv((spec.gpu as Record<string, unknown>)?.model ?? spec.gpu)} />
-              {spec.mainboard && <SpecRow label="Mainboard" value={kv(spec.mainboard)} />}
-              {spec.bios && <SpecRow label="BIOS" value={kv(spec.bios)} />}
+              {spec.mainboard && <SpecRow label="Mainboard" value={infoSummary(spec.mainboard, MAINBOARD_LABELS)} />}
+              {spec.bios && <SpecRow label="BIOS" value={infoSummary(spec.bios, BIOS_LABELS)} />}
               {disks.length > 0 && (
                 <div className="py-2 text-sm">
                   <span className="text-slate-500">Ổ đĩa ({disks.length})</span>
@@ -214,90 +349,123 @@ export default function MachineDetailPage() {
           {network.length === 0 ? (
             <p className="text-sm text-slate-500">Chưa có dữ liệu mạng.</p>
           ) : (
-            <div className="tbl-wrap">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 text-xs uppercase text-slate-400">
-                    <th className="py-1.5 pr-3 font-semibold whitespace-nowrap">Card mạng</th>
-                    <th className="py-1.5 pr-3 font-semibold whitespace-nowrap">IP</th>
-                    <th className="py-1.5 font-semibold whitespace-nowrap">MAC</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {network.map((n, i) => (
-                    <tr key={i} className="border-b border-slate-50">
-                      <td className="py-2 pr-3 text-slate-700">
-                        <span className="flex items-center gap-1.5">
-                          <Network className="size-3.5 text-slate-400" />
-                          {kv(n.name)}
-                        </span>
-                        {n.is_dual_homed && (
-                          <Badge className="mt-1 bg-rose-50 text-rose-700 ring-rose-600/20">
-                            ⚠️ Dual-homed
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="py-2 pr-3 font-mono text-xs text-slate-600">{kv(n.ip)}</td>
-                      <td className="py-2 font-mono text-xs text-slate-500">{kv(n.mac)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            /* Danh sách dòng phân cách — không lồng khung bo góc bên trong card */
+            <ul className="divide-y divide-slate-100">
+              {network.map((n, i) => (
+                <li key={i} className="py-2.5 first:pt-0 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-700">
+                      <Network className="size-3.5 shrink-0 text-slate-400" />
+                      <span className="truncate">{kv(n.name)}</span>
+                    </span>
+                    {n.is_dual_homed && (
+                      <Badge className="bg-rose-50 text-rose-700 ring-rose-600/20">
+                        <AlertTriangle className="size-3" /> Dual-homed
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-5 gap-y-0.5 pl-5 font-mono text-xs text-slate-500">
+                    <span className="min-w-0 break-all">IP: {kv(n.ip)}</span>
+                    <span className="min-w-0 break-all">MAC: {kv(n.mac)}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!isEmptyValue(spec?.logged_user) && (
+            <div className="mt-3 border-t border-slate-100 pt-3">
+              <SpecRow label="Người dùng đang đăng nhập" value={kv(spec?.logged_user)} />
             </div>
           )}
-          <div className="mt-3 border-t border-slate-100 pt-3">
-            <SpecRow label="Người dùng đang đăng nhập" value={kv(spec?.logged_user)} />
-          </div>
 
           <div className="mt-3 border-t border-slate-100 pt-3">
-            <SpecRow
-              label="Cá nhân sở hữu"
-              value={
-                machine.assigned_user_name
-                  ? `${machine.assigned_user_name}${machine.phone_masked ? ` (ĐT: ${machine.phone_masked})` : ""}`
-                  : "Chưa gán"
-              }
-            />
-            <SpecRow label="Tổ chức" value={machine.org_name ?? "—"} />
+            {machine.assigned_user_name && (
+              <SpecRow
+                label="Cá nhân sở hữu"
+                value={`${machine.assigned_user_name}${machine.phone_masked ? ` (ĐT: ${machine.phone_masked})` : ""}`}
+              />
+            )}
+            <SpecRow label="Tổ chức" value={machine.org_name} />
             <SpecRow label="Enroll lúc" value={formatDateTime(machine.enrolled_at)} />
             <SpecRow label="Lần cuối online" value={timeAgo(machine.last_seen_at)} />
           </div>
         </Card>
 
-        <Card title="Trạng thái bảo mật" subtitle="Antivirus, Windows Update, cấu hình rủi ro (Phase 2)">
-          {!security ? (
-            <p className="text-sm text-slate-500">
-              Agent chưa gửi dữ liệu bảo mật (có ở Phase 2: WMI SecurityCenter2, BitLocker, RDP…).
-            </p>
-          ) : (
+        {hasSecurity && (
+          <Card title="Trạng thái bảo mật" subtitle="Antivirus, Windows Update, cấu hình rủi ro (Phase 2)">
             <div className="divide-y divide-slate-100">
-              <SpecRow
-                label="Antivirus"
-                value={
-                  (security.antivirus ?? []).length > 0
-                    ? (security.antivirus as Array<Record<string, unknown>>)
-                        .map((a) => kv(a.displayName ?? a))
-                        .join(", ")
-                    : "Chưa phát hiện"
-                }
-              />
-              <SpecRow label="Windows Update" value={kv(security.windows_update_status)} />
-              <SpecRow label="BitLocker" value={kv(security.bitlocker)} />
-              <SpecRow
-                label="RDP mở"
-                value={
-                  security.rdp_enabled === null || security.rdp_enabled === undefined
-                    ? "—"
-                    : security.rdp_enabled
-                      ? "⚠️ Đang bật"
-                      : "Đã tắt"
-                }
-              />
-              {(security.smarts ?? []).length > 0 && (
+              {avLabel && (
+                <SpecRow
+                  label="Antivirus"
+                  value={
+                    <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
+                      <ShieldCheck className="size-3" /> {avLabel}
+                    </Badge>
+                  }
+                />
+              )}
+              <SpecRow label="Windows Update" value={kv(security?.windows_update_status)} />
+              <SpecRow label="BitLocker" value={kv(security?.bitlocker)} />
+              <BoolRow label="RDP mở" on={security?.rdp_enabled} warnWhenOn onLabel="Đang bật" />
+              <BoolRow label="Firewall" on={security?.firewall_enabled} />
+              <BoolRow label="UAC" on={security?.uac_enabled} />
+              <BoolRow label="Secure Boot" on={security?.secure_boot_enabled} />
+              <BoolRow label="Chặn USB storage" on={security?.usb_storage_blocked} />
+
+              {weakProtocols.length > 0 && (
+                <div className="py-2 text-sm">
+                  <span className="text-slate-500">Giao thức yếu</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {weakProtocols.map(([key, label]) => (
+                      <li key={key} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5">
+                        <span className="text-slate-700">{label}</span>
+                        {security?.weak_protocols?.[key] === true ? (
+                          <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
+                            <CheckCircle2 className="size-3" /> Đã tắt
+                          </Badge>
+                        ) : (
+                          <Badge className="bg-amber-50 text-amber-700 ring-amber-600/20">
+                            <AlertTriangle className="size-3" /> Đang bật
+                          </Badge>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {(security?.listening_ports ?? []).length > 0 && (
+                <div className="py-2 text-sm">
+                  <span className="text-slate-500">Cổng đang mở ({security?.listening_ports?.length})</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {(security?.listening_ports as Array<Record<string, unknown>>).map((p, i) => (
+                      <li key={i} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5 font-mono text-xs">
+                        <span className="text-slate-700">{kv(p.address)}:{kv(p.port)}</span>
+                        <span className="text-slate-500">{kv(p.protocol)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(security?.startup_programs ?? []).length > 0 && (
+                <div className="py-2 text-sm">
+                  <span className="text-slate-500">Chương trình khởi động ({security?.startup_programs?.length})</span>
+                  <ul className="mt-1.5 space-y-1">
+                    {(security?.startup_programs as Array<Record<string, unknown>>).map((p, i) => (
+                      <li key={i} className="rounded-md bg-slate-50 px-2.5 py-1.5">
+                        <span className="text-slate-700">{kv(p.name)}</span>
+                        <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500">{kv(p.location)}</span>
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{kv(p.command)}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(security?.smarts ?? []).length > 0 && (
                 <div className="py-2 text-sm">
                   <span className="text-slate-500">Sức khỏe ổ cứng (SMART)</span>
                   <ul className="mt-1.5 space-y-1">
-                    {(security.smarts as Array<Record<string, unknown>>).map((s, i) => (
+                    {(security?.smarts as Array<Record<string, unknown>>).map((s, i) => (
                       <li key={i} className="rounded-md bg-slate-50 px-2.5 py-1.5 text-slate-700">
                         {kv(s.model ?? s.device ?? "Ổ đĩa")} — {kv(s.status ?? s.health)}
                       </li>
@@ -306,8 +474,8 @@ export default function MachineDetailPage() {
                 </div>
               )}
             </div>
-          )}
-        </Card>
+          </Card>
+        )}
 
         <Card title="Phần mềm đã cài" subtitle="Software inventory (Phase 2)">
           {software.length === 0 ? (
@@ -320,7 +488,7 @@ export default function MachineDetailPage() {
                   <div key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
                     <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
                       <Package className="size-3.5 shrink-0 text-slate-400" />
-                      <span className="truncate">{kv(s.display_name ?? s.name)}</span>
+                      <span className="truncate">{kv(s.display_name ?? s.name ?? "(không có tên)")}</span>
                     </span>
                     <span className="shrink-0 text-xs text-slate-400">{kv(s.version)}</span>
                   </div>
@@ -352,8 +520,13 @@ export default function MachineDetailPage() {
       </div>
 
       {isAdmin && (
-        <Card className="mt-5" title="Thao tác quản trị" subtitle="Vòng đời tài sản (#18), duyệt máy (#20), thu thập lại (#23)">
-          <div className="grid gap-4 lg:grid-cols-3">
+        <Modal
+          open={adminOpen}
+          onClose={() => setAdminOpen(false)}
+          title="Thao tác quản trị"
+        >
+          <div className="space-y-5">
+            {/* Vòng đời tài sản (#18) */}
             <div>
               <Field label="Vòng đời tài sản">
                 <div className="flex gap-2">
@@ -378,12 +551,13 @@ export default function MachineDetailPage() {
               </Field>
             </div>
 
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-slate-500">Duyệt máy (chờ approve)</p>
+            {/* Duyệt máy (#20) */}
+            <div className="border-t border-slate-100 pt-4">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Duyệt máy (chờ approve)</p>
               {machine.status === "pending" ? (
                 <div className="flex flex-wrap gap-2">
                   <Button size="sm" loading={actionBusy === "approve"} onClick={() => void runAction("approve")}>
-                    ✅ Duyệt máy
+                    <CheckCircle2 className="size-3.5" /> Duyệt máy
                   </Button>
                   <Button variant="danger" size="sm" loading={actionBusy === "reject"} onClick={() => void runAction("reject", { note: "Từ chối từ portal" })}>
                     Từ chối
@@ -394,23 +568,22 @@ export default function MachineDetailPage() {
               )}
             </div>
 
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-slate-500">On-demand rescan (#23)</p>
+            {/* On-demand rescan (#23) */}
+            <div className="border-t border-slate-100 pt-4">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">On-demand rescan</p>
               <Button variant="secondary" size="sm" loading={actionBusy === "rescan"} onClick={() => void runAction("rescan")}>
                 <RefreshCw className="size-3.5" /> Yêu cầu agent thu thập lại
               </Button>
-              <p className="text-xs text-slate-400">
+              <p className="mt-1.5 text-xs leading-snug text-slate-400">
                 Agent sẽ nhận cờ trong heartbeat kế tiếp và quét inventory ngay (không chờ chu kỳ).
               </p>
             </div>
+
+            {actionError && <p className="text-sm text-rose-600">{actionError}</p>}
           </div>
-          {actionError && <p className="mt-3 text-sm text-rose-600">{actionError}</p>}
-        </Card>
+        </Modal>
       )}
 
-      <div className="mt-5">
-        <MachineTimelineSection machineId={machine.id} />
-      </div>
     </div>
   );
 }

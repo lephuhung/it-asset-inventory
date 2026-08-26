@@ -23,7 +23,7 @@ function CopyText({ text, label }: { text: string; label: string }) {
   };
   return (
     <button
-      className="inline-flex items-center gap-1 text-xs font-medium text-[#635a5a] hover:underline"
+      className="inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-brand-600 hover:underline"
       onClick={() => void copy()}
     >
       {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   BarChart3,
   Bell,
@@ -16,9 +17,9 @@ import {
   HardDriveDownload,
   KeyRound,
   LayoutDashboard,
-  LogOut,
   Monitor,
   ScrollText,
+  ServerCog,
   ShieldCheck,
   Ticket,
   UserCog,
@@ -26,8 +27,8 @@ import {
 } from "lucide-react";
 import type { UserRole } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
-import { ROLE_META } from "@/lib/format";
-import { Badge } from "@/components/ui";
+import { api } from "@/lib/api";
+import { LogoMark } from "@/components/logo";
 
 const ADMIN_ROLES: UserRole[] = ["super_admin", "org_admin", "admin_global", "admin_org"];
 const SUPER_ADMIN_ROLES: UserRole[] = ["super_admin", "admin_global"];
@@ -57,7 +58,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/drifts", label: "Fingerprint drift", icon: Fingerprint, roles: ADMIN_ROLES },
       {
         href: "/tokens",
-        label: "Agent Config",
+        label: "Thêm máy mới",
         icon: Ticket,
         roles: ADMIN_ROLES,
       },
@@ -72,12 +73,18 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         icon: Building2,
         roles: ADMIN_ROLES,
       },
+      {
+        href: "/org-machine-stats",
+        label: "Thống kê theo tổ chức",
+        icon: Building2,
+      },
     ],
   },
   {
     group: "Báo cáo",
     items: [
       { href: "/reports", label: "Xuất báo cáo", icon: FileSpreadsheet },
+      { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
       { href: "/eol", label: "Windows EOL", icon: CalendarClock },
       { href: "/diff", label: "So sánh máy (Diff)", icon: GitCompareArrows },
       { href: "/offline-import", label: "Máy cách ly", icon: HardDriveDownload, roles: ADMIN_ROLES },
@@ -111,6 +118,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: SUPER_ADMIN_ROLES,
       },
       {
+        href: "/agent-config",
+        label: "Cấu hình Agent",
+        icon: ServerCog,
+        roles: ADMIN_ROLES,
+      },
+      {
         href: "/security",
         label: "User Access",
         icon: ShieldCheck,
@@ -121,9 +134,51 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
   },
 ];
 
+/** Số lượng hiển thị trên badge điều hướng — 1 request /machines/stats là đủ. */
+interface MachineStats {
+  total: number;
+  by_status: Record<string, number>;
+}
+
+const NAV_BADGES: Record<string, (s: MachineStats) => number> = {
+  "/machines": (s) => s.total,
+  "/approvals": (s) => s.by_status.pending ?? 0,
+  "/ghost-machines": (s) => s.by_status.lost ?? 0,
+};
+
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const [stats, setStats] = useState<MachineStats | null>(null);
+
+  // Badge số lượng: nạp khi vào trang, refresh mỗi 60s và khi đổi route
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const s = await api.get<MachineStats>("/machines/stats");
+        if (!cancelled) setStats(s);
+      } catch {
+        // im lặng — badge chỉ là tiện ích, không chặn điều hướng
+      }
+    };
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [pathname]);
+
+  // ESC đóng menu mobile
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onNavigate?.();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onNavigate]);
 
   const visibleGroups = NAV_GROUPS.map((g) => ({
     ...g,
@@ -132,29 +187,31 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
 
   const containerClass = open
     ? "fixed inset-y-0 left-0 z-40 flex w-[260px] -translate-x-0"
-    : "hidden lg:flex lg:w-[260px] lg:shrink-0 lg:sticky lg:top-0 lg:h-screen";
+    : "hidden lg:flex lg:w-[260px] lg:shrink-0";
 
   return (
     <aside
-      className={`${containerClass} flex-col bg-slate-900 text-slate-300 transition-transform`}
+      id="portal-sidebar"
+      className={`${containerClass} flex-col border-r border-slate-200 bg-white transition-transform`}
+      aria-label="Điều hướng chính"
     >
-      {/* Brand — AssetManager */}
+      {/* Brand — khối icon primary duy nhất trên chrome trắng */}
       <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-white ring-1 ring-inset ring-slate-700">
-          <ShieldCheck className="size-5" />
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+          <LogoMark size={20} />
         </div>
         <div className="min-w-0 leading-tight">
-          <p className="truncate text-base font-bold text-white">AssetManager</p>
+          <p className="truncate text-base font-bold tracking-tight text-slate-900">AssetManager</p>
           <p className="truncate text-[11px] text-slate-400">Enterprise Infrastructure</p>
         </div>
       </div>
 
-      {/* Nav */}
+      {/* Nav — hàng sáng, active = nền canvas + vạch primary bên trái */}
       <nav className="flex-1 overflow-y-auto px-3 pb-4">
         <div className="space-y-4">
           {visibleGroups.map((group) => (
             <div key={group.group}>
-              <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+              <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                 {group.group}
               </p>
               <ul className="space-y-0.5">
@@ -163,19 +220,34 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
                     ? pathname === item.href
                     : pathname.startsWith(item.href);
                   const Icon = item.icon;
+                  const count = stats ? NAV_BADGES[item.href]?.(stats) : undefined;
                   return (
                     <li key={item.href}>
                       <Link
                         href={item.href}
                         onClick={onNavigate}
-                        className={`group flex items-center gap-3 rounded px-2.5 py-2 text-sm transition-colors ${
+                        aria-current={active ? "page" : undefined}
+                        className={`group flex items-center gap-3 rounded-sm border-l-4 px-2.5 py-2 text-sm transition-colors ${
                           active
-                            ? "border-l-4 border-white bg-white/10 font-bold text-white"
-                            : "border-l-4 border-transparent text-slate-400 hover:bg-white/5 hover:text-white"
+                            ? "border-brand-600 bg-slate-50 font-semibold text-slate-900"
+                            : "border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                         }`}
                       >
-                        <Icon className="size-4 shrink-0" />
+                        <Icon className={`size-4 shrink-0 ${active ? "text-brand-600" : ""}`} />
                         <span className="truncate">{item.label}</span>
+                        {count !== undefined && count > 0 && (
+                          <span
+                            className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none ${
+                              item.href === "/approvals"
+                                ? "bg-amber-100 text-amber-700"
+                                : item.href === "/ghost-machines"
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {count > 99 ? "99+" : count}
+                          </span>
+                        )}
                       </Link>
                     </li>
                   );
@@ -185,31 +257,6 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
           ))}
         </div>
       </nav>
-
-      {/* User */}
-      {user && (
-        <div className="border-t border-slate-800 px-4 py-4">
-          <div className="mb-3 flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-700 text-sm font-semibold text-white">
-              {user.full_name.slice(0, 1).toUpperCase()}
-            </div>
-            <div className="min-w-0 leading-tight">
-              <p className="truncate text-sm font-medium text-white">{user.full_name}</p>
-              <p className="truncate text-xs text-slate-400">{user.email}</p>
-            </div>
-          </div>
-          <div className="mb-2.5">
-            <Badge className={ROLE_META[user.role].badge}>{ROLE_META[user.role].label}</Badge>
-          </div>
-          <button
-            onClick={() => void logout()}
-            className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-sm text-slate-400 transition-colors hover:bg-white/5 hover:text-white"
-          >
-            <LogOut className="size-4" />
-            Đăng xuất
-          </button>
-        </div>
-      )}
     </aside>
   );
 }

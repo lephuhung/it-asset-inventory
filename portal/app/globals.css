@@ -1,72 +1,186 @@
 @import "tailwindcss";
 
 /* ════════════════════════════════════════════════════════════
-   DESIGN SYSTEM — Asset Inventory Portal (AssetManager theme)
+   DESIGN SYSTEM — Asset Inventory Portal (Notion Analysis theme)
    Xem portal/Design.md để biết quy tắc & cách dùng token.
-   Tái tạo theo Stitch project: "AssetManager — Enterprise Infrastructure"
-   (https://stitch.withgoogle.com/projects/1399479754615558603)
+   Nền tảng: canvas giấy ấm #f6f5f4 · type Inter near-black ·
+   MỘT accent cấu trúc duy nhất — xanh Notion #0075de — dành cho
+   CTA/link/trạng thái active. Không màu nào khác tô cấu trúc.
    Mục tiêu: desktop-first, KHÔNG lăn ngang toàn trang.
    ════════════════════════════════════════════════════════════ */
 
+/* ── Design tokens (Tailwind v4 @theme) ──────────────────────
+   Remap các palette mặc định sang giá trị Notion để toàn bộ
+   utility class hiện có (bg-slate-50, text-brand-600,
+   ring-emerald-600/20, …) tự động ăn theo design mới mà không
+   phải sửa từng trang. KHÔNG hardcode hex trong components. */
+@theme {
+  /* Thang ink ấm của Notion (slate cũ → thang mới) */
+  --color-slate-50: #f6f5f4;  /* canvas-soft — nền trang chính */
+  --color-slate-100: #f0efed; /* hover tint / thead */
+  --color-slate-200: #e6e6e6; /* hairline — viền card & divider */
+  --color-slate-300: #dddddd; /* viền input */
+  --color-slate-400: #a39e98; /* ash — caption, placeholder */
+  --color-slate-500: #615d59; /* stone — muted copy */
+  --color-slate-600: #31302e; /* warm charcoal — secondary */
+  --color-slate-700: #262523;
+  --color-slate-800: #191817;
+  --color-slate-900: #000000; /* ink — heading/body */
+  --color-slate-950: #000000;
+
+  /* Primary — xanh Notion duy nhất (brand cũ → primary mới) */
+  --color-brand-50: #f0f7fd;
+  --color-brand-100: #e0effb;
+  --color-brand-200: #c2e0f7;
+  --color-brand-300: #94c9f2;
+  --color-brand-400: #62aef0; /* sticker sky */
+  --color-brand-500: #3391e5;
+  --color-brand-600: #0075de; /* PRIMARY — màu hành động duy nhất */
+  --color-brand-700: #005bab; /* pressed state */
+  --color-brand-800: #00488a;
+  --color-brand-900: #213183; /* deep indigo — hero band */
+
+  /* Semantic — OK/WARN/BAD theo accent Notion */
+  --color-emerald-50: #edf8ef;
+  --color-emerald-100: #d9f1de;
+  --color-emerald-200: #b6e4c1;
+  --color-emerald-300: #86d298;
+  --color-emerald-400: #4dbd66;
+  --color-emerald-500: #1aae39; /* sticker green */
+  --color-emerald-600: #179130;
+  --color-emerald-700: #127226;
+  --color-emerald-800: #0e5a1e;
+
+  --color-amber-50: #fdf4e8;
+  --color-amber-100: #fae7cb;
+  --color-amber-200: #f4cf99;
+  --color-amber-300: #edb163;
+  --color-amber-400: #e59737;
+  --color-amber-500: #dd5b00; /* sticker orange */
+  --color-amber-600: #c14e00;
+  --color-amber-700: #973d00;
+  --color-amber-800: #793400; /* deep orange */
+
+  --color-rose-50: #fdf1f0;
+  --color-rose-100: #fbdfdd;
+  --color-rose-200: #f6c2be;
+  --color-rose-300: #ee9a94;
+  --color-rose-400: #e46a62;
+  --color-rose-500: #d44c47; /* danger Notion-ish */
+  --color-rose-600: #ba3a36;
+  --color-rose-700: #962e2b;
+  --color-rose-800: #772422;
+
+  /* Palette sticker — chỉ dùng trang trí (badge phân loại…),
+     KHÔNG bao giờ tô CTA hay fill cấu trúc (Design.md §Do/Don't) */
+  --color-sky-50: #eef7fd;
+  --color-sky-600: #2a9d99; /* sticker teal */
+  --color-sky-700: #217d7a;
+  --color-violet-50: #f6f0fc;
+  --color-violet-600: #9061cd; /* sticker purple (đậm hơn để đạt contrast) */
+  --color-violet-700: #7449a8;
+
+  --color-blue-50: #f0f7fd;
+  --color-blue-500: #3391e5;
+  --color-blue-600: #0075de; /* trùng primary — inline link */
+  --color-blue-700: #005bab;
+
+  --color-zinc-400: #a39e98;
+
+  /* Bo tròn theo Design.md §Shapes */
+  --radius-xs: 4px;    /* form field, tag, chip */
+  --radius-sm: 5px;    /* menu item, list row */
+  --radius-md: 8px;    /* utility/nav button, card nhỏ */
+  --radius-lg: 12px;   /* feature card, khung ảnh */
+  --radius-xl: 16px;   /* container lớn, image well */
+  --radius-2xl: 16px;
+  --radius-3xl: 24px;
+
+  /* Elevation "barely-there" — nhiều lớp gần như trong suốt */
+  --shadow-sm: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 4px 18px;                       /* Level 1 — Soft */
+  --shadow-md: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 4px 18px;
+  --shadow-lg: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 5.6px 18px, rgba(0, 0, 0, 0.05) 0 11px 30px;
+  --shadow-xl: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 5.6px 18px, rgba(0, 0, 0, 0.05) 0 23px 52px; /* Level 2 — Elevated */
+  --shadow-2xl: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 5.6px 18px, rgba(0, 0, 0, 0.05) 0 23px 52px;
+
+  /* Token ngữ nghĩa mới — dùng cho code viết thêm về sau */
+  --color-canvas: #ffffff;     /* surface trắng tinh (card, field) */
+  --color-paper: #f6f5f4;      /* canvas giấy ấm (nền trang, footer) */
+  --color-hairline: #e6e6e6;
+  --color-primary: #0075de;
+  --color-primary-active: #005bab;
+}
+
 /* ── Design tokens (CSS variables) ─────────────────────────── */
 :root {
-  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-sans: "Inter", -apple-system, system-ui, "Segoe UI", Helvetica, Arial,
+    "Noto Sans", sans-serif;
 
-  /* Brand — theo Stitch (xám nâu primary, sidebar tối) */
-  --brand-50: #f5f5f5;
-  --brand-100: #e8e8e8;
-  --brand-500: #8a8181;
-  --brand-600: #635a5a;   /* primary Stitch */
-  --brand-700: #4f4848;
-  --brand-800: #3b3636;
-  --brand-900: #2b2727;
+  /* Brand — xanh Notion duy nhất */
+  --brand-50: #f0f7fd;
+  --brand-100: #e0effb;
+  --brand-500: #3391e5;
+  --brand-600: #0075de;   /* primary */
+  --brand-700: #005bab;   /* pressed */
+  --brand-800: #00488a;
+  --brand-900: #213183;   /* deep indigo */
 
-  /* Bề mặt — surface ấm theo Stitch */
-  --bg: #f8fafc;             /* slate-50 — nền trang chính */
-  --surface: #ffffff;        /* surface-container-lowest */
-  --surface-muted: #fff8f4;  /* surface (be ấm) */
-  --surface-container: #f8ece0;
-  --surface-container-low: #fef1e5;
+  /* Bề mặt — canvas giấy ấm là nền chính */
+  --bg: #f6f5f4;             /* canvas-soft */
+  --surface: #ffffff;        /* card / panel / field */
+  --surface-muted: #f6f5f4;
+  --surface-container: #f0efed;
+  --surface-container-low: #f6f5f4;
 
   /* Viền */
-  --border: #c4c7c7;         /* outline-variant */
-  --border-soft: #ede0d5;    /* surface-variant */
+  --border: #dddddd;         /* viền input */
+  --border-soft: #e6e6e6;    /* hairline — card & divider */
 
-  /* Chữ */
-  --ink: #201b13;            /* on-surface (nâu tối) */
-  --ink-muted: #444748;      /* on-surface-variant */
-  --ink-subtle: #747878;     /* outline */
+  /* Chữ — thang ink ấm */
+  --ink: #000000;            /* ink — heading/body */
+  --ink-secondary: #31302e;  /* warm charcoal */
+  --ink-muted: #615d59;      /* stone */
+  --ink-faint: #a39e98;      /* ash */
 
   /* Trạng thái */
-  --ok: #059669;
-  --warn: #d97706;
-  --bad: #ba1a1a;            /* error Stitch */
+  --ok: #1aae39;
+  --warn: #dd5b00;
+  --bad: #d44c47;
 
-  /* Bo tròn */
-  --r-sm: 0.25rem;
-  --r-md: 0.5rem;
-  --r-lg: 0.75rem;
-  --r-xl: 1rem;
-
-  /* Shadow */
-  --shadow-card: 0 1px 2px rgba(20, 16, 16, 0.04), 0 1px 1px rgba(20, 16, 16, 0.03);
-  --shadow-pop: 0 10px 30px rgba(20, 16, 16, 0.12);
+  /* Shadow — Level 1 & 2 của Notion */
+  --shadow-card: rgba(0, 0, 0, 0.01) 0 0.175px 1.041px,
+    rgba(0, 0, 0, 0.02) 0 0.8px 2.925px, rgba(0, 0, 0, 0.027) 0 2.025px 7.847px,
+    rgba(0, 0, 0, 0.04) 0 4px 18px;
+  --shadow-pop: rgba(0, 0, 0, 0.02) 0 0.8px 2.925px,
+    rgba(0, 0, 0, 0.027) 0 2.025px 7.847px, rgba(0, 0, 0, 0.04) 0 5.6px 18px,
+    rgba(0, 0, 0, 0.05) 0 23px 52px;
 }
 
 html,
 body {
   font-family: var(--font-sans);
-  background-color: #f8fafc;
+  background-color: #f6f5f4;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "lnum", "locl";
 }
 
 body {
   min-height: 100vh;
-  background-image: linear-gradient(to bottom, #ffffff 0, #f8fafc 220px, #f8fafc 100%);
+  /* Canvas giấy ấm phẳng — đặc trưng Notion, không gradient lạnh */
+  background-image: linear-gradient(to bottom, #ffffff 0, #f6f5f4 220px, #f6f5f4 100%);
   background-attachment: fixed;
 }
 
@@ -77,40 +191,52 @@ body {
   overflow-x: hidden;
 }
 
-/* ── Scrollbar gọn gàng ───────────────────────────────────── */
+/* ── Scrollbar gọn gàng (tông ấm) ─────────────────────────── */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #c4c5d5 transparent;
+  scrollbar-color: #cfccc8 transparent;
 }
 *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #c4c5d5;
+  background: #cfccc8;
   border-radius: 10px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #a5a8b5;
+  background: #a39e98;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* ── Focus ring ────────────────────────────────────────────── */
+/* ── Focus ring — xanh primary, tín hiệu active/focus duy nhất ── */
 :focus-visible {
   outline: 2px solid var(--brand-600);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 4px;
+}
+
+/* ── Giảm chuyển động (WCAG 2.3.3) ─────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ── Tiện ích tái dùng ────────────────────────────────────── */
 
-/* Card nền tảng (dùng kèm className bổ sung) */
+/* Card nền tảng — surface trắng, hairline, shadow Level-1 mỏng */
 .ai-card {
   border: 1px solid var(--border-soft);
   background: var(--surface);
-  border-radius: var(--r-lg);
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 
@@ -119,17 +245,17 @@ body {
   overflow-x: auto;
   border: 1px solid var(--border-soft);
   background: var(--surface);
-  border-radius: var(--r-lg);
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 
-/* KPI card có vạch màu trái (theo Stitch AssetManager) */
+/* KPI card có vạch màu trái — vạch dùng primary (màu cấu trúc duy nhất) */
 .kpi-card {
   position: relative;
   overflow: hidden;
   border: 1px solid var(--border-soft);
   background: var(--surface);
-  border-radius: var(--r-lg);
+  border-radius: 12px;
   box-shadow: var(--shadow-card);
 }
 .kpi-card::before {
@@ -145,7 +271,7 @@ body {
 /* ── Markdown (thông báo tuân thủ) ───────────────────────── */
 .prose-md {
   line-height: 1.75;
-  color: #444748;
+  color: var(--ink-muted);
 }
 .prose-md h1,
 .prose-md h2,
@@ -156,9 +282,11 @@ body {
 }
 .prose-md h1 {
   font-size: 1.3rem;
+  letter-spacing: -0.25px;
 }
 .prose-md h2 {
   font-size: 1.15rem;
+  letter-spacing: -0.25px;
 }
 .prose-md h3 {
   font-size: 1rem;
@@ -180,16 +308,16 @@ body {
   margin: 0.25em 0;
 }
 .prose-md code {
-  background: #ede0d5;
+  background: #f0efed;
   padding: 0.1em 0.35em;
-  border-radius: 0.3rem;
+  border-radius: 4px;
   font-size: 0.875em;
 }
 .prose-md pre {
-  background: #2b2727;
-  color: #f1f1f1;
+  background: #191817;
+  color: #f6f5f4;
   padding: 0.75em 1em;
-  border-radius: 0.5rem;
+  border-radius: 8px;
   overflow-x: auto;
   margin: 0.6em 0;
 }
@@ -203,9 +331,9 @@ body {
   text-decoration: underline;
 }
 .prose-md blockquote {
-  border-left: 3px solid #c4c7c7;
+  border-left: 3px solid var(--border-soft);
   padding-left: 0.9em;
-  color: #444748;
+  color: var(--ink-muted);
   margin: 0.6em 0;
 }
 .prose-md table {
@@ -214,7 +342,7 @@ body {
 }
 .prose-md th,
 .prose-md td {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   padding: 0.3em 0.6em;
   text-align: left;
 }

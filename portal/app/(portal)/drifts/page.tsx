@@ -99,12 +99,12 @@ export default function DriftsPage() {
           <table className={TABLE}>
             <thead className={THEAD}>
               <tr>
-                <th className={TH}>Máy</th>
-                <th className={TH}>Lý do</th>
-                <th className={TH}>Fingerprint cũ → mới</th>
-                <th className={TH}>Phát hiện</th>
-                <th className={TH}>Trạng thái</th>
-                <th className={`${TH} text-right`}>Thao tác</th>
+                <th scope="col" className={TH}>Máy</th>
+                <th scope="col" className={TH}>Lý do</th>
+                <th scope="col" className={TH}>Fingerprint cũ → mới</th>
+                <th scope="col" className={TH}>Phát hiện</th>
+                <th scope="col" className={TH}>Trạng thái</th>
+                <th scope="col" className={`${TH} text-right`}>Thao tác</th>
               </tr>
             </thead>
             <tbody>

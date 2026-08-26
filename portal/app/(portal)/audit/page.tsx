@@ -193,14 +193,14 @@ export default function AuditPage() {
             <table className={TABLE}>
               <thead className={THEAD}>
                 <tr>
-                  <th className={TH}>#</th>
-                  <th className={TH}>Thời gian</th>
-                  <th className={TH}>Người thực hiện</th>
-                  <th className={TH}>Hành động</th>
-                  <th className={TH}>Đối tượng</th>
-                  <th className={TH}>Máy liên quan</th>
-                  <th className={TH}>IP</th>
-                  <th className={TH}>Content hash</th>
+                  <th scope="col" className={TH}>#</th>
+                  <th scope="col" className={TH}>Thời gian</th>
+                  <th scope="col" className={TH}>Người thực hiện</th>
+                  <th scope="col" className={TH}>Hành động</th>
+                  <th scope="col" className={TH}>Đối tượng</th>
+                  <th scope="col" className={TH}>Máy liên quan</th>
+                  <th scope="col" className={TH}>IP</th>
+                  <th scope="col" className={TH}>Content hash</th>
                 </tr>
               </thead>
               <tbody>

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FileUp, HardDriveDownload } from "lucide-react";
+import { CheckCircle2, FileUp, HardDriveDownload } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { OfflineImportResponse } from "@/lib/types";
 import { Button, Card, ErrorBanner, Field, PageHeader, Textarea } from "@/components/ui";
@@ -65,12 +65,15 @@ export default function OfflineImportPage() {
 
       {error && <ErrorBanner message={error} />}
       {result && (
-        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          ✅ Import thành công — máy{" "}
-          <Link href={`/machines/${result.machine_id}`} className="font-semibold underline">
-            {result.hostname ?? result.machine_id.slice(0, 8)}
-          </Link>{" "}
-          ({result.is_new ? "máy mới" : "cập nhật máy có sẵn"}, chữ ký hợp lệ).
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Import thành công — máy{" "}
+            <Link href={`/machines/${result.machine_id}`} className="font-semibold underline">
+              {result.hostname ?? result.machine_id.slice(0, 8)}
+            </Link>{" "}
+            ({result.is_new ? "máy mới" : "cập nhật máy có sẵn"}, chữ ký hợp lệ).
+          </span>
         </div>
       )}
 

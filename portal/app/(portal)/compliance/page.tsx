@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Check, FileText, History } from "lucide-react";
+import { Check, CheckCircle2, Clock, FileText, History } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ComplianceNotice } from "@/lib/types";
 import {
@@ -88,9 +88,9 @@ export default function CompliancePage() {
             className="lg:col-span-2"
             title={
               <span className="inline-flex items-center gap-2">
-                <FileText className="size-4 text-[#635a5a]" />
+                <FileText className="size-4 text-brand-600" />
                 {notice.title}
-                <Badge className="bg-[#f5f5f5] text-[#4f4848] ring-[#635a5a]/20">v{notice.version}</Badge>
+                <Badge className="bg-brand-50 text-brand-700 ring-brand-600/20">v{notice.version}</Badge>
               </span>
             }
             subtitle={`Hiệu lực từ ${new Date(notice.effective_from).toLocaleDateString("vi-VN")}`}
@@ -105,13 +105,17 @@ export default function CompliancePage() {
               {pending === null ? (
                 <p className="text-sm text-slate-500">Đang kiểm tra…</p>
               ) : pending ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
-                  ⏳ Bạn chưa xác nhận bản này — hệ thống sẽ yêu cầu xác nhận trước khi tiếp tục sử
-                  dụng.
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                  <Clock className="mt-0.5 size-4 shrink-0" />
+                  <span>
+                    Bạn chưa xác nhận bản này — hệ thống sẽ yêu cầu xác nhận trước khi tiếp tục sử
+                    dụng.
+                  </span>
                 </div>
               ) : (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-700">
-                  ✅ Bạn đã xác nhận bản thông báo hiện hành.
+                <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-700">
+                  <CheckCircle2 className="mt-0.5 size-4 shrink-0" />
+                  Bạn đã xác nhận bản thông báo hiện hành.
                 </div>
               )}
               {pending && (

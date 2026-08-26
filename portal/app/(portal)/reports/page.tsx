@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Download, FileSpreadsheet, FileText, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Download, FileSpreadsheet, FileText, ShieldCheck } from "lucide-react";
 import { api, downloadFromApi } from "@/lib/api";
 import type { Organization } from "@/lib/types";
 import { ORG_TYPE_META, flattenOrgTree } from "@/lib/format";
@@ -88,8 +88,9 @@ export default function ReportsPage() {
 
       {error && <ErrorBanner message={error} />}
       {done && (
-        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          ✅ Đã xuất báo cáo lúc {done}. Kiểm tra file tải về trong trình duyệt.
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <CheckCircle2 className="size-4" />
+          Đã xuất báo cáo lúc {done}. Kiểm tra file tải về trong trình duyệt.
         </div>
       )}
 
@@ -133,7 +134,7 @@ export default function ReportsPage() {
               checked={includeFull}
               disabled={!isAdmin}
               onChange={(e) => setIncludeFull(e.target.checked)}
-              className="size-4 cursor-pointer rounded border-slate-300 text-[#635a5a] focus:ring-2 focus:ring-blue-500/40 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
+              className="size-4 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-2 focus:ring-brand-600/25 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
             />
             Kèm số điện thoại đầy đủ
             {!isAdmin && (
@@ -154,7 +155,7 @@ export default function ReportsPage() {
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <Card title="Quyền xem dữ liệu cá nhân">
           <div className="flex items-start gap-3 text-sm text-slate-600">
-            <ShieldCheck className="mt-0.5 size-5 shrink-0 text-[#635a5a]" />
+            <ShieldCheck className="mt-0.5 size-5 shrink-0 text-brand-600" />
             <p>
               Số điện thoại <b>mặc định bị mask</b> (<code>0983•••123</code>). Chỉ khi tích chọn
               phía trên (và bạn có vai trò admin) dữ liệu mới xuất đầy đủ — phù hợp Nghị định

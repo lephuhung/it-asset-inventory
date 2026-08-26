@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Check, Copy, KeyRound, Link2, Plus, RefreshCw, Ticket, Trash2, Upload } from "lucide-react";
+import { Check, Clock, KeyRound, Link2, Plus, RefreshCw, Ticket, Trash2, Upload, XCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type {
   BulkTokenItem,
@@ -13,17 +13,20 @@ import type {
 } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
-  Badge,
   Button,
   Card,
+  ConfirmDialog,
+  CopyButton,
   EmptyState,
   ErrorBanner,
   Field,
+  IconButton,
   Input,
   Modal,
   PageHeader,
   Select,
   Spinner,
+  StatusBadge,
   TABLE,
   TABLE_WRAP,
   TD,
@@ -56,30 +59,6 @@ function saveCommand(id: string, command: string) {
   sessionStorage.setItem(COMMAND_STORAGE, JSON.stringify(map));
 }
 
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <Button variant="secondary" size="sm" onClick={() => void copy()}>
-      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
-      {copied ? "Đã copy" : label}
-    </Button>
-  );
-}
-
 export default function TokensPage() {
   const { user } = useAuth();
   const [tokens, setTokens] = useState<TokenListItem[]>([]);
@@ -99,6 +78,7 @@ export default function TokensPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   // Modal kết quả
   const [created, setCreated] = useState<TokenCreateResponse | null>(null);
@@ -111,6 +91,8 @@ export default function TokensPage() {
   const [newLink, setNewLink] = useState<SelfServiceLink | null>(null);
   const [creatingLink, setCreatingLink] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [removingLink, setRemovingLink] = useState<SelfServiceLink | null>(null);
+  const [removeLinkBusy, setRemoveLinkBusy] = useState(false);
 
   // Bulk import CSV
   const [csvOrgId, setCsvOrgId] = useState("");
@@ -123,6 +105,20 @@ export default function TokensPage() {
   useEffect(() => {
     if (user) setOrgId((prev) => prev || user.org_id);
   }, [user]);
+
+  /** Mở modal thêm thiết bị — reset form về trống (trừ org mặc định của user). */
+  const openCreate = () => {
+    setFullName("");
+    setDepartment("");
+    setPosition("");
+    setEmail("");
+    setPhone("");
+    setNote("");
+    setTtl(72);
+    setFormError(null);
+    setSubmitted(false);
+    setShowCreate(true);
+  };
 
   const loadTokens = useCallback(async (silent = false): Promise<TokenListItem[]> => {
     try {
@@ -180,13 +176,17 @@ export default function TokensPage() {
     }
   };
 
-  const removeLink = async (l: SelfServiceLink) => {
-    if (!window.confirm(`Xóa link tự khai báo "${l.code}"?`)) return;
+  const removeLink = async () => {
+    if (!removingLink) return;
+    setRemoveLinkBusy(true);
     try {
-      await api.delete(`/self-service/links/${l.id}`);
+      await api.delete(`/self-service/links/${removingLink.id}`);
+      setRemovingLink(null);
       await loadLinks();
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : "Xóa thất bại");
+    } finally {
+      setRemoveLinkBusy(false);
     }
   };
 
@@ -253,6 +253,7 @@ export default function TokensPage() {
       });
       setCreated(res);
       setSubmitted(true);
+      setShowCreate(false);
       // Gắn lệnh cài cho token vừa tạo (server chỉ trả token 1 lần) — khớp qua expires_at
       const list = await loadTokens(true);
       const match = list.find((t) => t.expires_at === res.expires_at);
@@ -283,8 +284,18 @@ export default function TokensPage() {
   return (
     <div>
       <PageHeader
-        title="Token triển khai"
+        title="Thêm máy mới"
         description="Sinh token 1-lần cho từng máy — người dùng chỉ cần paste 1 dòng lệnh vào PowerShell (chế độ A: admin nhập hộ)"
+        actions={
+          <>
+            <Button variant="secondary" size="sm" onClick={() => void loadTokens()} disabled={loading}>
+              <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Nạp lại
+            </Button>
+            <Button size="sm" onClick={openCreate}>
+              <Plus className="size-3.5" /> Thêm thiết bị
+            </Button>
+          </>
+        }
       />
 
       {/* Timeline triển khai agent — từ sinh token đến máy online */}
@@ -309,83 +320,20 @@ export default function TokensPage() {
         </ol>
         <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
           <span className="font-semibold">Lưu ý thời gian sống của token:</span>
-          <span>⏳ Nếu người dùng không cài trong TTL, token chuyển sang <b>Hết hạn</b> và phải tạo lại.</span>
-          <span>✅ Sau enroll, token mất giá trị ngay cả khi bị lộ (agent dùng mTLS cert).</span>
+          <span className="inline-flex items-center gap-1">
+            <Clock className="size-3" />
+            Nếu người dùng không cài trong TTL, token chuyển sang <b>Hết hạn</b> và phải tạo lại.
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Check className="size-3" />
+            Sau enroll, token mất giá trị ngay cả khi bị lộ (agent dùng mTLS cert).
+          </span>
         </p>
       </Card>
 
       {error && <ErrorBanner message={error} onRetry={() => void loadTokens()} />}
 
       <div className="space-y-6">
-        <Card
-          className="mx-auto max-w-3xl"
-          title="Thêm máy mới"
-          subtitle="Nhập thông tin người dùng máy → sinh mã + câu lệnh cài đặt"
-          actions={
-            <Button variant="secondary" size="sm" onClick={() => void loadTokens()} disabled={loading}>
-              <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Nạp lại
-            </Button>
-          }
-        >
-          <form onSubmit={create} className="space-y-4">
-            {orgs.length > 0 && (
-              <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)" required hint="Token kế thừa tổ chức — máy enroll sẽ thuộc tổ chức này">
-                <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
-                  {flattenOrgTree(orgs).map(({ org, depth }) => {
-                    const meta = ORG_TYPE_META[org.type];
-                    return (
-                      <option key={org.id} value={org.id}>
-                        {"— ".repeat(depth)}
-                        {org.name} ({meta?.label ?? org.type})
-                      </option>
-                    );
-                  })}
-                </Select>
-              </Field>
-            )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Họ tên" required>
-                <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nguyễn Văn A" required />
-              </Field>
-              <Field label="Phòng ban">
-                <Input value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Kế toán" />
-              </Field>
-              <Field label="Chức vụ">
-                <Input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Chuyên viên" />
-              </Field>
-              <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa AES-256-GCM khi lưu; UI mặc định mask">
-                <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0983…" />
-              </Field>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Email">
-                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="a@example.gov.vn" />
-              </Field>
-              <Field label="Thời hạn token">
-                <Select value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-                  {TTL_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <Field label="Ghi chú">
-              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ký hiệu hợp đồng / đơn vị…" />
-            </Field>
-            {formError && <p className="text-sm text-rose-600">{formError}</p>}
-            <div className="flex flex-wrap items-center gap-3 pt-1">
-              <Button type="submit" loading={submitting}>
-                <Plus className="size-4" /> Sinh mã + lệnh cài đặt
-              </Button>
-              {submitted && (
-                <span className="text-sm text-emerald-600">Đã sinh token — copy lệnh để gửi cho người dùng.</span>
-              )}
-            </div>
-          </form>
-        </Card>
-
         <Card
           title="Phễu triển khai"
           subtitle="Trạng thái token — dữ liệu sống từ lúc phát lệnh"
@@ -397,18 +345,18 @@ export default function TokensPage() {
             <EmptyState
               icon={<Ticket className="size-10" />}
               title="Chưa có token nào"
-              description="Sinh token đầu tiên ở form trên để bắt đầu phễu triển khai."
+              description="Bấm nút 'Thêm thiết bị' phía trên để sinh token đầu tiên và bắt đầu phễu triển khai."
             />
           ) : (
             <div className={TABLE_WRAP}>
               <table className={TABLE}>
                 <thead className={THEAD}>
                   <tr>
-                    <th className={TH}>Người dùng</th>
-                    <th className={TH}>Phòng / chức vụ</th>
-                    <th className={TH}>Trạng thái</th>
-                    <th className={TH}>Hết hạn</th>
-                    <th className={`${TH} text-right`}>Thao tác</th>
+                    <th scope="col" className={TH}>Người dùng</th>
+                    <th scope="col" className={TH}>Phòng / chức vụ</th>
+                    <th scope="col" className={TH}>Trạng thái</th>
+                    <th scope="col" className={TH}>Hết hạn</th>
+                    <th scope="col" className={`${TH} text-right`}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -427,15 +375,19 @@ export default function TokensPage() {
                           {t.department || "—"}
                         </td>
                         <td className={TD}>
-                          <Badge className={meta.badge}>{meta.label}</Badge>
+                          <StatusBadge badge={meta.badge} dot={meta.dot}>
+                            {meta.label}
+                          </StatusBadge>
                           {t.status === "pending" && expiry && !expiry.expired && expiry.hoursLeft <= 24 && (
                             <p className="mt-1 text-[11px] font-medium text-amber-600">
-                              ⏳ {expiry.label}
+                              <Clock className="mr-0.5 inline size-3" />
+                              {expiry.label}
                             </p>
                           )}
                           {expiry?.expired && t.status !== "used" && t.status !== "revoked" && (
                             <p className="mt-1 text-[11px] font-semibold text-rose-600">
-                              ❌ {expiry.label} — cần tạo lại
+                              <XCircle className="mr-0.5 inline size-3" />
+                              {expiry.label} — cần tạo lại
                             </p>
                           )}
                         </td>
@@ -518,7 +470,8 @@ export default function TokensPage() {
                     <CopyButton text={l.url} label="Copy link" />
                     <button
                       onClick={() => void toggleLink(l)}
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
+                      aria-pressed={l.enabled}
+                      className={`cursor-pointer rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
                         l.enabled
                           ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20"
                           : "bg-slate-100 text-slate-500 ring-slate-500/20"
@@ -527,9 +480,10 @@ export default function TokensPage() {
                       {l.enabled ? "Đang mở" : "Đã khóa"}
                     </button>
                     <button
-                      onClick={() => void removeLink(l)}
-                      className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      onClick={() => setRemovingLink(l)}
+                      className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                       title="Xóa link"
+                      aria-label={`Xóa link ${l.code}`}
                     >
                       <Trash2 className="size-4" />
                     </button>
@@ -586,7 +540,7 @@ export default function TokensPage() {
               onChange={(e) => setCsvText(e.target.value)}
               rows={6}
               placeholder={"Nguyễn Văn A, Kế toán, Chuyên viên, a@example.gov.vn, 0983…\nTrần Thị B, Nhân sự, Trưởng phòng, b@example.gov.vn"}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/15"
             />
           </Field>
           {bulkError && <p className="mt-2 text-sm text-rose-600">{bulkError}</p>}
@@ -635,8 +589,9 @@ export default function TokensPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
-              <span>
-                ⏳ Hết hạn lúc <b>{formatDateTime(created.expires_at)}</b> — sau đó token vô giá trị và cần sinh lại.
+              <span className="inline-flex items-center gap-1.5">
+                <Clock className="size-3.5" />
+                Hết hạn lúc <b>{formatDateTime(created.expires_at)}</b> — sau đó token vô giá trị và cần sinh lại.
               </span>
               <Button size="sm" variant="secondary" onClick={() => setCreated(null)}>
                 Xong
@@ -645,6 +600,101 @@ export default function TokensPage() {
           </div>
         )}
       </Modal>
+
+      {/* Modal: thêm thiết bị (sinh token) */}
+      <Modal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Plus className="size-4 text-brand-600" /> Thêm máy mới
+          </span>
+        }
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <div className="flex-1">
+              {formError && <p className="text-sm text-rose-600">{formError}</p>}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" onClick={() => setShowCreate(false)} disabled={submitting}>
+                Hủy
+              </Button>
+              <Button form="token-create-form" type="submit" loading={submitting}>
+                <Plus className="size-4" /> Sinh mã + lệnh cài đặt
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        <form id="token-create-form" onSubmit={create} className="space-y-4">
+          {orgs.length > 0 && (
+            <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)" required hint="Token kế thừa tổ chức — máy enroll sẽ thuộc tổ chức này">
+              <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                  const meta = ORG_TYPE_META[org.type];
+                  return (
+                    <option key={org.id} value={org.id}>
+                      {"— ".repeat(depth)}
+                      {org.name} ({meta?.label ?? org.type})
+                    </option>
+                  );
+                })}
+              </Select>
+            </Field>
+          )}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Họ tên" required>
+              <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nguyễn Văn A" required />
+            </Field>
+            <Field label="Phòng ban">
+              <Input value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Kế toán" />
+            </Field>
+            <Field label="Chức vụ">
+              <Input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Chuyên viên" />
+            </Field>
+            <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa AES-256-GCM khi lưu; UI mặc định mask">
+              <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0983…" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label="Email">
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="a@example.gov.vn" />
+            </Field>
+            <Field label="Thời hạn token">
+              <Select value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
+                {TTL_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Ghi chú">
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ký hiệu hợp đồng / đơn vị…" />
+          </Field>
+          {submitted && (
+            <p className="text-sm text-emerald-600">Đã sinh token — copy lệnh để gửi cho người dùng.</p>
+          )}
+        </form>
+      </Modal>
+
+      {/* Modal: xác nhận xóa link tự khai báo */}
+      <ConfirmDialog
+        open={removingLink !== null}
+        onClose={() => setRemovingLink(null)}
+        title="Xóa link tự khai báo"
+        danger
+        loading={removeLinkBusy}
+        confirmLabel="Xóa link"
+        onConfirm={() => void removeLink()}
+        message={
+          <>
+            Link <code className="rounded bg-slate-100 px-1 font-mono text-xs">/enroll/{removingLink?.code}</code>{" "}
+            sẽ ngừng hoạt động ngay. Người dùng đang giữ link sẽ không đăng ký được nữa.
+          </>
+        }
+      />
 
       {/* Modal: xác nhận thu hồi */}
       <Modal
@@ -690,9 +740,9 @@ export default function TokensPage() {
               <table className={TABLE}>
                 <thead className={THEAD}>
                   <tr>
-                    <th className={TH}>Người dùng</th>
-                    <th className={TH}>Lệnh cài đặt</th>
-                    <th className={TH}></th>
+                    <th scope="col" className={TH}>Người dùng</th>
+                    <th scope="col" className={TH}>Lệnh cài đặt</th>
+                    <th scope="col" className={TH}></th>
                   </tr>
                 </thead>
                 <tbody>

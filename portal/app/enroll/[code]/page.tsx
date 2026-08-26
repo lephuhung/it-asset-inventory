@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
-import { Check, Copy, KeyRound, Monitor, ShieldCheck } from "lucide-react";
+import { Check, Copy, KeyRound, ShieldCheck } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { SelfServiceInfo, TokenCreateResponse } from "@/lib/types";
 import { Button, Card, Field, Input, Spinner } from "@/components/ui";
+import { LogoMark } from "@/components/logo";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -95,7 +96,7 @@ export default function EnrollPage() {
       <div className="w-full max-w-xl">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-blue-600 shadow-lg shadow-blue-600/30">
-            <Monitor className="size-7 text-white" />
+            <LogoMark size={28} className="text-white" />
           </div>
           <h1 className="text-xl font-bold text-white">Đăng ký máy tính</h1>
           <p className="mt-1 text-sm text-slate-400">

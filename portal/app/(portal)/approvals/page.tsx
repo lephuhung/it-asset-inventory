@@ -79,12 +79,12 @@ export default function ApprovalsPage() {
           <table className={TABLE}>
             <thead className={THEAD}>
               <tr>
-                <th className={TH}>Hostname</th>
-                <th className={TH}>UUID</th>
-                <th className={TH}>Trạng thái</th>
-                <th className={TH}>Enroll</th>
-                <th className={TH}>Lần cuối online</th>
-                <th className={`${TH} text-right`}>Thao tác</th>
+                <th scope="col" className={TH}>Hostname</th>
+                <th scope="col" className={TH}>UUID</th>
+                <th scope="col" className={TH}>Trạng thái</th>
+                <th scope="col" className={TH}>Enroll</th>
+                <th scope="col" className={TH}>Lần cuối online</th>
+                <th scope="col" className={`${TH} text-right`}>Thao tác</th>
               </tr>
             </thead>
             <tbody>

@@ -1,14 +1,14 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { Loader2, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Check, Copy, Loader2, X } from "lucide-react";
 
 /* ── Badge ─────────────────────────────────────────────────── */
 
 export function Badge({ className = "", children }: { className?: string; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${className}`}
+      className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${className}`}
     >
       {children}
     </span>
@@ -17,6 +17,38 @@ export function Badge({ className = "", children }: { className?: string; childr
 
 export function StatusDot({ className = "" }: { className?: string }) {
   return <span className={`inline-block size-2 rounded-full ${className}`} />;
+}
+
+/** Badge có chấm trạng thái đi kèm — pattern dùng ở khắp các bảng. */
+export function StatusBadge({ badge, dot, children }: { badge: string; dot: string; children: ReactNode }) {
+  return (
+    <Badge className={badge}>
+      <StatusDot className={dot} />
+      {children}
+    </Badge>
+  );
+}
+
+/**
+ * Công tắc hiển thị trạng thái ON/OFF (read-only, không thao tác được).
+ * Dùng cho các giá trị true/false thay cho chữ "Bật"/"Đã tắt".
+ */
+export function BoolSwitch({ on, label }: { on: boolean; label?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={label ?? (on ? "Bật" : "Tắt")}
+      className={`relative inline-flex h-5 w-9 shrink-0 cursor-default items-center rounded-full transition-colors ${
+        on ? "bg-emerald-500" : "bg-slate-300"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-all ${
+          on ? "left-[18px]" : "left-0.5"
+        }`}
+      />
+    </span>
+  );
 }
 
 /* ── Card ──────────────────────────────────────────────────── */
@@ -39,7 +71,9 @@ export function Card({
   headerClass?: string;
 }) {
   return (
-    <section className={`rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_1px_1px_rgba(15,23,42,0.03)] ${className}`}>
+    <section
+      className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}
+    >
       {(title || actions) && (
         <header className={`flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 ${headerClass}`}>
           <div className="min-w-0">
@@ -54,22 +88,55 @@ export function Card({
   );
 }
 
+/* ── KPI card (theo Design.md §9 — vạch màu trái) ─────────── */
+
+export function KpiCard({
+  label,
+  value,
+  icon,
+  accent,
+  sub,
+}: {
+  label: string;
+  value: number | string;
+  icon: ReactNode;
+  accent: string;
+  sub?: string;
+}) {
+  return (
+    <div className="kpi-card flex h-24 flex-col justify-between p-4">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">{label}</p>
+        <span className={`flex size-7 items-center justify-center rounded-lg ${accent}`}>{icon}</span>
+      </div>
+      <div>
+        <p className="text-2xl font-bold tabular-nums text-slate-900">{value}</p>
+        {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Button ────────────────────────────────────────────────── */
 
 type ButtonVariant = "primary" | "secondary" | "danger" | "ghost" | "success" | "outline";
 
+/* Radius theo Design.md §Buttons: primary/secondary là marketing CTA —
+   pill trọn (rounded.full); các variant còn lại là nút utility — 8px.
+   Press state: nền đậm hơn + scale nhẹ (thay cho scale(0.9) mạnh). */
 const BUTTON_STYLES: Record<ButtonVariant, string> = {
   primary:
-    "bg-[#635a5a] text-white shadow-sm shadow-[#635a5a]/20 hover:bg-[#4f4848] active:bg-[#3b3636] focus-visible:outline-[#635a5a] disabled:bg-[#a8a0a0] disabled:shadow-none",
+    "rounded-full bg-brand-600 text-white shadow-sm hover:bg-brand-700 active:bg-brand-700 active:scale-[0.98] focus-visible:outline-brand-600 disabled:bg-brand-400 disabled:shadow-none",
   success:
-    "bg-emerald-600 text-white shadow-sm shadow-emerald-600/20 hover:bg-emerald-700 active:bg-emerald-800 focus-visible:outline-emerald-600 disabled:bg-emerald-300 disabled:shadow-none",
+    "rounded-full bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 active:bg-emerald-700 active:scale-[0.98] focus-visible:outline-emerald-600 disabled:bg-emerald-300 disabled:shadow-none",
   secondary:
-    "bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-100 active:bg-slate-200 disabled:text-slate-300",
+    "rounded-full bg-white text-slate-700 shadow-sm ring-1 ring-inset ring-slate-300 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] disabled:text-slate-300 disabled:shadow-none",
   outline:
-    "bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 active:bg-slate-100 disabled:text-slate-300",
+    "rounded-md bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] disabled:text-slate-300",
   danger:
-    "bg-white text-rose-600 ring-1 ring-inset ring-rose-300 hover:bg-rose-50 active:bg-rose-100 disabled:text-rose-300",
-  ghost: "text-slate-600 hover:bg-slate-100 active:bg-slate-200 disabled:text-slate-300",
+    "rounded-md bg-white text-rose-600 ring-1 ring-inset ring-rose-300 hover:bg-rose-50 active:bg-rose-100 active:scale-[0.98] disabled:text-rose-300",
+  ghost:
+    "rounded-md text-slate-600 hover:bg-slate-100 active:bg-slate-100 disabled:text-slate-300",
 };
 
 export function Button({
@@ -89,19 +156,66 @@ export function Button({
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   const sizeClass =
     size === "sm"
-      ? "h-8 px-3 text-xs"
+      ? "h-8 min-h-8 px-3 text-xs"
       : size === "lg"
-        ? "h-11 px-5 text-sm"
-        : "h-9.5 px-3.5 text-sm";
+        ? "h-11 min-h-11 px-5 text-sm"
+        : "h-9.5 min-h-9.5 px-3.5 text-sm";
   return (
     <button
-      className={`inline-flex select-none items-center justify-center gap-1.5 rounded-lg font-medium transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed ${sizeClass} ${BUTTON_STYLES[variant]} ${className}`}
+      className={`inline-flex cursor-pointer select-none items-center justify-center gap-1.5 font-medium transition-all duration-150 motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:active:scale-100 ${sizeClass} ${BUTTON_STYLES[variant]} ${className}`}
       disabled={disabled || loading}
       {...rest}
     >
-      {loading && <Loader2 className="size-3.5 animate-spin" />}
+      {loading && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />}
       {children}
     </button>
+  );
+}
+
+/** Nút chỉ có icon — luôn cần aria-label (skill: icon button accessible label). */
+/** Nút chỉ có icon — luôn cần aria-label (skill: icon button accessible label).
+    Mặc định neutral; truyền className="hover:bg-rose-50 hover:text-rose-600" cho nút xóa. */
+export function IconButton({
+  label,
+  className = "",
+  children,
+  ...rest
+}: { label: string; className?: string; children?: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      className={`inline-flex size-8 min-h-8 min-w-8 cursor-pointer items-center justify-center rounded-full text-slate-400 transition-colors duration-150 motion-reduce:transition-none hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ── Copy button dùng chung (3 nơi đã duplicate) ───────────── */
+
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <Button variant="secondary" size="sm" onClick={() => void copy()}>
+      {copied ? <Check className="size-3.5 text-emerald-600" /> : <Copy className="size-3.5" />}
+      {copied ? "Đã copy" : label}
+    </Button>
   );
 }
 
@@ -132,8 +246,10 @@ export function Field({
   );
 }
 
+/* text-input: bo tròn xs 4px — cố ý khác hẳn pill CTA (Design.md §Inputs).
+   Viền #dddddd, focus = primary + shadow Level-1. */
 const CONTROL_CLASS =
-  "h-9.5 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 transition-colors focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+  "h-9.5 w-full rounded-xs border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 transition-shadow focus:border-brand-600 focus:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600/15 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${CONTROL_CLASS} ${props.className ?? ""}`} />;
@@ -157,7 +273,7 @@ export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
 export function Spinner({ label }: { label?: string }) {
   return (
     <div className="flex items-center justify-center gap-2.5 py-12 text-sm text-slate-500">
-      <Loader2 className="size-5 animate-spin text-[#635a5a]" />
+      <Loader2 className="size-5 animate-spin motion-reduce:animate-none text-brand-600" />
       {label ?? "Đang tải…"}
     </div>
   );
@@ -192,13 +308,16 @@ export function EmptyState({
 
 export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
       <span className="flex items-center gap-2">
         <span className="flex size-5 items-center justify-center rounded-full bg-rose-100 text-rose-600">!</span>
         {message}
       </span>
       {onRetry && (
-        <button className="font-semibold underline-offset-2 hover:underline" onClick={onRetry}>
+        <button
+          className="cursor-pointer font-semibold underline-offset-2 hover:underline"
+          onClick={onRetry}
+        >
           Thử lại
         </button>
       )}
@@ -206,7 +325,10 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
   );
 }
 
-/* ── Modal ─────────────────────────────────────────────────── */
+/* ── Modal (a11y: role=dialog, aria-modal, ESC, focus trap, scroll lock) ── */
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
 export function Modal({
   open,
@@ -223,24 +345,78 @@ export function Modal({
   footer?: ReactNode;
   wide?: boolean;
 }) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const lastFocused = useRef<HTMLElement | null>(null);
+
+  // ESC đóng + focus trap
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.activeElement as HTMLElement | null;
+    lastFocused.current = prev;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const nodes = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE);
+      if (nodes.length === 0) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    // Focus phần tử đầu tiên trong modal (hoặc chính panel)
+    const t = setTimeout(() => {
+      const nodes = panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
+      (nodes?.[0] ?? panelRef.current)?.focus();
+    }, 30);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("keydown", onKeyDown, true);
+      lastFocused.current?.focus?.();
+    };
+  }, [open, onClose]);
+
+  // Khóa cuộn body khi mở
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
   if (!open) return null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
       <div
-        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-2xl ${
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-2xl outline-none ${
           wide ? "max-w-3xl" : "max-w-lg"
         }`}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white/95 px-6 py-4 backdrop-blur">
-          <h3 className="text-[15px] font-semibold text-slate-800">{title}</h3>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-            aria-label="Đóng"
-          >
+          <h3 id={titleId} className="text-[15px] font-semibold text-slate-800">{title}</h3>
+          <IconButton label="Đóng" onClick={onClose} className="hover:bg-slate-100 hover:text-slate-600">
             <X className="size-4" />
-          </button>
+          </IconButton>
         </header>
         <div className="px-6 py-5">{children}</div>
         {footer && (
@@ -248,6 +424,48 @@ export function Modal({
         )}
       </div>
     </div>
+  );
+}
+
+/* ── ConfirmDialog — thay window.confirm (native confirm là anti-pattern) ── */
+
+export function ConfirmDialog({
+  open,
+  onClose,
+  title,
+  message,
+  confirmLabel = "Xác nhận",
+  danger = false,
+  loading = false,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  message: ReactNode;
+  confirmLabel?: string;
+  danger?: boolean;
+  loading?: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={loading}>
+            Hủy
+          </Button>
+          <Button variant={danger ? "danger" : "primary"} loading={loading} onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <div className="text-sm leading-relaxed text-slate-600">{message}</div>
+    </Modal>
   );
 }
 

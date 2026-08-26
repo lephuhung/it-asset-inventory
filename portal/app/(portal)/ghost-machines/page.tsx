@@ -74,7 +74,7 @@ export default function GhostMachinesPage() {
           { label: "> 60 ngày", n: buckets.over60.length, cls: "text-orange-600 bg-orange-50 ring-orange-600/20" },
           { label: "> 90 ngày (kiểm tra ngay)", n: buckets.over90.length, cls: "text-rose-600 bg-rose-50 ring-rose-600/20" },
         ].map((b) => (
-          <div key={b.label} className="flex h-24 flex-col justify-between rounded-xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div key={b.label} className="flex h-24 flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{b.label}</p>
               <span className={`flex size-7 items-center justify-center rounded-lg ring-1 ring-inset ${b.cls}`}>
@@ -99,13 +99,13 @@ export default function GhostMachinesPage() {
           <table className={TABLE}>
             <thead className={THEAD}>
               <tr>
-                <th className={TH}>Hostname</th>
-                <th className={TH}>UUID</th>
-                <th className={TH}>Trạng thái</th>
-                <th className={TH}>Lần cuối online</th>
-                <th className={TH}>Enroll</th>
-                <th className={TH}>Mất liên lạc</th>
-                <th className={TH}></th>
+                <th scope="col" className={TH}>Hostname</th>
+                <th scope="col" className={TH}>UUID</th>
+                <th scope="col" className={TH}>Trạng thái</th>
+                <th scope="col" className={TH}>Lần cuối online</th>
+                <th scope="col" className={TH}>Enroll</th>
+                <th scope="col" className={TH}>Mất liên lạc</th>
+                <th scope="col" className={TH}></th>
               </tr>
             </thead>
             <tbody>
@@ -133,7 +133,7 @@ export default function GhostMachinesPage() {
                     <td className={TD}>
                       <Link
                         href={`/machines/${m.id}`}
-                        className="inline-flex items-center gap-0.5 text-xs font-medium text-[#635a5a] hover:underline"
+                        className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
                       >
                         Kiểm tra <ChevronRight className="size-3.5" />
                       </Link>

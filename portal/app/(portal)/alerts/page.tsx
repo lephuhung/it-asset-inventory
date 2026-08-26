@@ -17,9 +17,11 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   EmptyState,
   ErrorBanner,
   Field,
+  IconButton,
   Input,
   PageHeader,
   Select,
@@ -57,6 +59,8 @@ export default function AlertsPage() {
   const [targets, setTargets] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<AlertRule | null>(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     try {
@@ -122,13 +126,17 @@ export default function AlertsPage() {
     }
   };
 
-  const removeRule = async (rule: AlertRule) => {
-    if (!window.confirm(`Xóa rule "${rule.name}"?`)) return;
+  const removeRule = async () => {
+    if (!removing) return;
+    setRemoveBusy(true);
     try {
-      await api.delete(`/alert-rules/${rule.id}`);
+      await api.delete(`/alert-rules/${removing.id}`);
+      setRemoving(null);
       await load(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Xóa thất bại");
+    } finally {
+      setRemoveBusy(false);
     }
   };
 
@@ -194,19 +202,18 @@ export default function AlertsPage() {
                     </div>
                     <div className="flex items-center gap-1.5">
                       <button
+                        role="switch"
+                        aria-checked={r.enabled}
+                        aria-label={r.enabled ? `Tắt rule ${r.name}` : `Bật rule ${r.name}`}
                         onClick={() => void toggleRule(r)}
-                        className={`relative h-5 w-9 rounded-full transition-colors ${r.enabled ? "bg-emerald-500" : "bg-slate-300"}`}
+                        className={`relative h-6 w-10 cursor-pointer rounded-full transition-colors ${r.enabled ? "bg-emerald-500" : "bg-slate-300"}`}
                         title={r.enabled ? "Tắt rule" : "Bật rule"}
                       >
-                        <span className={`absolute top-0.5 size-4 rounded-full bg-white transition-all ${r.enabled ? "left-4.5 left-[18px]" : "left-0.5"}`} />
+                        <span className={`absolute top-1 size-4 rounded-full bg-white transition-all ${r.enabled ? "left-5" : "left-1"}`} />
                       </button>
-                      <button
-                        onClick={() => void removeRule(r)}
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                        title="Xóa rule"
-                      >
+                      <IconButton label={`Xóa rule ${r.name}`} onClick={() => setRemoving(r)} className="hover:bg-rose-50 hover:text-rose-600">
                         <Trash2 className="size-4" />
-                      </button>
+                      </IconButton>
                     </div>
                   </li>
                 );
@@ -258,7 +265,7 @@ export default function AlertsPage() {
                       type="checkbox"
                       checked={channels.includes(c)}
                       onChange={() => toggleChannel(c)}
-                      className="size-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      className="size-4 rounded border-slate-300 text-blue-600 focus:ring-brand-600"
                     />
                     {ALERT_CHANNEL_META[c]}
                   </label>
@@ -289,11 +296,11 @@ export default function AlertsPage() {
             <table className={TABLE}>
               <thead className={THEAD}>
                 <tr>
-                  <th className={TH}>Thời gian</th>
-                  <th className={TH}>Mức độ</th>
-                  <th className={TH}>Nội dung</th>
-                  <th className={TH}>Kênh</th>
-                  <th className={TH}>Gửi</th>
+                  <th scope="col" className={TH}>Thời gian</th>
+                  <th scope="col" className={TH}>Mức độ</th>
+                  <th scope="col" className={TH}>Nội dung</th>
+                  <th scope="col" className={TH}>Kênh</th>
+                  <th scope="col" className={TH}>Gửi</th>
                 </tr>
               </thead>
               <tbody>
@@ -324,6 +331,23 @@ export default function AlertsPage() {
           </div>
         )}
       </Card>
+
+      {/* Modal: xác nhận xóa rule */}
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        title="Xóa alert rule"
+        danger
+        loading={removeBusy}
+        confirmLabel="Xóa rule"
+        onConfirm={() => void removeRule()}
+        message={
+          <>
+            Rule <b>{removing?.name}</b> sẽ bị xóa vĩnh viễn — máy mới / mất liên lạc sẽ không còn
+            cảnh báo qua rule này.
+          </>
+        }
+      />
     </div>
   );
 }

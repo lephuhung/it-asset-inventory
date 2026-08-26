@@ -2,9 +2,10 @@
 
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { KeyRound, Monitor, ShieldCheck } from "lucide-react";
+import { KeyRound, ShieldCheck } from "lucide-react";
 import type { LoginResponse } from "@/lib/types";
 import { Button, Card, Field, Input } from "@/components/ui";
+import { LogoMark } from "@/components/logo";
 
 function LoginForm() {
   const router = useRouter();
@@ -66,8 +67,8 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-[#635a5a] shadow-lg shadow-[#635a5a]/25">
-            <Monitor className="size-7 text-white" />
+          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-lg bg-brand-600 shadow-lg">
+            <LogoMark size={28} className="text-white" />
           </div>
           <h1 className="text-xl font-bold tracking-tight text-slate-900">Asset Inventory</h1>
           <p className="mt-1 text-sm text-slate-500">
@@ -75,12 +76,12 @@ function LoginForm() {
           </p>
         </div>
 
-        <Card className="shadow-[0_8px_30px_rgba(15,23,42,0.08)]">
+        <Card className="shadow-xl">
           {requires2fa ? (
             <>
-              <div className="mb-5 flex items-start gap-3 rounded-lg border border-[#e8e8e8] bg-[#f5f5f5] p-3">
-                <ShieldCheck className="mt-0.5 size-5 shrink-0 text-[#635a5a]" />
-                <div className="text-sm text-[#3b3636]">
+              <div className="mb-5 flex items-start gap-3 rounded-lg border border-brand-100 bg-brand-50 p-3">
+                <ShieldCheck className="mt-0.5 size-5 shrink-0 text-brand-600" />
+                <div className="text-sm text-brand-800">
                   <p className="font-semibold">Xác thực 2 yếu tố (TOTP)</p>
                   <p className="mt-0.5 text-xs leading-relaxed">
                     Nhập mã 6 số từ ứng dụng xác thực (Google Authenticator / Authy / Microsoft
@@ -106,7 +107,7 @@ function LoginForm() {
                 <button
                   type="button"
                   onClick={() => setRequires2fa(false)}
-                  className="mt-3 w-full text-center text-xs text-slate-400 transition-colors hover:text-slate-600"
+                  className="mt-3 w-full cursor-pointer text-center text-xs text-slate-400 transition-colors hover:text-slate-600"
                 >
                   ← Đổi thông tin đăng nhập
                 </button>
