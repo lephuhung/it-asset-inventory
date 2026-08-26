@@ -13,9 +13,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_machine_id
-from app.core.config import settings
 from app.db.session import get_db
 from app.schemas import AgentConfigResponse
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -29,14 +29,13 @@ async def agent_config(
 
     `machine_cn` chỉ để xác thực agent hợp lệ (server từ chối request không có cert).
     """
-    # TODO(Phase 3): cho phép cấu hình theo org/machine override nếu cần
-    cfg = settings.agent_config_payload()
+    agent_cfg = await effective_agent_config(db)
     return AgentConfigResponse(
-        server_url=settings.agent_server_url,
-        heartbeat_interval_seconds=cfg["heartbeat_interval_seconds"],
-        heartbeat_jitter_seconds=cfg["heartbeat_jitter_seconds"],
-        online_ttl_seconds=cfg["online_ttl_seconds"],
-        inventory_interval_hours=cfg["inventory_interval_hours"],
-        renew_before_percent=cfg["renew_before_percent"],
+        server_url=agent_cfg["agent_server_url"],
+        heartbeat_interval_seconds=agent_cfg["heartbeat_interval_seconds"],
+        heartbeat_jitter_seconds=agent_cfg["heartbeat_jitter_seconds"],
+        online_ttl_seconds=agent_cfg["online_ttl_seconds"],
+        inventory_interval_hours=agent_cfg["inventory_interval_hours"],
+        renew_before_percent=agent_cfg["renew_before_percent"],
         server_time=datetime.now(UTC),
     )

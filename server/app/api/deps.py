@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 
 import jwt as pyjwt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,19 +109,25 @@ async def visible_org_ids(db: AsyncSession, user: User) -> set[str]:
 
 
 async def get_client_machine_id(
+    request: Request,
     x_ssl_client_verify: str | None = Header(default=None),
     x_ssl_client_cn: str | None = Header(default=None),
 ) -> str:
     """Đọc identity agent từ header nginx forward (mTLS).
 
     Nếu `require_agent_mtls_header=True` (prod), từ chối mọi request không qua nginx mTLS.
+    Dev (không nginx): agent tự gửi `X-Machine-Id` — header chỉ được chấp nhận khi
+    `require_agent_mtls_header=False`, prod vẫn bắt buộc X-SSL-Client-CN từ nginx.
     """
     if settings.require_agent_mtls_header and x_ssl_client_verify != "SUCCESS":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Thiếu chứng thực mTLS hợp lệ")
-    if x_ssl_client_cn is None:
+    cn = x_ssl_client_cn
+    if cn is None and not settings.require_agent_mtls_header:
+        # Dev không có nginx forward header → agent gửi machine_id trực tiếp
+        cn = request.headers.get("X-Machine-Id")
+    if cn is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Thiếu client cert CN")
     # CN dạng machine-<uuid> — lấy phần sau dấu gạch
-    cn = x_ssl_client_cn
     if cn.startswith("machine-"):
         return cn[len("machine-"):]
     return cn

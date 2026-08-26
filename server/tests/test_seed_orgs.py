@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from app.db.models import Organization, OrgType
 from app.db.seed_orgs import (
+    ROOT_ORG_NAME,
     SO_BAN_NGANH_NAMES,
     UBND_XA_NAMES,
     seed_all,
@@ -14,7 +15,9 @@ from app.db.seed_orgs import (
 
 
 async def _names_by_type(db, org_type: str) -> set[str]:
-    root = (await db.execute(select(Organization).where(Organization.name == "Root"))).scalar_one()
+    root = (
+        await db.execute(select(Organization).where(Organization.type == OrgType.ROOT.value))
+    ).scalars().one()
     rows = (
         (
             await db.execute(
@@ -48,6 +51,31 @@ async def test_seed_all_both_types(db):
     result = await seed_all(db)
     assert result["ubnd_xa"] == (len(UBND_XA_NAMES), 0)
     assert result["so_ban_nganh"] == (len(SO_BAN_NGANH_NAMES), 0)
+
+
+async def test_root_is_ubnd_tinh_ha_tinh(db):
+    """Root phải là “UBND tỉnh Hà Tĩnh” và chỉ duy nhất một root."""
+    await seed_all(db)
+    roots = (
+        await db.execute(select(Organization).where(Organization.type == OrgType.ROOT.value))
+    ).scalars().all()
+    assert len(roots) == 1
+    assert roots[0].name == ROOT_ORG_NAME
+
+
+async def test_seed_renames_legacy_root(db):
+    """DB cũ có root tên "Root" → seed đổi tên, KHÔNG tạo root thứ hai."""
+    legacy = Organization(name="Legacy Root", type=OrgType.ROOT.value)
+    db.add(legacy)
+    await db.commit()
+
+    await seed_all(db)
+    await db.refresh(legacy)
+    assert legacy.name == ROOT_ORG_NAME
+    roots = (
+        await db.execute(select(Organization).where(Organization.type == OrgType.ROOT.value))
+    ).scalars().all()
+    assert len(roots) == 1
 
 
 async def test_seed_is_idempotent(db):

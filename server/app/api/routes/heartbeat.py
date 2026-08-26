@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.db.models import Heartbeat, Machine, MachineStatus
 from app.db.session import get_db
 from app.schemas import HeartbeatRequest, HeartbeatResponse
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/api/heartbeat", tags=["heartbeat"])
 
@@ -78,7 +79,7 @@ async def heartbeat(
 
         await publish_machine_event(machine.id, MachineStatus.ONLINE.value, machine.hostname)
 
-    agent_cfg = settings.agent_config_payload()
+    agent_cfg = await effective_agent_config(db)
     return HeartbeatResponse(
         server_time=now,
         renew_after=now + timedelta(days=int(settings.client_cert_valid_days * 0.7)),

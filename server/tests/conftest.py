@@ -111,7 +111,7 @@ async def seeded_env(client, session_factory):
 
     from app.api.routes.auth import seed_admin
     from app.core.config import settings
-    from app.db.models import Organization, User
+    from app.db.models import Organization, OrgType, User
 
     async with session_factory() as s:
         await seed_admin(s)
@@ -119,8 +119,10 @@ async def seeded_env(client, session_factory):
             await s.execute(select(User).where(User.email == settings.seed_admin_email))
         ).scalar_one_or_none()
         org = (
-            await s.execute(select(Organization).where(Organization.name == "Root"))
-        ).scalar_one_or_none()
+            await s.execute(
+                select(Organization).where(Organization.type == OrgType.ROOT.value)
+            )
+        ).scalars().first()
 
         yield {
             "email": settings.seed_admin_email,

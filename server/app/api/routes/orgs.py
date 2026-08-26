@@ -16,7 +16,7 @@ from app.api.deps import get_current_user, is_super_admin, require_admin, visibl
 from app.core.audit import append_audit
 from app.db.models import Organization, OrgType, User
 from app.db.session import get_db
-from app.schemas import OrganizationCreate, OrganizationNode
+from app.schemas import OrganizationCreate, OrganizationNode, OrgMachineStat
 
 router = APIRouter(prefix="/api/orgs", tags=["orgs"])
 
@@ -107,3 +107,64 @@ async def create_org(
     )
     await db.commit()
     return _to_node(org)
+
+@router.get("/machine-stats", response_model=list[OrgMachineStat])
+async def org_machine_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Thống kê số máy theo tổ chức — tách máy có agent (đã heartbeat ≥ 1 lần)
+    và máy cách ly (chỉ có mặt qua import offline, không bao giờ heartbeat).
+
+    Máy `pending` (chờ duyệt enroll) liệt kê riêng vì chưa thuộc nhóm nào.
+    """
+    from sqlalchemy import case, func
+
+    from app.db.models import Heartbeat, Machine
+
+    visible = await visible_org_ids(db, user)
+    if not visible:
+        return []
+
+    agent_sq = select(Heartbeat.machine_id).distinct().subquery()
+    rows = (
+        await db.execute(
+            select(
+                Machine.org_id,
+                func.count().label("total"),
+                func.count(agent_sq.c.machine_id).label("with_agent"),
+                func.sum(case((Machine.status == "pending", 1), else_=0)).label("pending"),
+            )
+            .outerjoin(agent_sq, agent_sq.c.machine_id == Machine.id)
+            .where(Machine.org_id.in_(visible))
+            .group_by(Machine.org_id)
+        )
+    ).all()
+
+    orgs = {
+        o.id: o
+        for o in (
+            await db.execute(select(Organization).where(Organization.id.in_(visible)))
+        ).scalars()
+    }
+
+    stats: list[OrgMachineStat] = []
+    for org_id, total, with_agent, pending in rows:
+        org = orgs.get(org_id)
+        if org is None:
+            continue
+        p = int(pending or 0)
+        w = int(with_agent or 0)
+        stats.append(
+            OrgMachineStat(
+                org_id=org_id,
+                org_name=org.name,
+                org_type=org.type,
+                total=int(total),
+                with_agent=w,
+                isolated=int(total) - w - p,
+                pending=p,
+            )
+        )
+    stats.sort(key=lambda s: s.org_name)
+    return stats

@@ -140,19 +140,14 @@ async def logout(user: User = Depends(get_current_user), db: AsyncSession = Depe
     return {"ok": True}
 
 
-# Seed admin khi app khởi động (chỉ môi trường dev/khởi tạo)
 async def seed_admin(db: AsyncSession) -> None:
     existing = (await db.execute(select(User).where(User.email == settings.seed_admin_email))).scalar_one_or_none()
     if existing:
         return
-    from sqlalchemy import select as _s
+    from app.db.seed_orgs import get_or_create_root
 
-    from app.db.models import Organization, OrgType
-    org = (await db.execute(_s(Organization).where(Organization.name == "Root"))).scalar_one_or_none()
-    if org is None:
-        org = Organization(name="Root", type=OrgType.ROOT.value)
-        db.add(org)
-        await db.flush()
+    # Root chuẩn — "UBND tỉnh Hà Tĩnh" (tìm / đổi tên DB cũ / tạo mới nếu thiếu)
+    org = await get_or_create_root(db)
     user = User(
         org_id=org.id,
         full_name=settings.seed_admin_full_name,

@@ -20,6 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Organization, OrgType
 from app.db.session import AsyncSessionLocal
 
+# Tên tổ chức gốc — mọi đơn vị đều thuộc UBND tỉnh Hà Tĩnh
+ROOT_ORG_NAME = "UBND tỉnh Hà Tĩnh"
+
 # Danh sách UBND cấp xã — theo thứ tự yêu cầu khởi tạo
 UBND_XA_NAMES: list[str] = [
     "Thạch Lạc",
@@ -111,6 +114,32 @@ SO_BAN_NGANH_NAMES: list[str] = [
 ]
 
 
+async def get_or_create_root(db: AsyncSession) -> Organization:
+    """Lấy (hoặc tạo) org gốc — “UBND tỉnh Hà Tĩnh”.
+
+    - Ưu tiên tìm theo ``type=ROOT``; nếu DB cũ đang đặt tên "Root" thì
+      đổi tên luôn thay vì tạo thêm root thứ hai.
+    - Idempotent.
+    """
+    root = (
+        await db.execute(select(Organization).where(Organization.type == OrgType.ROOT.value))
+    ).scalars().first()
+    if root is None:
+        # Fallback: DB cũ chỉ có tên, chưa set đúng type
+        root = (
+            await db.execute(select(Organization).where(Organization.name == ROOT_ORG_NAME))
+        ).scalar_one_or_none()
+    if root is None:
+        root = Organization(name=ROOT_ORG_NAME, type=OrgType.ROOT.value)
+        db.add(root)
+        await db.flush()
+    elif root.name != ROOT_ORG_NAME:
+        # Đổi tên root cũ (VD: "Root") thành tên chuẩn
+        root.name = ROOT_ORG_NAME
+        await db.flush()
+    return root
+
+
 async def _seed_orgs(
     db: AsyncSession, names: list[str], org_type: str
 ) -> tuple[int, int]:
@@ -119,12 +148,8 @@ async def _seed_orgs(
     Returns:
         (created, skipped) — số tổ chức mới tạo và số đã tồn tại.
     """
-    # Đảm bảo org gốc Root (type=root) — seed_admin cũng tạo nếu thiếu
-    root = (await db.execute(select(Organization).where(Organization.name == "Root"))).scalar_one_or_none()
-    if root is None:
-        root = Organization(name="Root", type=OrgType.ROOT.value)
-        db.add(root)
-        await db.flush()
+    # Đảm bảo org gốc "UBND tỉnh Hà Tĩnh" (type=root)
+    root = await get_or_create_root(db)
 
     existing = {
         o.name

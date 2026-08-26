@@ -202,7 +202,9 @@ def _disks_label(spec: Any | None) -> str:
     for d in spec.disks:
         model = d.get("model", "")
         cap = d.get("capacity_gb")
-        parts.append(f"{model} {cap}GB".strip())
+        if cap is None and d.get("size_bytes"):
+            cap = round(d["size_bytes"] / (1024.0 ** 3), 0)  # mới: size_bytes → GB
+        parts.append(f"{model} {cap}GB".strip() if cap else str(model))
     return "; ".join(parts) if parts else ""
 
 

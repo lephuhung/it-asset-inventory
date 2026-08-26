@@ -26,6 +26,8 @@ from app.db.models import Machine, MachineSpec, User
 from app.db.session import get_db
 from app.schemas import OfflineImportRequest, OfflineImportResponse
 from app.services.fingerprint import compute_weighted_id, is_same_machine
+from app.services.inventory_normalize import derive_os_fields
+from app.services.inventory_sync import upsert_current_and_software
 
 logger = logging.getLogger("offline_import")
 router = APIRouter(prefix="/api/offline", tags=["offline"])
@@ -51,8 +53,9 @@ def _spec_from_payload(spec: dict | None) -> dict:
     if not spec:
         return {}
     keys = [
-        "os_name", "os_version", "os_build", "os_arch", "cpu", "ram_gb", "disks",
-        "gpu", "network", "logged_user", "security", "config_hash", "mainboard", "bios",
+        "os_name", "os_version", "os_build", "os_arch", "os_installed_at", "activation_status",
+        "cpu", "ram_gb", "disks", "gpu", "network", "logged_user", "security", "config_hash",
+        "mainboard", "bios", "installed_software",
     ]
     return {k: spec[k] for k in keys if k in spec and spec[k] is not None}
 
@@ -137,12 +140,42 @@ async def import_offline(
 
     spec_data = _spec_from_payload(payload.get("spec") or {})
     if spec_data:
+        # Chuẩn hóa OS phía server (agent/offline file không cần đổi)
+        product, release, family = derive_os_fields(
+            spec_data.get("os_name"), spec_data.get("os_version"), spec_data.get("os_build")
+        )
         db.add(
             MachineSpec(
                 machine_id=machine.id,
+                os_product=product,
+                os_release=release,
+                os_family=family,
                 **spec_data,
                 collected_at=exported_dt,
             )
+        )
+        # Đồng bộ bảng "hiện tại" cùng transaction
+        await upsert_current_and_software(
+            db,
+            machine.id,
+            os_name=spec_data.get("os_name"),
+            os_version=spec_data.get("os_version"),
+            os_build=spec_data.get("os_build"),
+            os_arch=spec_data.get("os_arch"),
+            os_installed_at=spec_data.get("os_installed_at"),
+            activation_status=spec_data.get("activation_status"),
+            cpu=spec_data.get("cpu"),
+            ram_gb=spec_data.get("ram_gb"),
+            disks=spec_data.get("disks"),
+            gpu=spec_data.get("gpu"),
+            mainboard=spec_data.get("mainboard"),
+            bios=spec_data.get("bios"),
+            network=spec_data.get("network"),
+            logged_user=spec_data.get("logged_user"),
+            security=spec_data.get("security"),
+            installed_software=spec_data.get("installed_software"),
+            collected_at=exported_dt,
+            config_hash=spec_data.get("config_hash"),
         )
 
     await append_audit(

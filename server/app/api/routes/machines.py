@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_admin, visible_org_ids
 from app.core.audit import append_audit
 from app.core.config import settings
-from app.db.models import EnrollToken, Heartbeat, Machine, MachineSpec, Organization, User
+from app.db.models import (
+    EnrollToken,
+    Heartbeat,
+    Machine,
+    MachineCurrent,
+    MachineSpec,
+    Organization,
+    User,
+)
 from app.db.session import get_db
 from app.schemas import MachineDecision, MachineDetail, MachineLifecycleUpdate, MachineListItem
 from app.services.phone_encryption import mask_phone
@@ -49,6 +57,18 @@ async def list_machines(
         like = f"%{q}%"
         query = query.where(Machine.hostname.ilike(like) | Machine.machine_uuid.ilike(like))
     rows = (await db.execute(query.order_by(Machine.enrolled_at.desc()))).scalars().all()
+    ids = [m.id for m in rows]
+    # user Windows đang đăng nhập — lấy từ machine_current (snapshot mới nhất, có index PK)
+    logged: dict[str, str | None] = {}
+    if ids:
+        latest_rows = (
+            await db.execute(
+                select(MachineCurrent.machine_id, MachineCurrent.logged_user).where(
+                    MachineCurrent.machine_id.in_(ids)
+                )
+            )
+        ).all()
+        logged = {str(mid): lu for mid, lu in latest_rows}
     return [
         MachineListItem(
             id=m.id,
@@ -61,6 +81,7 @@ async def list_machines(
             enrolled_at=m.enrolled_at,
             org_id=m.org_id,
             assigned_user_id=m.assigned_user_id,
+            logged_user=logged.get(str(m.id)),
         )
         for m in rows
     ]
@@ -149,12 +170,20 @@ async def get_machine(
                 "os_name": latest.os_name,
                 "os_version": latest.os_version,
                 "os_build": latest.os_build,
+                "os_arch": latest.os_arch,
+                "os_installed_at": latest.os_installed_at,
+                "activation_status": latest.activation_status,
                 "cpu": latest.cpu,
                 "ram_gb": latest.ram_gb,
                 "disks": latest.disks,
                 "gpu": latest.gpu,
+                "mainboard": latest.mainboard,
+                "bios": latest.bios,
                 "network": latest.network,
                 "logged_user": latest.logged_user,
+                "installed_software": latest.installed_software,
+                "security": latest.security,
+                "config_hash": latest.config_hash,
                 "collected_at": latest.collected_at,
             }
             if latest
