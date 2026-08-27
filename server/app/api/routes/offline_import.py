@@ -58,10 +58,16 @@ def _verify_signature(payload: dict, signature_b64: str, public_key_pem: str) ->
 def _spec_from_payload(spec: dict | None) -> dict:
     if not spec:
         return {}
+    # Lưu ý: `is_vm` KHÔNG nằm trong danh sách này — MachineSpec không có cột
+    # is_vm (chỉ Machine + MachineCurrent có). is_vm được đọc trực tiếp từ
+    # inner_spec ở dưới và truyền riêng vào upsert_current_and_software + set
+    # trên Machine.
     keys = [
         "os_name", "os_version", "os_build", "os_arch", "os_installed_at", "activation_status",
         "cpu", "ram_gb", "disks", "gpu", "network", "logged_user", "security", "config_hash",
         "mainboard", "bios", "installed_software",
+        # Phase 3: cột mới trên MachineSpec + MachineCurrent + Machine
+        "public_ip",
     ]
     return {k: spec[k] for k in keys if k in spec and spec[k] is not None}
 
@@ -190,6 +196,18 @@ async def import_offline(
     # Nếu payload có bọc trong key "spec" thì lấy từ spec, nếu không thì lấy trực tiếp từ payload
     inner_spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else payload
     spec_data = _spec_from_payload(inner_spec)
+
+    # is_vm không nằm trong spec_data (vì MachineSpec không có cột này).
+    # Đọc trực tiếp từ inner_spec để set Machine + truyền vào upsert_current_and_software.
+    raw_is_vm = inner_spec.get("is_vm")
+    if raw_is_vm is not None:
+        machine.is_vm = bool(raw_is_vm)
+
+    # Cập nhật public_ip machine-level từ spec_data (đồng bộ với online path —
+    # inventory.py cũng set machine.public_ip từ heartbeat).
+    if "public_ip" in spec_data:
+        machine.public_ip = spec_data["public_ip"]
+
     if spec_data:
         # Chuẩn hóa OS phía server (agent/offline file không cần đổi)
         product, release, family = derive_os_fields(
@@ -223,6 +241,7 @@ async def import_offline(
             bios=spec_data.get("bios"),
             network=spec_data.get("network"),
             logged_user=spec_data.get("logged_user"),
+            is_vm=raw_is_vm,
             security=spec_data.get("security"),
             installed_software=spec_data.get("installed_software"),
             public_ip=spec_data.get("public_ip"),

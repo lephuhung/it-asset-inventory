@@ -205,3 +205,93 @@ async def test_download_offline_package_route(client):
         assert "install-offline.cmd" in names
         assert "install-offline.ps1" in names
         assert "offline_config.json" in names
+
+
+async def test_offline_import_propagates_is_vm_and_public_ip(client, seeded_env, session_factory):
+    """Regression: _spec_from_payload() trước đây lọc mất is_vm & public_ip → 2 trường này
+    không được set trên Machine / MachineSpec / MachineCurrent sau offline import.
+
+    Test này đảm bảo payload có is_vm=True và public_ip="203.0.113.42" được truyền
+    tới cả 3 bảng (machines, machine_specs, machine_current).
+    """
+    from sqlalchemy import select
+
+    from app.db.models import Machine, MachineCurrent, MachineSpec
+
+    # Login
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    assert r.status_code == 200
+    token = r.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Lấy server public key
+    r_pub = await client.get("/download/server_public_key.pem")
+    assert r_pub.status_code == 200
+    server_pub_pem = r_pub.text
+
+    agent_key = ec.generate_private_key(ec.SECP256R1())
+    payload = {
+        "machine_uuid": "offline-isvm-pubip-01",
+        "hostname": "PC-AIRGAP-VM-01",
+        "org_id": seeded_env["org_id"],
+        "fingerprint": {"smbios_uuid": "AIRGAP-VM-UUID", "machine_guid": "GUID-VM-001"},
+        "spec": {
+            "os_name": "Windows 11 Pro",
+            "cpu": {"model": "Hyper-V VM"},
+            "ram_gb": 8.0,
+            "is_vm": True,                # ← trường bị mất trước fix
+            "public_ip": "203.0.113.42",  # ← trường bị mất trước fix
+        },
+        "exported_at": datetime.now(UTC).isoformat(),
+    }
+
+    zip_bytes = _create_mock_offline_bundle(payload, agent_key, server_pub_pem)
+    files = {"file": ("INVENTORY_VM.zip", zip_bytes, "application/zip")}
+    r_import = await client.post("/api/offline/import", files=files, headers=headers)
+    assert r_import.status_code == 200, r_import.text
+    machine_id = uuid.UUID(r_import.json()["machine_id"])
+
+    # Verify trên cả 3 bảng — giá trị phải lan truyền đúng
+    async with session_factory() as s:
+        m = (await s.execute(select(Machine).where(Machine.id == machine_id))).scalar_one()
+        assert m.is_vm is True, f"Machine.is_vm is {m.is_vm!r}, expected True"
+        assert m.public_ip == "203.0.113.42", f"Machine.public_ip is {m.public_ip!r}"
+
+        spec = (await s.execute(
+            select(MachineSpec).where(MachineSpec.machine_id == machine_id).order_by(MachineSpec.id.desc())
+        )).scalars().first()
+        assert spec is not None
+        # MachineSpec không có cột is_vm (chỉ Machine + MachineCurrent), nhưng có public_ip
+        assert spec.public_ip == "203.0.113.42", f"MachineSpec.public_ip is {spec.public_ip!r}"
+
+        cur = (await s.execute(select(MachineCurrent).where(MachineCurrent.machine_id == machine_id))).scalar_one()
+        assert cur.is_vm is True, f"MachineCurrent.is_vm is {cur.is_vm!r}"
+        assert cur.public_ip == "203.0.113.42", f"MachineCurrent.public_ip is {cur.public_ip!r}"
+
+
+async def test_spec_from_payload_includes_public_ip_excludes_is_vm():
+    """Unit test _spec_from_payload() — public_ip được include (vào MachineSpec),
+    is_vm KHÔNG được include (MachineSpec không có cột này — đọc riêng ở route).
+    """
+    from app.api.routes.offline_import import _spec_from_payload
+
+    spec = {
+        "os_name": "Win 11",
+        "is_vm": True,
+        "public_ip": "198.51.100.7",
+        "logged_user": "alice",
+    }
+    out = _spec_from_payload(spec)
+    assert "public_ip" in out, f"public_ip must be in spec_data, got keys={list(out)}"
+    assert out["public_ip"] == "198.51.100.7"
+    # is_vm KHÔNG được trả về (route đọc riêng từ inner_spec)
+    assert "is_vm" not in out, f"is_vm must NOT be in spec_data (MachineSpec không có cột này)"
+    # vẫn giữ các field cũ
+    assert out["os_name"] == "Win 11"
+    assert out["logged_user"] == "alice"
+
+    # None bị filter (giữ hành vi cũ)
+    assert _spec_from_payload({"public_ip": None}) == {}
