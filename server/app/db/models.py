@@ -459,5 +459,6 @@ class AgentConfigOverride(Base):
     heartbeat_jitter_seconds: Mapped[int | None] = mapped_column(nullable=True)
     inventory_interval_hours: Mapped[int | None] = mapped_column(nullable=True)
     agent_server_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # IP/Domain agent đẩy dữ liệu về
+    portal_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # IP/Domain Portal công khai — dùng cho install_command + enroll_url
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)

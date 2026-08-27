@@ -23,12 +23,13 @@ from app.schemas import (
     TokenRevokeRequest,
 )
 from app.services.phone_encryption import encrypt_phone, mask_phone
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/api/tokens", tags=["tokens"])
 
 
-def _install_command(token: str) -> str:
-    return f'powershell -EP Bypass -c "irm {settings.portal_url}/i/{token} | iex"'
+def _install_command(token: str, portal_url: str) -> str:
+    return f'powershell -EP Bypass -c "irm {portal_url}/i/{token} | iex"'
 
 
 @router.post("/bulk", response_model=BulkTokenResponse)
@@ -44,6 +45,8 @@ async def create_tokens_bulk(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền sinh token cho tổ chức này")
 
     expires = datetime.now(UTC) + timedelta(hours=body.ttl_hours)
+    agent_cfg = await effective_agent_config(db)
+    portal_url = agent_cfg["portal_url"]
     tokens_out: list[TokenCreateResponse] = []
     for item in body.items:
         token = generate_enroll_token()
@@ -62,7 +65,7 @@ async def create_tokens_bulk(
         )
         db.add(row)
         tokens_out.append(
-            TokenCreateResponse(token=token, install_command=_install_command(token), expires_at=expires)
+            TokenCreateResponse(token=token, install_command=_install_command(token, portal_url), expires_at=expires)
         )
     await append_audit(
         db,
@@ -113,9 +116,9 @@ async def create_token(
     await db.commit()
 
     # install command — server render install.ps1 động tại /i/{token}
-    from app.core.config import settings
+    agent_cfg = await effective_agent_config(db)
 
-    command = f'powershell -EP Bypass -c "irm {settings.portal_url}/i/{token} | iex"'
+    command = _install_command(token, agent_cfg["portal_url"])
     return TokenCreateResponse(token=token, install_command=command, expires_at=expires)
 
 

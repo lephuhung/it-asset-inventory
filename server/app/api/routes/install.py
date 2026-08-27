@@ -51,7 +51,7 @@ async def render_install_script(token: str, db: AsyncSession = Depends(get_db)):
     template = jinja_env.get_template("install.ps1.j2")
     script = template.render(
         token=token,
-        portal_url=settings.portal_url,
+        portal_url=agent_cfg["portal_url"],
         agent_server_url=agent_cfg["agent_server_url"],
     )
     return PlainTextResponse(content=script, media_type="text/plain")

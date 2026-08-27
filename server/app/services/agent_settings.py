@@ -51,6 +51,9 @@ async def effective_agent_config(db: AsyncSession) -> dict:
     payload["agent_server_url"] = (
         ov.agent_server_url if ov is not None and ov.agent_server_url else settings.agent_server_url
     )
+    payload["portal_url"] = (
+        ov.portal_url if ov is not None and ov.portal_url else settings.portal_url
+    )
     return payload
 
 

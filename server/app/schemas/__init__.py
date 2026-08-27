@@ -686,6 +686,7 @@ class AgentSettingsUpdate(BaseModel):
     heartbeat_jitter_seconds: int | None = Field(default=None, ge=0, le=600)
     inventory_interval_hours: int | None = Field(default=None, ge=1, le=168)
     agent_server_url: str | None = Field(default=None, max_length=512)
+    portal_url: str | None = Field(default=None, max_length=512)
 
 
 class AgentSettingsOut(BaseModel):
@@ -698,6 +699,7 @@ class AgentSettingsOut(BaseModel):
     inventory_interval_hours: int
     renew_before_percent: int
     agent_server_url: str
+    portal_url: str
 
     # Giá trị mặc định env (để so sánh / hoàn tác)
     defaults: dict[str, int | str]

@@ -32,6 +32,7 @@ from app.schemas import (
     TokenCreateResponse,
 )
 from app.services.phone_encryption import encrypt_phone
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/api/self-service", tags=["self-service"])
 limiter = Limiter(key_func=get_remote_address)
@@ -41,8 +42,8 @@ def _make_code() -> str:
     return secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
 
 
-def _install_command(token: str) -> str:
-    return f'powershell -EP Bypass -c "irm {settings.portal_url}/i/{token} | iex"'
+def _install_command(token: str, portal_url: str) -> str:
+    return f'powershell -EP Bypass -c "irm {portal_url}/i/{token} | iex"'
 
 
 # ── Admin: quản lý link ─────────────────────────────────────────
@@ -118,12 +119,13 @@ async def _to_out(db: AsyncSession, link: SelfServiceLink) -> SelfServiceLinkOut
     org = (
         await db.execute(select(Organization).where(Organization.id == link.org_id))
     ).scalar_one_or_none()
+    agent_cfg = await effective_agent_config(db)
     return SelfServiceLinkOut(
         id=link.id,
         org_id=link.org_id,
         org_name=org.name if org else None,
         code=link.code,
-        url=f"{settings.portal_url}/enroll/{link.code}",
+        url=f"{agent_cfg['portal_url']}/enroll/{link.code}",
         enabled=link.enabled,
         created_at=link.created_at,
     )
@@ -184,4 +186,5 @@ async def claim(
         ip=request.client.host if request.client else None,
     )
     await db.commit()
-    return TokenCreateResponse(token=token, install_command=_install_command(token), expires_at=row.expires_at)
+    agent_cfg = await effective_agent_config(db)
+    return TokenCreateResponse(token=token, install_command=_install_command(token, agent_cfg["portal_url"]), expires_at=row.expires_at)

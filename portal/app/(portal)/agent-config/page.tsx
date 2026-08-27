@@ -16,6 +16,7 @@ interface AgentSettings {
   inventory_interval_hours: number;
   renew_before_percent: number;
   agent_server_url: string;
+  portal_url: string;
   defaults: Record<string, number | string>;
   overridden: Record<string, boolean>;
   updated_at: string | null;
@@ -58,6 +59,7 @@ export default function AgentConfigPage() {
   const [jitter, setJitter] = useState("");
   const [invHours, setInvHours] = useState("");
   const [serverUrl, setServerUrl] = useState("");
+  const [portalUrl, setPortalUrl] = useState("");
 
   const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin_global";
 
@@ -69,6 +71,7 @@ export default function AgentConfigPage() {
       setJitter(String(s.overridden.heartbeat_jitter_seconds ? s.heartbeat_jitter_seconds : ""));
       setInvHours(String(s.overridden.inventory_interval_hours ? s.inventory_interval_hours : ""));
       setServerUrl(s.agent_server_url);
+      setPortalUrl(s.portal_url);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được cấu hình agent");
@@ -90,6 +93,7 @@ export default function AgentConfigPage() {
         heartbeat_jitter_seconds: jitter === "" ? null : Number(jitter),
         inventory_interval_hours: invHours === "" ? null : Number(invHours),
         agent_server_url: serverUrl.trim(),
+        portal_url: portalUrl.trim(),
       });
       setSavedMsg("Đã lưu cấu hình — agent sẽ tự nhận khi heartbeat hoặc gọi /api/agent/config tiếp theo.");
       await load();
@@ -106,7 +110,7 @@ export default function AgentConfigPage() {
     <div>
       <PageHeader
         title="Cấu hình Agent"
-        description="Tham số agent tải về sau khi cài đặt: tần suất heartbeat, chu kỳ inventory, IP/Domain server đẩy dữ liệu"
+        description="Tham số agent tải về sau khi cài đặt: tần suất heartbeat, chu kỳ inventory, IP/Domain Portal + server đẩy dữ liệu"
         actions={
           <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Nạp lại
@@ -157,6 +161,12 @@ export default function AgentConfigPage() {
               >
                 <Input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://agent.example.gov.vn" required />
               </Field>
+              <Field
+                label="IP / Domain Portal công khai (link copy cho user)"
+                hint="URL dùng khi sinh token + self-service để nhúng vào lệnh cài (`irm <URL>/i/<token> | iex`). User copy lệnh và chạy trên máy từ xa — phải là IP/domain server thật, KHÔNG phải 127.0.0.1. VD: http://10.10.0.241:3003"
+              >
+                <Input value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} placeholder="http://10.10.0.241:3003" required />
+              </Field>
             </div>
 
             {isSuperAdmin && (
@@ -184,6 +194,18 @@ export default function AgentConfigPage() {
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Gia hạn cert trước</dt>
                 <dd className="font-medium text-slate-900">{data?.renew_before_percent}% vòng đời</dd>
+              </div>
+              <div className="flex flex-col gap-1">
+                <dt className="text-slate-500">Portal URL (lệnh copy)</dt>
+                <dd className="break-all font-mono text-[12px] font-medium text-slate-900" title={data?.portal_url}>
+                  {data?.portal_url}
+                </dd>
+              </div>
+              <div className="flex flex-col gap-1">
+                <dt className="text-slate-500">Agent server URL (mTLS)</dt>
+                <dd className="break-all font-mono text-[12px] font-medium text-slate-900" title={data?.agent_server_url}>
+                  {data?.agent_server_url}
+                </dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-slate-500">Cập nhật lần cuối</dt>

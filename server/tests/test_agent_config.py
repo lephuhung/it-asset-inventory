@@ -230,3 +230,114 @@ async def test_compute_agent_config_hash_ignores_extra_keys():
     h1 = compute_agent_config_hash(cfg)
     h2 = compute_agent_config_hash({**cfg, "online_ttl_seconds": 180, "extra_field": "x"})
     assert h1 == h2
+
+# ── portal_url override: lệnh copy cho token + self-service ────
+
+
+async def test_portal_url_defaults_from_env(client, seeded_env):
+    """Khi chưa override, portal_url trong GET /api/agent-settings = env `PORTAL_URL`."""
+    r = await client.get(
+        "/api/agent-settings",
+        headers={"Authorization": f"Bearer {(await client.post('/api/auth/login', json={'email': seeded_env['email'], 'password': seeded_env['password']})).json()['access_token']}"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["portal_url"] == settings.portal_url
+    assert data["overridden"].get("portal_url") is False or "portal_url" not in data["overridden"]
+
+
+async def test_portal_url_override_used_in_install_command(client, seeded_env):
+    """Super Admin override portal_url → lệnh install_command sinh ra dùng URL mới, không phải 127.0.0.1."""
+    # Login Super Admin
+    sa = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    sa_tok = sa.json()["access_token"]
+
+    new_portal = "http://10.10.0.241:3003"
+    r = await client.put(
+        "/api/agent-settings",
+        headers={"Authorization": f"Bearer {sa_tok}"},
+        json={"portal_url": new_portal},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["portal_url"] == new_portal
+    assert r.json()["overridden"]["portal_url"] is True
+
+    # Sinh token enroll — install_command phải dùng URL mới
+    admin = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    tok = admin.json()["access_token"]
+    r = await client.post(
+        "/api/tokens",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"org_id": seeded_env["org_id"], "full_name": "Portal URL Test", "ttl_hours": 72},
+    )
+    assert r.status_code == 200, r.text
+    cmd = r.json()["install_command"]
+    assert new_portal in cmd, f"install_command phải chứa URL mới, got: {cmd}"
+    assert "127.0.0.1" not in cmd or "127.0.0.1:3003" == new_portal, (
+        f"install_command KHÔNG được dùng 127.0.0.1 nếu admin đã override: {cmd}"
+    )
+
+    # GET /i/{token} → render install.ps1 cũng phải có URL mới
+    raw_token = r.json()["token"]
+    r2 = await client.get(f"/i/{raw_token}")
+    assert r2.status_code == 200, r2.text
+    assert new_portal in r2.text, "install.ps1 phải chứa URL mới"
+
+
+async def test_portal_url_override_used_in_self_service_url(client, seeded_env):
+    """Override portal_url → URL của self-service link cũng dùng URL mới."""
+    sa = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    sa_tok = sa.json()["access_token"]
+    new_portal = "https://inventory.example.gov.vn"
+    await client.put(
+        "/api/agent-settings",
+        headers={"Authorization": f"Bearer {sa_tok}"},
+        json={"portal_url": new_portal},
+    )
+
+    admin = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    tok = admin.json()["access_token"]
+    r = await client.post(
+        "/api/self-service/links",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={"org_id": seeded_env["org_id"]},
+    )
+    assert r.status_code == 200, r.text
+    url = r.json()["url"]
+    assert url.startswith(new_portal + "/enroll/"), f"Self-service URL phải bắt đầu bằng portal_url mới, got: {url}"
+
+
+async def test_portal_url_clear_override_reverts_to_env(client, seeded_env):
+    """Set override = giá trị mặc định env → DB row bị xóa override (portal hiển thị 'mặc định')."""
+    sa = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    sa_tok = sa.json()["access_token"]
+    env_value = settings.portal_url
+    # Set khác env
+    await client.put(
+        "/api/agent-settings",
+        headers={"Authorization": f"Bearer {sa_tok}"},
+        json={"portal_url": "http://different.example.com:3000"},
+    )
+    # Set lại = env → clear override
+    r = await client.put(
+        "/api/agent-settings",
+        headers={"Authorization": f"Bearer {sa_tok}"},
+        json={"portal_url": env_value},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["portal_url"] == env_value
