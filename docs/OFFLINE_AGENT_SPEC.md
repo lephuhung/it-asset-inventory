@@ -7,6 +7,8 @@
 > Người dùng cuối tại máy cách ly **KHÔNG cần gõ lệnh PowerShell, KHÔNG cần nhập tham số `-Token` hay `-Endpoints`**.
 > Chỉ cần **nháy đúp chuột vào file `install-offline` trên USB**, hệ thống tự động cài đặt, thu thập cấu hình, ký số ECDSA, mã hóa bằng Server Public Key và xuất ra **1 file ZIP duy nhất**.
 > Backend giải mã, kiểm tra chữ ký số và tự động parse dữ liệu cập nhật hệ thống.
+>
+> **Cập nhật v2.1 (sau Phase 4)**: Agent trên máy cách ly **chỉ dùng `--export-bundle`** để xuất gói ZIP đã mã hoá. Mọi bước CSR / cert / token **đều KHÔNG cần** trên máy cách ly — server dùng fingerprint phần cứng để định danh máy khi nhận ZIP. Xem chi tiết ở mục 1B bên dưới.
 
 ---
 
@@ -59,13 +61,35 @@ Script tải MSI từ `GET /download/agent.msi`, kiểm tra SHA-256 + Authentico
 > **Dùng cho:** máy cách ly hoàn toàn (air-gapped), không có mạng tới Server.
 
 #### Bước 1: Chuẩn bị USB (thực hiện trên máy Admin có mạng)
-Admin vào Portal bấm **"Tải bộ cài máy cách ly"** (tải file `offline-package.zip`), giải nén vào thư mục gốc của USB. Trên USB gồm các file:
-- `install-offline.cmd`: Launcher nháy đúp chuột (tự động bypass ExecutionPolicy và gọi PowerShell Admin).
-- `install-offline.ps1`: Script điều phối cài đặt, thu thập, ký số và đóng gói mã hóa.
-- `OrgInventoryAgent.msi`: Bộ cài Agent đã ký số Authenticode.
-- `OrgInventoryAgent.msi.sha256`: Mã băm SHA-256 để verify bộ cài.
-- `server_public_key.pem`: Khóa công khai của Server để mã hóa file xuất ra.
-- `offline_config.json`: File cấu hình chứa `org_id` do Portal sinh sẵn cho đơn vị.
+
+Admin vào Portal bấm **"Tải bộ cài máy cách ly"** (tải file `offline-package.zip` qua
+endpoint `GET /download/offline-package.zip`), giải nén vào thư mục gốc của USB.
+
+> **Lưu ý quan trọng**: File ZIP tải về **KHÔNG được đặt password** (yêu cầu nghiệp vụ —
+> operator copy qua USB dễ dàng, không cần nhớ password). Tính bí mật dựa vào **mã hoá
+> hybrid AES-256-GCM + RSA-OAEP** ở file ZIP do agent sinh ra SAU. Test
+> `test_offline_package_zip_is_not_password_protected` chặn regression.
+
+Trên USB gồm các file:
+
+| File | Bắt buộc? | Vai trò |
+|---|---|---|
+| `install-offline.cmd` | ✅ | Launcher nháy đúp chuột (tự động bypass ExecutionPolicy + gọi PowerShell Admin) |
+| `install-offline.ps1` | ✅ | Script điều phối cài đặt, thu thập, ký số và đóng gói mã hoá |
+| `server_public_key.pem` | ✅ | Khoá công khai RSA-2048 của Server — agent dùng để mã hoá ZIP kết quả |
+| `offline_config.json` | ⚪ | File cấu hình mẫu (admin điền `token` nếu muốn) |
+| `OrgInventoryAgent.msi` | ⚪ | Bộ cài Agent đã ký số Authenticode (nếu server build sẵn) |
+| `OrgInventoryAgent.msi.sha256` | ⚪ | Mã băm SHA-256 để verify MSI |
+
+> **Tại sao KHÔNG cần `--enroll-offline` trên máy cách ly?**
+> Phiên bản hiện tại của agent **chưa implement** flag `--enroll-offline` (xem
+> `agent/src/OrgInventoryAgent/Program.cs`). Flow offline đã được tự động hoá hoàn toàn
+> qua `install-offline.cmd`: agent chỉ chạy `--export-bundle` để sinh ZIP đã mã hoá +
+> ký số. Khi admin upload ZIP lên server, server dùng **fingerprint phần cứng** (SMBIOS
+> UUID / MachineGuid / Mainboard Serial) trong payload để định danh máy — không cần
+> CSR, không cần cert, không cần client cert mTLS. Máy cách ly sẽ có trạng thái
+> `status=offline` (không có heartbeat) nhưng có đầy đủ lịch sử cấu hình trong
+> `machine_specs`.
 
 #### Bước 2: Thao tác trên máy cách ly (Người dùng / Cán bộ nghiệp vụ)
 1. Cắm USB vào máy cách ly.
@@ -186,4 +210,6 @@ bundle_content["public_key"].verify(bundle_content["signature"], digest, ec.ECDS
 
 ## 4. Tương thích ngược (Backward Compatibility)
 
-Hệ thống vẫn giữ nguyên khả năng tiếp nhận payload JSON phẳng qua `POST /api/offline/import` (`{ payload, signature_b64, public_key_pem }`) và endpoint `POST /api/offline/enroll` phục vụ cho các công cụ script kiểm thử hoặc tự động hóa của quản trị viên cấp cao.
+Hệ thống vẫn giữ nguyên khả năng tiếp nhận payload JSON phẳng qua `POST /api/offline/import` (`{ payload, signature_b64, public_key_pem }`) phục vụ cho các công cụ script kiểm thử hoặc tự động hóa của quản trị viên cấp cao.
+
+> **Lưu ý (sau Phase 4 cleanup)**: Endpoint `/api/offline/enroll` (admin proxy CSR) **đã bị loại bỏ** vì agent không có flag `--enroll-offline` để sinh CSR và `--install-cert` để cài cert. Toàn bộ flow offline đã được tự động hoá qua `--export-bundle` → upload ZIP.

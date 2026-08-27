@@ -212,12 +212,18 @@ public sealed class PendingItem
     public int Attempts { get; init; }
 }
 
-/// <summary>Trạng thái nội bộ agent (thời điểm gửi inventory cuối, config hash đã gửi).</summary>
+/// <summary>Trạng thái nội bộ agent (thời điểm gửi inventory cuối, config hash đã gửi,
+/// hash cấu hình agent lần cuối server đồng bộ — để so sánh trong heartbeat).</summary>
 public sealed class AgentState
 {
     private static readonly object Lock = new();
     public string? LastInventoryAt { get; set; }
     public string? LastInventoryConfigHash { get; set; }
+
+    /// <summary>Hash SHA-256 hex của cấu hình agent server trả về lần cuối (heartbeat hoặc /api/agent/config).
+    /// HeartbeatService so sánh với `agent_config_hash` server trả về:
+    /// nếu KHÁC → gọi ngay ConfigSyncService để refresh; nếu khớp → heartbeat bình thường.</summary>
+    public string? LastAgentConfigHash { get; set; }
 
     public static AgentState Load()
     {

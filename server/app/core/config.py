@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # URL công khai agent dùng cho kênh mTLS (nginx agent block) — khác portal_url
     agent_server_url: str = "https://agent.example.gov.vn"
 
+    # Máy offline liên tục quá N ngày (không heartbeat / không upload ZIP mới)
+    # → chuyển sang `lost` (máy mất kết nối). Hiển thị trong trang /ghost-machines.
+    lost_after_days: int = 15
+
     # JWT
     secret_key: str = Field(default="CHANGE_ME", min_length=16)
     jwt_algorithm: str = "HS256"

@@ -7,6 +7,7 @@ import {
   Clock,
   Download,
   HardDriveDownload,
+  Info,
   KeyRound,
   Link2,
   Plus,
@@ -625,10 +626,10 @@ export default function TokensPage() {
                   <div className="mb-2 flex items-center gap-2">
                     <HardDriveDownload className="size-4 text-amber-600" />
                     <span className="text-sm font-semibold text-slate-800">Phương pháp B — Gói Offline USB (1-Click)</span>
-                    <Badge className="border-amber-200 bg-amber-50 text-amber-700">Máy cách ly</Badge>
+                    <Badge className="border-amber-200 bg-amber-50 text-amber-700">Máy BMNN</Badge>
                   </div>
                   <p className="mb-2.5 text-xs text-slate-500">
-                    Tải về <b>1 file ZIP duy nhất (không mật khẩu)</b> → giải nén vào USB. Mang sang máy cách ly chỉ cần <b>nháy đúp chuột</b> vào file <code>install-offline.cmd</code>.
+                    Tải về <b>1 file ZIP duy nhất (không mật khẩu)</b> → giải nén vào USB. Mang sang máy BMNN chỉ cần <b>nháy đúp chuột</b> vào file <code>install-offline.cmd</code>.
                   </p>
                   <a
                     href="/api/downloads/offline-package.zip"
@@ -637,6 +638,16 @@ export default function TokensPage() {
                   >
                     <Download className="size-3.5" /> Tải trọn bộ Gói USB (.zip không mật khẩu)
                   </a>
+                  <div className="mt-2 rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-800 flex items-start gap-1.5">
+                    <Info className="size-3 mt-0.5 shrink-0" />
+                    <span>
+                      Sau khi USB có kết quả, mở trang{" "}
+                      <Link href="/offline-import" className="font-semibold underline hover:text-blue-900">
+                        Import máy BMNN
+                      </Link>{" "}
+                      — có <b>timeline 3 pha</b> + checklist + xử lý sự cố.
+                    </span>
+                  </div>
                   <div className="mt-2 grid grid-cols-2 gap-1 text-[11px] text-slate-400">
                     <a href="/api/downloads/agent.msi" className="hover:underline flex items-center gap-1">
                       <HardDriveDownload className="size-2.5" /> Tải lẻ MSI
@@ -648,9 +659,9 @@ export default function TokensPage() {
                 </div>
               </div>
               <p className="mt-3 text-xs text-slate-500">
-                <b>Trải nghiệm 1-Click cho máy cách ly:</b> Giải nén file zip vào USB → cắm vào máy cách ly và nháy đúp <code>install-offline.cmd</code>. Kết quả thu thập sẽ tự động xuất ra file <code>INVENTORY_...zip</code> đã ký số và mã hóa trên USB để nạp vào trang{" "}
+                <b>Trải nghiệm 1-Click cho máy BMNN:</b> Giải nén file zip vào USB → cắm vào máy BMNN và nháy đúp <code>install-offline.cmd</code>. Kết quả thu thập sẽ tự động xuất ra file <code>INVENTORY_...zip</code> đã ký số và mã hóa trên USB để nạp vào trang{" "}
                 <Link href="/offline-import" className="font-semibold text-blue-600 hover:underline">
-                  Import máy cách ly
+                  Import máy BMNN
                 </Link>.
               </p>
             </div>

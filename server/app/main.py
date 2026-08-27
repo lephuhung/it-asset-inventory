@@ -27,7 +27,6 @@ from app.api.routes import (
     inventory,
     machines,
     offline_import,
-    offline_enroll,
     orgs,
     renew,
     reports,
@@ -125,7 +124,6 @@ app.include_router(alert_rules.router)
 app.include_router(self_service.router)
 app.include_router(drifts.router)
 app.include_router(offline_import.router)
-app.include_router(offline_enroll.router)
 app.include_router(api_keys.router)
 app.include_router(api_keys.public_router)
 app.include_router(audit.router)

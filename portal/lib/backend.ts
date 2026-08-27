@@ -120,8 +120,8 @@ export async function proxyRequest(
   }
 
   const headers = new Headers();
-  const contentType = res.headers.get("content-type");
-  if (contentType) headers.set("content-type", contentType);
+  const respContentType = res.headers.get("content-type");
+  if (respContentType) headers.set("content-type", respContentType);
   const disposition = res.headers.get("content-disposition");
   if (disposition) headers.set("content-disposition", disposition);
   headers.set("cache-control", "no-store");

@@ -136,6 +136,9 @@ class Machine(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # IP public (WAN) mới nhất mà agent phát hiện — dùng để hiển thị trên portal,
+    # phát hiện IP WAN động, NAT/proxy. Cache ở bảng máy để hiển thị kể cả khi máy offline.
+    public_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
 
     org: Mapped[Organization] = relationship()
     assigned_user: Mapped[User | None] = relationship()
@@ -176,6 +179,8 @@ class MachineSpec(Base):
     installed_software: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     security: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # IP public (WAN) mà agent phát hiện được khi gửi snapshot này (lưu lịch sử).
+    public_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
     machine: Mapped[Machine] = relationship(back_populates="specs")
@@ -219,6 +224,8 @@ class MachineCurrent(Base):
     network: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     is_vm: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     logged_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # IP public (WAN) — để thống kê / lọc nhanh theo subnet WAN.
+    public_ip: Mapped[str | None] = mapped_column(String(45), nullable=True, index=True)
 
     # ── Bảo mật — CỘT có kiểu rõ ràng (đếm được, index được) ──
     antivirus: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # chi tiết, hiển thị

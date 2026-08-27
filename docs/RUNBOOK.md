@@ -53,147 +53,111 @@
 > Xem chi tiết kỹ thuật + format file trong `docs/OFFLINE_AGENT_SPEC.md`. Mục này tóm
 > tắt quy trình vận hành cho admin.
 >
-> **Lưu ý quan trọng**: trước khi triển khai máy cách ly, cần cài đặt agent trên máy
-> đó. Có **2 phương pháp** tuỳ theo máy có mạng ra server hay không — xem bảng so sánh
-> trong `OFFLINE_AGENT_SPEC.md` mục 1. Nếu máy cách ly **không có mạng**, dùng
-> **Phương pháp B** (tải file qua USB) ở bước 6.1B dưới đây.
+> **Lưu ý quan trọng**: Agent trên máy cách ly **không enroll qua mạng** (vì không có
+> mạng ra server). Toàn bộ quy trình là **1-click qua USB**: tải gói ZIP về USB → nháy
+> đúp `install-offline.cmd` trên máy cách ly → file ZIP mã hoá được xuất ra → admin
+> upload lên Portal. Server xác thực chữ ký + giải mã + parse dữ liệu.
+>
+> **Không cần** bất kỳ thao tác CSR / cert / token nào trên máy cách ly.
 
-### 6.1. Cài đặt agent lên máy cách ly
+### 6.1. Chuẩn bị USB trên máy admin (có mạng)
 
-#### 6.1A. Phương pháp A — Cài bằng lệnh (online, một dòng)
+1. Admin đăng nhập Portal → **Quản lý Token → Tạo token** với org là đơn vị của máy
+   cách ly. Lưu lại token (chỉ hiện 1 lần khi tạo).
+2. Tải gói ZIP **KHÔNG có password** từ:
+   - **Cách 1 (khuyến nghị)**: `GET /download/offline-package.zip` (1 file duy nhất).
+   - **Cách 2**: tải từng file qua 5 endpoint:
+     - `/download/install-offline.cmd` (launcher nháy đúp chuột)
+     - `/download/install-offline.ps1` (script điều phối)
+     - `/download/server_public_key.pem` (RSA-2048 public key của Server)
+     - `/download/agent.msi` (MSI installer)
+     - `/download/agent.msi.sha256` (SHA-256 verify MSI)
+3. **Giải nén** vào thư mục gốc USB (ví dụ `E:\`). Trên USB có tối đa 6 file:
+   ```
+   E:\install-offline.cmd
+   E:\install-offline.ps1
+   E:\server_public_key.pem
+   E:\offline_config.json     (cấu hình mẫu — admin điền token nếu muốn)
+   E:\OrgInventoryAgent.msi   (nếu server có sẵn)
+   E:\OrgInventoryAgent.msi.sha256
+   ```
+4. (Tuỳ chọn) Mở `offline_config.json` bằng notepad, điền `token` và `endpoints` nếu
+   muốn agent tự động biết token lúc cài (nếu để trống, agent vẫn hoạt động bình
+   thường — fingerprint phần cứng làm định danh).
 
-> **Chỉ dùng được nếu máy cách ly CÓ đường mạng tới server** (qua VPN site-to-site,
-> hoặc proxy cho phép). Đa số máy cách ly thật sự air-gapped → dùng phương pháp B.
+> **Lưu ý bảo mật**: ZIP tải về **không đặt password** (yêu cầu nghiệp vụ — operator
+> copy qua USB dễ dàng). Tính bí mật dựa vào **mã hoá hybrid AES-256-GCM + RSA-OAEP**
+> ở file ZIP do agent sinh ra SAU (xem mục 6.3). Test `test_offline_package_zip_is_not_password_protected`
+> chặn regression.
 
-Trên máy cài (Admin PowerShell):
-```powershell
-irm http://server/i/<enroll_token> | iex
-```
-Script tự tải MSI + verify chữ ký + cài silent. Sau khi cài xong, agent tự enroll
-trong ~30 giây (không cần thao tác tay). Chuyển sang mục 6.4 để lên lịch xuất
-inventory.
-
-#### 6.1B. Phương pháp B — Cài bằng tải file (offline, copy qua USB) — **khuyến nghị cho máy cách ly**
-
-**Trên máy admin có mạng** (làm trước):
-
-1. Admin đăng nhập portal, vào **Quản lý Token → Tạo token** với org là đơn vị của máy
-   cách ly. Lưu lại token (1 lần, hiển thị ngay khi tạo).
-2. Tải 3 file về cùng thư mục trên USB (ví dụ `E:\agent\`):
-   - `OrgInventoryAgent.msi` — file đã ký Authenticode, lấy từ portal/releases hoặc
-     share nội bộ (`\\fileserver\Releases\OrgInventory\OrgInventoryAgent.msi`).
-   - `OrgInventoryAgent.msi.sha256` — cùng SHA256 build script sinh ra, copy cùng MSI.
-   - `install-offline.ps1` — wrapper cài cho máy cách ly, tải từ server:
-     ```powershell
-     Invoke-WebRequest http://server/download/install-offline.ps1 -OutFile E:\agent\install-offline.ps1
-     ```
-     (Hoặc copy file `app/templates/install-offline.ps1` từ source server.)
-3. Ghi lại token + URL endpoint ra giấy / file `.txt` trên USB. KHÔNG gửi token qua
-   email/kênh không mã hóa.
-
-**Trên máy cách ly** (Admin PowerShell):
+### 6.2. Thao tác trên máy cách ly (người dùng cuối)
 
 1. Cắm USB vào máy cách ly.
-2. Chạy:
-   ```powershell
-   E:\agent\install-offline.ps1 -Token "<enroll_token>" -Endpoints "https://agent.example.gov.vn"
+2. Mở Windows Explorer, **nháy đúp chuột vào `install-offline.cmd`** (hoặc chuột phải
+   chọn "Run as Administrator").
+3. **Không cần gõ bất kỳ lệnh nào** — script tự động:
+   - Xin quyền Administrator (UAC elevation).
+   - Đọc cấu hình từ `offline_config.json` (nếu có).
+   - Verify SHA-256 toàn vẹn của `OrgInventoryAgent.msi`.
+   - Verify Authenticode signature của MSI.
+   - Cài Agent qua `msiexec /qn ENROLL_TOKEN=<token> ENDPOINTS=<url>` (chỉ để MSI
+     ghi registry bootstrap — KHÔNG gọi server, KHÔNG cấp client cert).
+   - Gọi `OrgInventoryAgent.exe --export-bundle <đường dẫn USB>` để:
+     - Thu thập fingerprint + inventory (CPU, RAM, disk, software, security...).
+     - Sinh cặp khoá ECDSA P-256 (private key **ở lại máy cách ly**, không bao giờ
+       thoát ra).
+     - Ký số ECDSA-SHA256 trên canonical JSON của inventory.
+     - Mã hoá hybrid AES-256-GCM + RSA-OAEP bằng `server_public_key.pem`.
+     - Đóng gói thành 1 file ZIP.
+4. File ZIP kết quả xuất hiện ngay tại thư mục USB:
    ```
-   Script tự động:
-   - Kiểm tra quyền Administrator.
-   - Verify SHA256 + Authenticode của MSI.
-   - Hiển thị thông báo tuân thủ, chờ user nhấn Enter.
-   - Chạy `msiexec /i ... /qn ENROLL_TOKEN=<token> ENDPOINTS=<url>`.
-3. Sau khi cài xong, **service agent đã chạy** nhưng **chưa enroll được** (vì không có
-   mạng). Tiếp tục bước 6.2 bên dưới để sinh CSR và lấy cert.
-
-### 6.2. Sinh CSR trên máy cách ly (sau khi cài agent)
-
-Trên máy cách ly (Admin PowerShell), chạy:
-```powershell
-"C:\Program Files\OrgInventory\OrgInventoryAgent.exe" --enroll-offline E:\agent\enroll.json
-```
-File `enroll.json` chứa CSR + fingerprint + token, ghi ra USB.
-
-### 6.3. Admin proxy CSR qua API (máy admin có mạng)
-
-1. Rút USB, cắm vào máy admin nối mạng.
-2. Mở PowerShell, gọi API:
-   ```powershell
-   $body = Get-Content D:\usb\enroll.json -Raw | ConvertFrom-Json
-   $token = (curl -X POST http://server/api/auth/login -d '{"email":"...","password":"..."}' `
-             -ContentType application/json | ConvertFrom-Json).access_token
-
-   $payload = @{
-     token       = $body.token
-     hostname    = $body.hostname
-     fingerprint = $body.fingerprint
-     csr_pem     = $body.csr_pem
-   } | ConvertTo-Json -Depth 10
-
-   Invoke-RestMethod -Uri "http://server/api/offline/enroll" `
-     -Method POST -ContentType "application/json" `
-     -Headers @{Authorization="Bearer $token"} `
-     -Body $payload | ConvertTo-Json -Depth 10 | Out-File D:\usb\cert.json -Encoding UTF8
+   E:\INVENTORY_<HOSTNAME>_<YYYYMMDD_HHMMSS>.zip
    ```
-3. Hoặc dùng curl (Linux/macOS):
-   ```bash
-   ADMIN_TOKEN=$(curl -s -X POST http://server/api/auth/login \
-     -H 'Content-Type: application/json' \
-     -d '{"email":"admin@…","password":"…"}' | jq -r .access_token)
+   Thông báo xanh xuất hiện: *"Vui lòng rút USB và chuyển file cho Quản trị viên để
+   cập nhật"*.
 
-   curl -s -X POST http://server/api/offline/enroll \
-     -H "Authorization: Bearer $ADMIN_TOKEN" \
-     -H 'Content-Type: application/json' \
-     --data-binary @D:/usb/enroll.json > D:/usb/cert.json
-   ```
-   **Kiểm tra response**: phải có `client_cert_pem` (bắt đầu bằng
-   `-----BEGIN CERTIFICATE-----`), `is_new_machine`, `status`. Lỗi 401/403/422 → xem
-   chi tiết trong RUNBOOK mục 5 (Xử lý sự cố).
+### 6.3. Admin upload lên Portal (máy admin có mạng)
 
-### 6.4. Cài cert trên máy cách ly
+1. Cắm USB vào máy admin → vào Portal → **Import máy cách ly** (`/offline-import`).
+2. Chọn hoặc kéo thả file `INVENTORY_*.zip` vào khung upload.
+3. Nhấn **Xác nhận nạp dữ liệu**:
+   - Frontend gọi `POST /api/offline/import` (multipart/form-data).
+   - Backend đọc ZIP, RSA-decrypt `encrypted_key.bin` → lấy AES session key.
+   - AES-GCM decrypt `encrypted_payload.bin` → inventory JSON.
+   - Verify ECDSA signature bằng `public_key.pem` trong ZIP (chống sửa file trên USB).
+   - Dùng `fingerprint` (SMBIOS UUID / MachineGuid / Mainboard Serial) để **tự tạo mới**
+     máy nếu chưa có, hoặc cập nhật máy đã có (dựa vào `machine_uuid`).
+   - Parse inventory → lưu `machine_specs` + cập nhật `machine_current` + replace
+     `machine_software`.
+4. Kết quả trả về: `{ machine_id, hostname, is_new, verified, apps_count, collected_at }`.
 
-1. Cắm USB vào máy cách ly → chạy:
-   ```powershell
-   "C:\Program Files\OrgInventory\OrgInventoryAgent.exe" --install-cert D:\usb\cert.json
-   ```
-   Cert được import vào Windows Cert Store; `state.json` lưu `machine_id` + config.
-2. Service agent từ giờ cache mọi inventory/heartbeat. Không cần làm gì thêm trên máy.
+### 6.4. Cập nhật dữ liệu định kỳ (tuần/tháng)
 
-### 6.5. Xuất inventory định kỳ (hàng tuần/tháng)
+Lặp lại **mục 6.2 + 6.3** mỗi khi cần cập nhật. Mỗi lần upload tạo 1 `MachineSpec`
+mới trong DB (lưu lịch sử), cập nhật bảng `machine_current` (mới nhất). Máy vẫn giữ
+`status = offline` (không có heartbeat) nhưng có đầy đủ lịch sử cấu hình.
 
-1. Trên máy cách ly:
-   ```powershell
-   "C:\Program Files\OrgInventory\OrgInventoryAgent.exe" --export-inventory D:\usb\inv-2026-08-26.json
-   ```
-2. Copy USB sang máy admin → nhập vào server:
-   ```bash
-   curl -s -X POST http://server/api/offline/import \
-     -H "Authorization: Bearer $ADMIN_TOKEN" \
-     -H 'Content-Type: application/json' \
-     --data-binary @D:/usb/inv-2026-08-26.json | jq .
-   ```
-   Kết quả mong đợi: `{"machine_id":"...","hostname":"...","is_new":false,"verified":true}`.
-3. **Audit log** sẽ ghi `action=offline.import`, `actor=admin:<id>` → truy vết được.
-
-### 6.6. Sự cố thường gặp
+### 6.5. Sự cố thường gặp
 
 | Triệu chứng | Nguyên nhân | Xử lý |
 |---|---|---|
-| `401 Token không tồn tại` khi gọi `/api/offline/enroll` | Token đã dùng/hết hạn/sai | Tạo token mới, copy lại USB, chạy lại `--enroll-offline` trên máy cách ly |
-| `Chữ ký không hợp lệ` khi `/api/offline/import` | File JSON bị sửa giữa máy cách ly ↔ admin | Chạy lại `--export-inventory`; so SHA-256 file (agent CLI in ra) |
-| Cert CN không khớp `machine-<id>` | Cài nhầm cert của máy khác | Dùng đúng file `cert.json` tương ứng với token; kiểm tra `machine_id` trong response |
-| Agent không thấy trong `/api/machines` | Nhầm org | Kiểm tra org của token trùng org của đơn vị trên portal; dùng `visible_org_ids` |
-| Service không chạy | Chưa cài MSI hoặc cert chưa import | Kiểm tra Event Viewer → Application → `OrgInventoryAgent` |
+| Script dừng với `[LỖI] Mã băm SHA256 KHÔNG khớp` | MSI bị hỏng trên USB (copy lỗi, virus) | Copy lại từ USB nguồn / share nội bộ |
+| Script dừng với `Authenticode signature invalid` | MSI bị sửa hoặc cert hết hạn | Build lại MSI, ký lại Authenticode |
+| `Chữ ký không hợp lệ` khi upload | ZIP bị sửa giữa máy cách ly ↔ admin (USB lỗi) | Chạy lại trên máy cách ly (nháy đúp `install-offline.cmd`), upload lại |
+| `Không tìm thấy server_public_key.pem` | USB thiếu file | Copy từ gói ZIP gốc, đặt cùng thư mục với `install-offline.ps1` |
+| Upload OK nhưng máy không xuất hiện | Token sai org / máy đã tồn tại với org khác | Kiểm tra `visible_org_ids` của admin; xem `audit log` |
+| MSI không qua Windows SmartScreen | Chưa ký EV cert / cert hết hạn | Ký lại bằng EV Code Signing cert |
 
-### 6.7. Không được
+### 6.6. Không được
 
 - Không commit private key của máy cách ly lên bất kỳ repo nào (kể cả portal backup).
-- Không share token enroll qua email/kênh không mã hóa — token tương đương quyền enroll máy
-  mới vào tổ chức.
-- Không chạy `/api/offline/enroll` mà không kiểm tra file USB trước (xác nhận SHA-256 in
-  bởi `--enroll-offline`).
-
-## 7. BẢO TRÌ ĐỊNH KỲ
+  Private key ECDSA chỉ tồn tại trong Windows Certificate Store của máy cách ly, dùng
+  để ký inventory; server lưu **public key** để verify.
+- Không share token enroll qua email/kênh không mã hoá — token tương đương quyền gán
+  máy mới vào tổ chức.
+- Không tự ý dùng `--enroll-offline` (CLI flag này **chưa được implement** trong agent
+  — chỉ hỗ trợ `--export-bundle`). Flow offline hoàn chỉnh đã được tự động hoá qua
+  `install-offline.cmd` + upload ZIP, không cần thao tác CSR thủ công.## 7. BẢO TRÌ ĐỊNH KỲ
 
 - Hàng tuần: xem dashboard, kiểm tra cảnh báo cert, tỉ lệ heartbeat thành công.
 - Mỗi release: build agent mới → ký OV cert + timestamp → WDSI → cập nhật hash whitelist AV → release theo đợt.

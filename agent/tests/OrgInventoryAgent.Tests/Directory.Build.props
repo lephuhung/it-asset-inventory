@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <WriteOnlyWhenDifferent>false</WriteOnlyWhenDifferent>
+  </PropertyGroup>
+</Project>

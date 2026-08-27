@@ -22,8 +22,19 @@ logger = logging.getLogger("inventory")
 
 
 def _config_hash(body: InventoryRequest) -> str:
-    data = body.model_dump(exclude={"config_hash"})
-    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+    """SHA-256 hex của canonical JSON payload (bỏ `config_hash`, bỏ field null).
+
+    Khớp với C# `CanonicalJson.Hash(snapshot, excludeProperty="config_hash")`:
+    - C# dùng `DefaultIgnoreCondition.WhenWritingNull` → null fields bị bỏ khỏi JSON.
+    - Pydantic mặc định `model_dump()` giữ null → phải `exclude_none=True`.
+    - Canonical: sort_keys + separators=(",", ":") + ensure_ascii=False (khớp
+      `JavaScriptEncoder.UnsafeRelaxedJsonEscaping` của System.Text.Json).
+    """
+    data = body.model_dump(exclude={"config_hash"}, exclude_none=True)
+    canonical = json.dumps(
+        data, sort_keys=True, default=str, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @router.post("", response_model=InventoryResponse)
@@ -85,10 +96,14 @@ async def submit_inventory(
             [s.model_dump() for s in body.installed_software] if body.installed_software else None
         ),
         security=body.security.model_dump() if body.security else None,
+        public_ip=body.public_ip,
         config_hash=new_hash,
     )
     if body.is_vm is not None:
         machine.is_vm = body.is_vm
+    # Cache IP public mới nhất ở bảng máy (hiển thị portal kể cả khi máy offline).
+    if body.public_ip is not None:
+        machine.public_ip = body.public_ip
     db.add(spec)
 
     # Đồng bộ bảng "hiện tại" (machine_current + machine_software) cùng transaction
@@ -114,6 +129,7 @@ async def submit_inventory(
         installed_software=(
             [s.model_dump() for s in body.installed_software] if body.installed_software else None
         ),
+        public_ip=body.public_ip,
         config_hash=new_hash,
     )
     await db.commit()

@@ -189,7 +189,7 @@ internal static class Program
             var inv = new InventoryService(config, api, endpoints, coordinator, cache, inventoryCollector,
                 loggerFactory.CreateLogger<InventoryService>());
             var hb = new HeartbeatService(config, api, endpoints, coordinator, cache, inventoryCollector, inv, keyStore,
-                loggerFactory.CreateLogger<HeartbeatService>());
+                configSync, loggerFactory.CreateLogger<HeartbeatService>());
 
             var hbOk = await hb.SendOnceAsync(cts.Token);
             logger.LogInformation("--once heartbeat: {Ok}", hbOk ? "OK" : "FAIL");

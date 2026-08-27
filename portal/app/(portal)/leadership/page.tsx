@@ -140,7 +140,7 @@ export default function LeadershipPage() {
       dot: "bg-slate-400",
     },
     {
-      label: "Máy ma",
+      label: "Máy mất kết nối",
       value: stats?.lost ?? 0,
       sub: `>30 ngày: ${ghostBuckets.over30} · >60: ${ghostBuckets.over60} · >90: ${ghostBuckets.over90}`,
       icon: <Ghost className="size-4" />,
@@ -215,7 +215,7 @@ export default function LeadershipPage() {
         <Card
           className="lg:col-span-2"
           title="Phân bố máy theo tổ chức"
-          subtitle="Online / tạm ngừng / máy ma — 10 tổ chức lớn nhất"
+          subtitle="Online / tạm ngừng / máy mất kết nối — 10 tổ chức lớn nhất"
           padded={false}
         >
           <div className="space-y-3.5 p-5">
@@ -236,7 +236,7 @@ export default function LeadershipPage() {
                   <div className="flex h-3.5 w-full overflow-hidden rounded-full bg-slate-100">
                     <div className="h-full bg-emerald-500" style={{ width: seg(p.online) }} title={`Online: ${p.online}`} />
                     <div className="h-full bg-slate-400" style={{ width: seg(p.offline) }} title={`Tạm ngừng: ${p.offline}`} />
-                    <div className="h-full bg-rose-500" style={{ width: seg(p.lost) }} title={`Máy ma: ${p.lost}`} />
+                    <div className="h-full bg-rose-500" style={{ width: seg(p.lost) }} title={`Máy mất kết nối: ${p.lost}`} />
                   </div>
                 </div>
               );
@@ -245,7 +245,7 @@ export default function LeadershipPage() {
               <div className="flex flex-wrap gap-4 pt-1 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-emerald-500" /> Online</span>
                 <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-slate-400" /> Tạm ngừng</span>
-                <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-rose-500" /> Máy ma</span>
+                <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-rose-500" /> Máy mất kết nối</span>
               </div>
             )}
           </div>
@@ -288,7 +288,7 @@ export default function LeadershipPage() {
             <li>
               <div className="mb-1 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-slate-600">
-                  <Ghost className="size-4 text-rose-500" /> Máy ma / tổng
+                  <Ghost className="size-4 text-rose-500" /> Máy mất kết nối / tổng
                 </span>
                 <b className="tabular-nums">
                   {stats && stats.total_machines > 0 ? Math.round(((stats.lost ?? 0) / stats.total_machines) * 100) : 0}%

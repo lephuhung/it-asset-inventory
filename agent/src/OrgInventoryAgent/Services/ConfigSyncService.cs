@@ -96,6 +96,57 @@ public sealed class ConfigSyncService : BackgroundService
         }
     }
 
+    /// <summary>Sync + lưu hash cấu hình server vừa trả về vào AgentState (dùng khi
+    /// heartbeat phát hiện hash server trả về khác với local — Phase 4).</summary>
+    public async Task<bool> SyncAndSaveHashAsync(CancellationToken ct)
+    {
+        try
+        {
+            var resp = await _api.GetJsonAsync("/api/agent/config", ct, useClientCert: true, timeoutSeconds: 30);
+            if (!resp.Ok)
+            {
+                _logger.LogWarning("GET /api/agent/config thất bại HTTP {Status}: {Detail}",
+                    (int)resp.Status, resp.Detail);
+                return false;
+            }
+
+            var body = resp.Body;
+            if (body is null) return false;
+
+            var serverUrl = body["server_url"]?.GetValue<string>();
+            int? interval = TryGetInt(body["heartbeat_interval_seconds"]);
+            int? jitter = TryGetInt(body["heartbeat_jitter_seconds"]);
+            int? invHours = TryGetInt(body["inventory_interval_hours"]);
+            int? renewPct = TryGetInt(body["renew_before_percent"]);
+
+            var changed = _config.ApplyServerSettings(serverUrl, interval, jitter, invHours, renewPct);
+            if (changed)
+            {
+                _config.Save();
+                _logger.LogInformation("Đã đồng bộ cấu hình từ server (qua SyncAndSaveHashAsync): server={Server}, interval={I}s, jitter={J}s, inv={H}h, renew={P}%",
+                    _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds,
+                    _config.InventoryIntervalHours, _config.RenewBeforePercent);
+            }
+
+            // Lưu hash server trả về (cùng hash mà heartbeat response sẽ trả) để so sánh
+            // ở chu kỳ heartbeat kế tiếp.
+            var serverHash = body["agent_config_hash"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(serverHash))
+            {
+                var state = AgentState.Load();
+                state.LastAgentConfigHash = serverHash;
+                state.Save();
+                _logger.LogInformation("Đã cập nhật LastAgentConfigHash={Hash}", serverHash);
+            }
+            return true;
+        }
+        catch (ApiTransportException ex)
+        {
+            _logger.LogWarning("Không lấy được cấu hình từ server: {Msg}", ex.Message);
+            return false;
+        }
+    }
+
     private static int? TryGetInt(System.Text.Json.Nodes.JsonNode? node)
     {
         try { var v = node?.GetValue<int>(); return v is > 0 ? v : null; }

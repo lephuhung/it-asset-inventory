@@ -212,7 +212,7 @@ def _label_status(status: str) -> str:
     labels = {
         "online": "Online",
         "offline": "Offline",
-        "lost": "Mất liên lạc (máy ma)",
+        "lost": "Mất kết nối (máy BMNN không online > 15 ngày)",
         "decommissioned": "Đã thanh lý",
         "pending": "Chờ duyệt",
     }

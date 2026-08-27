@@ -12,6 +12,11 @@ namespace OrgInventoryAgent.Services;
 /// Đồng bộ interval/jitter/renew_after từ response; rescan_requested → chạy inventory ngay.
 /// Định kỳ (mỗi 20 chu kỳ) kiểm tra cert thực sự tồn tại trong store — nếu mất (ví dụ OS
 /// cài lại) thì reset enrollment state để tự re-enroll.
+///
+/// Phase 4: server trả `agent_config_hash` trong heartbeat response. Nếu hash KHÁC với
+/// hash lưu trong AgentState → gọi ngay ConfigSyncService.SyncAsync() để đồng bộ cấu hình
+/// mới nhất (thay vì đợi tới chu kỳ 6h). Cho phép admin đổi cấu hình trên portal được
+/// áp dụng trong vòng ~30s thay vì 6h.
 /// </summary>
 public sealed class HeartbeatService : BackgroundService
 {
@@ -25,12 +30,15 @@ public sealed class HeartbeatService : BackgroundService
     private readonly InventoryCollector _inventory;
     private readonly InventoryService _inventoryService;
     private readonly KeyStore _keyStore;
+    private readonly ConfigSyncService _configSync;
     private readonly ILogger<HeartbeatService> _logger;
+    private readonly AgentState _state;
     private int _cycleCount;
 
     public HeartbeatService(AgentConfig config, ApiClient api, EndpointManager endpoints,
         EnrollCoordinator enroll, OfflineCache cache, InventoryCollector inventory,
-        InventoryService inventoryService, KeyStore keyStore, ILogger<HeartbeatService> logger)
+        InventoryService inventoryService, KeyStore keyStore, ConfigSyncService configSync,
+        ILogger<HeartbeatService> logger)
     {
         _config = config;
         _api = api;
@@ -40,7 +48,9 @@ public sealed class HeartbeatService : BackgroundService
         _inventory = inventory;
         _inventoryService = inventoryService;
         _keyStore = keyStore;
+        _configSync = configSync;
         _logger = logger;
+        _state = AgentState.Load();
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -162,6 +172,27 @@ public sealed class HeartbeatService : BackgroundService
                     _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds, _config.InventoryIntervalHours);
             }
 
+            // Phase 4: nếu server báo hash cấu hình KHÁC với hash đã lưu → gọi ConfigSync
+            // ngay để đồng bộ. Nếu KHỚP → heartbeat bình thường, không gọi thêm request.
+            var serverCfgHash = body?["agent_config_hash"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(serverCfgHash)
+                && !string.Equals(serverCfgHash, _state.LastAgentConfigHash, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation(
+                    "Server báo hash cấu hình thay đổi ({Old} → {New}) → gọi ConfigSync để refresh.",
+                    _state.LastAgentConfigHash ?? "(none)", serverCfgHash);
+                // SyncAndSaveHashAsync vừa đồng bộ cấu hình vừa cập nhật hash mới vào state
+                var refreshed = await _configSync.SyncAndSaveHashAsync(ct);
+                if (refreshed)
+                {
+                    _logger.LogInformation("Đã refresh cấu hình từ server và cập nhật LastAgentConfigHash={Hash}", serverCfgHash);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(serverCfgHash))
+            {
+                _logger.LogDebug("Hash cấu hình khớp ({Hash}) → heartbeat bình thường.", serverCfgHash);
+            }
+
             // Phase 3: on-demand rescan từ portal
             if (body?["rescan_requested"]?.GetValue<bool>() == true)
             {
@@ -186,6 +217,20 @@ public sealed class HeartbeatService : BackgroundService
             return v is > 0 ? v : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>Quyết định có cần gọi ConfigSyncService hay không dựa trên hash server
+    /// trả về vs hash lưu trong AgentState.
+    /// - serverHash null/rỗng → false (server không hỗ trợ field → fallback ConfigSync 6h)
+    /// - localHash null (lần đầu) → true (luôn sync lần đầu để lấy hash)
+    /// - khác nhau → true (admin đã đổi config trên portal)
+    /// - giống nhau → false (heartbeat bình thường, không tốn thêm request)
+    /// </summary>
+    public static bool ShouldResyncConfig(string? serverHash, string? localHash)
+    {
+        if (string.IsNullOrWhiteSpace(serverHash)) return false;
+        if (string.IsNullOrWhiteSpace(localHash)) return true;
+        return !string.Equals(serverHash, localHash, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Gửi bù offline cache khi online (giữ nguyên body — không thay đổi nội dung).</summary>

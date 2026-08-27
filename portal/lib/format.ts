@@ -26,7 +26,7 @@ export const MACHINE_STATUS_META: Record<
     icon: "warn",
   },
   lost: {
-    label: "Máy ma",
+    label: "Máy mất kết nối",
     badge: "bg-rose-50 text-rose-700 ring-rose-600/20",
     dot: "bg-rose-500",
     icon: "bad",

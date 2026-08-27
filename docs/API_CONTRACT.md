@@ -103,7 +103,7 @@ Agent gửi định kỳ để duy trì trạng thái `online` trên hệ thốn
 }
 ```
 
-**Response 200:**
+**Response 200 (v1.7 — Phase 4):**
 ```json
 {
   "ok": true,
@@ -112,13 +112,24 @@ Agent gửi định kỳ để duy trì trạng thái `online` trên hệ thốn
   "rescan_requested": false,
   "notice_version": "v1 | null",
   "heartbeat_interval_seconds": 30,
-  "heartbeat_jitter_seconds": 8
+  "heartbeat_jitter_seconds": 8,
+  "server_url": "https://agent.example.gov.vn",
+  "agent_server_url": "https://agent.example.gov.vn",
+  "inventory_interval_hours": 24,
+  "renew_before_percent": 70,
+  "agent_config_hash": "a1b2c3d4e5f6...64 hex chars"
 }
 ```
 
 - Agent gửi theo chu kỳ ngẫu nhiên trong `[interval-jitter, interval+jitter]` (mặc định 30±8s ≈ 22–38s).
-- Agent đồng bộ interval/jitter từ response (server điều chỉnh 1 chỗ).
+- Agent đồng bộ interval/jitter/inventory_interval_hours/renew_before_percent/server_url từ response (server điều chỉnh 1 chỗ).
 - `rescan_requested=true` → agent chạy inventory ngay (on-demand).
+- **`agent_config_hash` (Phase 4)**: SHA-256 hex (64 ký tự) của canonical JSON cấu hình agent server đang áp dụng (5 trường: `agent_server_url`, `heartbeat_interval_seconds`, `heartbeat_jitter_seconds`, `inventory_interval_hours`, `renew_before_percent`). Agent so sánh với hash đã lưu trong `AgentState.LastAgentConfigHash`:
+  - **khớp** → heartbeat bình thường, không gọi thêm request (tiết kiệm bandwidth)
+  - **khác** → agent gọi ngay `GET /api/agent/config` để đồng bộ cấu hình mới nhất (thay vì đợi tới chu kỳ ConfigSync 6h)
+  - **null/rỗng** (server cũ) → fallback: chờ ConfigSync 6h như trước
+  - Cho phép admin đổi cấu hình trên portal được áp dụng trong vòng ~30s thay vì 6h.
+- **`renew_before_percent` (Phase 4)**: thêm mới (trước đây chỉ sync qua `/api/agent/config`). Agent dùng để quyết định khi nào tự gia hạn client cert.
 
 ### 3.3. POST /api/inventory (mTLS bắt buộc)
 
@@ -250,6 +261,7 @@ Response 200:
     "online_ttl_seconds": 76,
     "inventory_interval_hours": 24,
     "renew_before_percent": 70,
+    "agent_config_hash": "a1b2c3d4e5f6...64 hex chars",
     "server_time": "2026-08-27T08:00:00Z"
   },
   "signature": "MEUCIQD...",
@@ -258,6 +270,8 @@ Response 200:
 ```
 
 *(Ghi chú: Để tương thích ngược với client cũ, các trường trong `payload` vẫn được ánh xạ trực tiếp ở root level nếu client yêu cầu schema phẳng).*
+
+- **`agent_config_hash` (Phase 4)**: SHA-256 hex của canonical JSON 5 trường: `agent_server_url`, `heartbeat_interval_seconds`, `heartbeat_jitter_seconds`, `inventory_interval_hours`, `renew_before_percent`. Agent lưu hash này vào `AgentState.LastAgentConfigHash` để so sánh với heartbeat response.
 
 #### Cơ chế Bảo vệ Chống Thay Đổi (Tamper-proofing) & Mã hóa:
 1. **Chữ ký số Server (Digital Signature):**
@@ -301,7 +315,15 @@ Response 200:
 | GET | `/download/install-offline.cmd` | `text/plain` | **Chế độ 2**: Launcher 1-click | Script batch nháy đúp chuột, tự động xin quyền UAC |
 | GET | `/download/install-offline.ps1` | `text/plain` | **Chế độ 2**: Bộ điều phối thu thập | Xác thực chữ ký số file config và kiểm tra toàn vẹn MSI |
 | GET | `/download/server_public_key.pem` | `text/plain` | **Chế độ 2**: Khóa công khai Server | Dùng để verify chữ ký file config và mã hóa gói kết quả |
-| GET | `/download/offline-package.zip` | `application/zip` | **Chế độ 2**: Gói bundle trọn gói USB | Chứa bộ cài, script, khóa công khai và `offline_config.json` đã ký số |
+| GET | `/download/offline-package.zip` | `application/zip` | **Chế độ 2**: Gói bundle trọn gói USB | **KHÔNG đặt password** — chứa bộ cài, script, khoá công khai và `offline_config.json` mẫu |
+
+> ⚠️ **Quy tắc ZIP**: Cả `offline-package.zip` (do server trả về) và file ZIP mà agent
+> sinh ra trên máy cách ly (`INVENTORY_*.zip`) đều **KHÔNG được đặt password**:
+> - ZIP tải về: operator copy qua USB dễ dàng, không cần nhớ password; nội dung đã public.
+> - ZIP do agent sinh: tính bí mật dựa vào **mã hoá hybrid AES-256-GCM + RSA-OAEP** bên
+>   trong từng entry (`encrypted_payload.bin`, `encrypted_key.bin`); ZIP chỉ là vật chứa.
+> Test `test_offline_package_zip_is_not_password_protected` chặn regression — nếu dev
+> nào gọi `zf.setpassword()` sẽ test fail ngay.
 
 #### Quy cách File cấu hình tải về `offline_config.json`:
 Để chống việc can thiệp hoặc sửa đổi tham số cài đặt trên USB (như sửa đổi URL máy chủ, thay đổi tổ chức `org_id` hoặc chèn token giả mạo), file `offline_config.json` trong gói ZIP tải về tuân thủ cấu trúc envelope ký số:
@@ -464,11 +486,14 @@ File xuất ra có định dạng ZIP bảo mật (ví dụ `INVENTORY_PC-PHONG1
 
 ---
 
-### 5.4. Hỗ trợ dự phòng: POST /api/offline/enroll & JSON Import
+### 5.4. Hỗ trợ dự phòng: POST /api/offline/import (JSON Body)
 
-Để tương thích ngược với các công cụ tự động hóa hoặc script kiểm thử của kỹ sư hệ thống:
-- `POST /api/offline/enroll`: Admin proxy CSR qua JSON body (như đặc tả v1.4/v1.5).
-- `POST /api/offline/import` (JSON Body): Vẫn tiếp nhận payload JSON phẳng `{ payload, signature_b64, public_key_pem }` đối với các trường hợp không nén file ZIP.
+Để tương thích với các công cụ tự động hóa hoặc script kiểm thử của kỹ sư hệ thống, ngoài việc upload file ZIP, endpoint `/api/offline/import` còn tiếp nhận payload JSON phẳng `{ payload, signature_b64, public_key_pem }` đối với các trường hợp không nén file ZIP.
+
+> **Lưu ý**: Trước đây có endpoint `/api/offline/enroll` để admin proxy CSR cho máy cách ly nhận cert trước khi gửi inventory. Endpoint này **đã được loại bỏ** (Phase 4 cleanup) vì:
+> - Agent không có flag `--enroll-offline` để sinh CSR
+> - Agent không có flag `--install-cert` để cài cert về
+> - Flow 1-Click (`--export-bundle` → upload ZIP) đã đủ — server dùng fingerprint phần cứng làm định danh máy
 
 ---
 

@@ -40,6 +40,7 @@ async def upsert_current_and_software(
     is_vm: bool | None = None,
     security: dict | None = None,
     installed_software: list | None = None,
+    public_ip: str | None = None,
     collected_at: datetime | None = None,
     config_hash: str | None = None,
 ) -> tuple[str | None, str | None, str]:
@@ -72,6 +73,7 @@ async def upsert_current_and_software(
     current.network = network
     current.logged_user = logged_user
     current.is_vm = is_vm
+    current.public_ip = public_ip
     current.antivirus = sec["antivirus"]
     current.antivirus_enabled = sec["antivirus_enabled"]
     current.antivirus_up_to_date = sec["antivirus_up_to_date"]

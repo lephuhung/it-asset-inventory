@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +26,14 @@ from app.db.models import (
     User,
 )
 from app.db.session import get_db
-from app.schemas import MachineDecision, MachineDetail, MachineLifecycleUpdate, MachineListItem
+from app.schemas import (
+    AssignUserRequest,
+    AssignUserResponse,
+    MachineDecision,
+    MachineDetail,
+    MachineLifecycleUpdate,
+    MachineListItem,
+)
 from app.services.phone_encryption import mask_phone
 
 router = APIRouter(prefix="/api/machines", tags=["machines"])
@@ -82,6 +89,7 @@ async def list_machines(
             org_id=m.org_id,
             assigned_user_id=m.assigned_user_id,
             logged_user=logged.get(str(m.id)),
+            public_ip=m.public_ip,
         )
         for m in rows
     ]
@@ -163,6 +171,7 @@ async def get_machine(
         enrolled_at=machine.enrolled_at,
         org_id=machine.org_id,
         assigned_user_id=machine.assigned_user_id,
+        public_ip=machine.public_ip,
         fingerprint=machine.fingerprint or {},
         note=machine.note,
         latest_spec=(
@@ -183,6 +192,7 @@ async def get_machine(
                 "logged_user": latest.logged_user,
                 "installed_software": latest.installed_software,
                 "security": latest.security,
+                "public_ip": latest.public_ip,
                 "config_hash": latest.config_hash,
                 "collected_at": latest.collected_at,
             }
@@ -347,6 +357,120 @@ async def reject_machine(
     await append_audit(db, action="machine.reject", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
     await db.commit()
     return {"ok": True, "status": machine.status}
+
+
+
+
+@router.post("/{machine_id}/assign-user", response_model=AssignUserResponse)
+async def assign_user(
+    machine_id: uuid.UUID,
+    body: AssignUserRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gán người sử dụng cho máy.
+
+    Flow chuẩn sau khi upload ZIP cách ly: admin nhập user info ở đây để link
+    `machine.assigned_user_id` với user có sẵn hoặc tạo mới (role=viewer).
+
+    - `mode="existing"`: chỉ cần `user_id`. User phải thuộc cùng org với máy.
+    - `mode="new"`: cần `full_name`, `email` (unique). `phone` mã hóa AES-256-GCM.
+
+    Audit `machine.assign_user` để truy vết. Cho phép gán lại (đổi người dùng).
+    """
+    from app.core.security import hash_password  # noqa: PLC0415 — import tại chỗ cho gọn
+    from app.services.phone_encryption import encrypt_phone, mask_phone  # noqa: PLC0415
+
+    machine = await _get_machine_in_scope(db, machine_id, admin)
+
+    was_created = False
+    if body.mode == "existing":
+        if not body.user_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="mode=existing cần user_id")
+        user = (await db.execute(select(User).where(User.id == body.user_id))).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User không tồn tại")
+        if user.org_id != machine.org_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="User phải thuộc cùng tổ chức với máy",
+            )
+    else:
+        # mode="new" — tạo user mới trong cùng org với máy
+        if not body.full_name or not body.email:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="mode=new cần full_name và email",
+            )
+        dup = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+        if dup:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail=f"Email {body.email} đã thuộc về user khác",
+            )
+        # Tạo user với role=viewer, KHÔNG có password (admin phải set sau hoặc user reset)
+        # → password_hash = None → user phải dùng SSO/reset flow để đăng nhập
+        user = User(
+            org_id=machine.org_id,
+            full_name=body.full_name,
+            email=body.email,
+            phone_encrypted=encrypt_phone(body.phone) if body.phone else None,
+            role="viewer",
+            password_hash=None,  # buộc reset password trước khi đăng nhập
+            is_active=True,
+        )
+        db.add(user)
+        await db.flush()  # lấy id
+        was_created = True
+
+    old_user_id = machine.assigned_user_id
+    machine.assigned_user_id = user.id
+
+    await append_audit(
+        db,
+        action="machine.assign_user",
+        actor=str(admin.id),
+        target=f"{machine.id}|new={user.id}|email={user.email}|created={was_created}"[:255],
+        ip=request.client.host if request.client else None,
+        machine_id=machine.id,
+    )
+    await db.commit()
+    await db.refresh(user)
+
+    return AssignUserResponse(
+        machine_id=machine.id,
+        assigned_user_id=user.id,
+        assigned_user_name=user.full_name,
+        assigned_user_email=user.email,
+        phone_masked=mask_phone(user.phone_encrypted),
+        was_created=was_created,
+    )
+
+
+@router.delete("/{machine_id}/assign-user", response_model=dict)
+async def unassign_user(
+    machine_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gỡ người dùng khỏi máy (vd: máy được chuyển cho người khác, decommissioned)."""
+    machine = await _get_machine_in_scope(db, machine_id, admin)
+    if machine.assigned_user_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Máy chưa gán người dùng")
+    old_user_id = machine.assigned_user_id
+    machine.assigned_user_id = None
+    await append_audit(
+        db,
+        action="machine.unassign_user",
+        actor=str(admin.id),
+        target=f"{machine.id}|old={old_user_id}",
+        ip=request.client.host if request.client else None,
+        machine_id=machine.id,
+    )
+    await db.commit()
+    return {"machine_id": str(machine.id), "unassigned": True}
 
 
 @router.post("/{machine_id}/rescan", response_model=dict)

@@ -24,7 +24,8 @@ import { MACHINE_STATUS_META, formatDateTime, timeAgo } from "@/lib/format";
 
 const DAY_MS = 86_400_000;
 
-/** Phân nhóm máy ma theo thời gian mất liên lạc (>30/>60/>90 ngày) cho kế hoạch kiểm tra. */
+/** Phân nhóm máy mất kết nối theo thời gian offline (>15/>30/>60 ngày) cho kế hoạch kiểm tra.
+ *  Server tự động chuyển OFFLINE → LOST sau `LOST_AFTER_DAYS` ngày (mặc định 15). */
 export default function GhostMachinesPage() {
   const [machines, setMachines] = useState<MachineListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +37,7 @@ export default function GhostMachinesPage() {
       setMachines(list);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Không tải được danh sách máy ma");
+      setError(e instanceof Error ? e.message : "Không tải được danh sách máy mất kết nối");
     } finally {
       setLoading(false);
     }
@@ -53,26 +54,26 @@ export default function GhostMachinesPage() {
       return now - last >= days * DAY_MS;
     });
     return {
+      over15: gone(15),
       over30: gone(30),
       over60: gone(60),
-      over90: gone(90),
     };
   }, [machines]);
 
   return (
     <div>
       <PageHeader
-        title="Máy ma"
-        description="Máy đã enroll nhưng mất liên lạc > N ngày — dùng để kiểm kê, phát hiện máy bỏ không / mất tích"
+        title="Máy mất kết nối"
+        description="Máy BMNN đã enroll nhưng mất kết nối > 15 ngày — tự động chuyển 'lost' bởi monitor. Dùng để kiểm kê, phát hiện máy bỏ không / mất tích."
       />
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
       <div className="mb-5 grid gap-4 sm:grid-cols-3">
         {[
-          { label: "> 30 ngày", n: buckets.over30.length, cls: "text-amber-600 bg-amber-50 ring-amber-600/20" },
-          { label: "> 60 ngày", n: buckets.over60.length, cls: "text-orange-600 bg-orange-50 ring-orange-600/20" },
-          { label: "> 90 ngày (kiểm tra ngay)", n: buckets.over90.length, cls: "text-rose-600 bg-rose-50 ring-rose-600/20" },
+          { label: "≥ 15 ngày", n: buckets.over15.length, cls: "text-amber-600 bg-amber-50 ring-amber-600/20" },
+          { label: "≥ 30 ngày", n: buckets.over30.length, cls: "text-orange-600 bg-orange-50 ring-orange-600/20" },
+          { label: "≥ 60 ngày (kiểm tra ngay)", n: buckets.over60.length, cls: "text-rose-600 bg-rose-50 ring-rose-600/20" },
         ].map((b) => (
           <div key={b.label} className="flex h-24 flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
@@ -87,11 +88,11 @@ export default function GhostMachinesPage() {
       </div>
 
       {loading && machines.length === 0 ? (
-        <Spinner label="Đang tải danh sách máy ma…" />
+        <Spinner label="Đang tải danh sách máy mất kết nối…" />
       ) : machines.length === 0 ? (
         <EmptyState
           icon={<Ghost className="size-10" />}
-          title="Không có máy ma nào"
+          title="Không có máy mất kết nối nào"
           description="Ngưỡng 'lost' do server xác định (mất liên lạc > N ngày)."
         />
       ) : (
@@ -119,7 +120,7 @@ export default function GhostMachinesPage() {
                     <td className={TD}>
                       <Badge className={MACHINE_STATUS_META.lost.badge}>
                         <StatusDot className={MACHINE_STATUS_META.lost.dot} />
-                        Máy ma
+                        Mất kết nối
                       </Badge>
                     </td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.last_seen_at)}</td>
@@ -145,8 +146,8 @@ export default function GhostMachinesPage() {
           </table>
           <p className="flex items-center gap-1.5 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-400">
             <Ghost className="size-3.5" />
-            Thời gian 'mất liên lạc' ước tính từ <code>last_seen_at</code>; ngưỡng chính xác do
-            server cấu hình (30/60/90 ngày).
+            Thời gian 'mất kết nối' ước tính từ <code>last_seen_at</code>; ngưỡng chính xác do
+            server cấu hình <code>LOST_AFTER_DAYS</code> (mặc định 15 ngày).
           </p>
         </div>
       )}

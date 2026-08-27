@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { Badge, Card, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import { ORG_TYPE_META } from "@/lib/format";
 
-/** Thống kê số máy theo tổ chức — máy có agent vs máy cách ly (Vận hành dữ liệu offline). */
+/** Thống kê số máy theo tổ chức — máy có agent vs máy BMNN (Vận hành dữ liệu offline). */
 
 interface OrgMachineStat {
   org_id: string;
@@ -62,7 +62,7 @@ export default function OrgMachineStatsPage() {
     let acc = 0;
     return [
       { label: "Có agent", count: overall.agent, color: COLORS.agent },
-      { label: "Máy cách ly", count: overall.isolated, color: COLORS.isolated },
+      { label: "Máy BMNN", count: overall.isolated, color: COLORS.isolated },
       { label: "Chờ duyệt", count: overall.pending, color: COLORS.pending },
     ]
       .filter((s) => s.count > 0)
@@ -90,7 +90,7 @@ export default function OrgMachineStatsPage() {
     <div>
       <PageHeader
         title="Thống kê máy theo tổ chức"
-        description="Số máy có agent và máy cách ly (import offline) của từng đơn vị — cập nhật realtime"
+        description="Số máy có agent và máy BMNN (import offline) của từng đơn vị — cập nhật realtime"
         actions={
           <button
             onClick={() => void load()}
@@ -112,7 +112,7 @@ export default function OrgMachineStatsPage() {
         {[
           { label: "Tổng số máy", value: overall.total, icon: Monitor, chip: "bg-slate-100 text-slate-600" },
           { label: "Có agent", value: overall.agent, icon: Wifi, chip: "bg-blue-50 text-blue-600" },
-          { label: "Máy cách ly", value: overall.isolated, icon: HardDriveDownload, chip: "bg-amber-50 text-amber-600" },
+          { label: "Máy BMNN", value: overall.isolated, icon: HardDriveDownload, chip: "bg-amber-50 text-amber-600" },
           { label: "Chờ duyệt", value: overall.pending, icon: null, chip: "bg-violet-50 text-violet-600" },
         ].map((kpi) => (
           <div key={kpi.label} className="rounded-lg border border-slate-200 bg-white p-4">
@@ -135,7 +135,7 @@ export default function OrgMachineStatsPage() {
           <div className="flex items-center gap-5">
             <div
               role="img"
-              aria-label="Biểu đồ tròn tỉ lệ máy có agent và máy cách ly"
+              aria-label="Biểu đồ tròn tỉ lệ máy có agent và máy BMNN"
               className="relative size-36 shrink-0 rounded-full transition-colors"
               style={{ background: donutGradient }}
             >

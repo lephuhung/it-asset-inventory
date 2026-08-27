@@ -68,38 +68,6 @@ class EnrollResponse(BaseModel):
     inventory_interval_hours: int | None = None
 
 
-# ── Offline enroll (Phase 3 — máy cách ly) ──────────────────────
-# Admin proxy enrollment cho máy không thể gọi trực tiếp server. Agent trên máy
-# cách ly sinh CSR ECDSA P-256 + fingerprint → ghi ra file JSON trên USB. Admin
-# copy file lên máy có mạng → POST /api/offline/enroll → nhận client cert đã ký
-# → copy về máy cách ly cài vào Windows Cert Store. Từ đó agent ký được các file
-# export inventory và gửi qua /api/offline/import.
-
-
-class OfflineEnrollRequest(BaseModel):
-    """Payload do agent trên máy cách ly sinh (CLI --enroll-offline) — file JSON trên USB."""
-
-    token: str = Field(..., min_length=8, max_length=64, description="Enroll token (do admin cấp qua /api/tokens)")
-    hostname: str | None = Field(default=None, max_length=255)
-    fingerprint: FingerprintPayload
-    csr_pem: str = Field(..., description="Client cert CSR (PEM) — ECDSA P-256")
-
-
-class OfflineEnrollResponse(BaseModel):
-    """Response trả về cho admin — copy file JSON trên USB để agent cài cert."""
-
-    machine_id: uuid.UUID
-    client_cert_pem: str = Field(..., description="Client cert đã được CA ký — PEM")
-    ca_cert_pem: str | None = None
-    renew_after: datetime
-    is_new_machine: bool
-    status: MachineStatus
-    agent_server_url: str | None = None
-    heartbeat_interval_seconds: int | None = None
-    heartbeat_jitter_seconds: int | None = None
-    inventory_interval_hours: int | None = None
-
-
 # ── Heartbeat ─────────────────────────────────────────────────────
 
 
@@ -121,6 +89,12 @@ class HeartbeatResponse(BaseModel):
     server_url: str | None = None
     agent_server_url: str | None = None
     inventory_interval_hours: int | None = None
+    renew_before_percent: int | None = None
+    # Hash cấu hình agent server đang áp dụng. Agent so sánh với hash cũ trong state:
+    #   - khớp → heartbeat bình thường, không gọi lại /api/agent/config
+    #   - KHÁC  → gọi GET /api/agent/config ngay để đồng bộ cấu hình mới nhất
+    # Cho phép agent nhận thay đổi cấu hình từ portal trong vòng ~30s thay vì 6h.
+    agent_config_hash: str | None = None
 
 
 
@@ -275,6 +249,10 @@ class InventoryRequest(BaseModel):
     installed_software: list[InstalledSoftware] | None = None
     security: SecurityPosture | None = None
     is_vm: bool | None = None
+    # IP public (WAN) — IPv4 hoặc IPv6. Agent phát hiện qua dịch vụ echo IP public
+    # (vd: ipify.org, ifconfig.me) và cache 24h. Null nếu agent không phát hiện được
+    # (vd: máy chỉ có IPv6 link-local, NAT không echo được, hoặc offline khi collect).
+    public_ip: str | None = Field(default=None, max_length=45)
     config_hash: str | None = Field(default=None, max_length=64)
 
 
@@ -333,6 +311,7 @@ class MachineListItem(BaseModel):
     org_id: uuid.UUID
     assigned_user_id: uuid.UUID | None
     logged_user: str | None = None  # user Windows đang đăng nhập (từ snapshot mới nhất)
+    public_ip: str | None = None  # IP public (WAN) mới nhất agent báo cáo
 
 
 class MachineDetail(MachineListItem):
@@ -423,6 +402,9 @@ class AgentConfigResponse(BaseModel):
     inventory_interval_hours: int
     renew_before_percent: int
     server_time: datetime
+    # Hash SHA-256 hex của canonical JSON cấu hình trên. Agent lưu vào state để
+    # so sánh với `agent_config_hash` trong heartbeat response → phát hiện đổi cấu hình.
+    agent_config_hash: str | None = None
 
 
 # ── Alert rules (Phase 2) ────────────────────────────────────────
@@ -542,6 +524,36 @@ class MachineDecision(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class AssignUserRequest(BaseModel):
+    """Gán người sử dụng cho máy (sau khi upload ZIP cách ly).
+
+    Hai chế độ:
+    - mode="existing": chọn user có sẵn trong tổ chức → chỉ cần `user_id`
+    - mode="new": tạo user mới (role=viewer) rồi gán → cần `full_name`, `email`
+      + các trường tuỳ ch ( (phone, department)
+
+    Flow chuẩn: sau khi upload ZIP lên `/offline-import` thành công, admin nhập
+    thông tin người dùng ở đây đ máy đã có assigned_user_id trước khi giao cho user.
+    """
+
+    mode: str = Field(..., pattern="^(existing|new)$", description="existing = chọn user có sẵn; new = tạo user mới")
+    user_id: uuid.UUID | None = Field(default=None, description="Bắt buộc nếu mode=existing")
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=20)
+    department: str | None = Field(default=None, max_length=255)
+    note: str | None = Field(default=None, max_length=1000, description="Ghi chú (vd: lý do gán)")
+
+
+class AssignUserResponse(BaseModel):
+    machine_id: uuid.UUID
+    assigned_user_id: uuid.UUID
+    assigned_user_name: str
+    assigned_user_email: EmailStr
+    phone_masked: str | None = None
+    was_created: bool = Field(..., description="True nếu user mới được tạo ở request này")
+
+
 class FingerprintDriftOut(BaseModel):
     id: uuid.UUID
     machine_id: uuid.UUID
@@ -574,6 +586,13 @@ class OfflineImportResponse(BaseModel):
     decrypted: bool = False
     apps_count: int | None = None
     collected_at: datetime | None = None
+    # Người dùng hiện đang được gán cho máy (nếu có). Frontend dùng để:
+    # - Hiển thị tên người dùng ngay sau khi upload
+    # - Cho phép admin đổi qua user khác nếu cần
+    assigned_user_id: uuid.UUID | None = None
+    assigned_user_name: str | None = None
+    assigned_user_email: str | None = None
+    org_id: uuid.UUID | None = None  # org của máy → filter danh sách user cùng org
 
 
 # ── Compliance ────────────────────────────────────────────────────

@@ -138,6 +138,10 @@ public static class OfflineBundleExporter
                 File.Delete(outputZipPath);
             }
 
+            // ⚠️ ZIP kết quả KHÔNG đặt password (yêu cầu nghiệp vụ — operator copy qua
+            // USB dễ dàng; tính bí mật dựa vào mã hóa hybrid AES-256-GCM + RSA-OAEP bên
+            // trong các entry). Tuyệt đối KHÔNG dùng ZipArchive.CreateEntry với
+            // ZipArchiveEntry... với password.
             using (var zipStream = new FileStream(outputZipPath, FileMode.Create, FileAccess.Write))
             using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
             {
@@ -162,6 +166,7 @@ public static class OfflineBundleExporter
 
     private static void AddEntry(ZipArchive archive, string entryName, byte[] data)
     {
+        // KHÔNG đặt password cho entry — tính bí mật dựa vào mã hóa hybrid trong data.
         var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
         using var stream = entry.Open();
         stream.Write(data, 0, data.Length);

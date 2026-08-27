@@ -54,7 +54,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     items: [
       { href: "/machines", label: "Assets", icon: Monitor },
       { href: "/approvals", label: "Chờ duyệt", icon: ClipboardCheck, roles: ADMIN_ROLES },
-      { href: "/ghost-machines", label: "Máy ma", icon: Ghost },
+      { href: "/ghost-machines", label: "Máy mất kết nối", icon: Ghost },
       { href: "/drifts", label: "Fingerprint drift", icon: Fingerprint, roles: ADMIN_ROLES },
       {
         href: "/tokens",
@@ -88,14 +88,8 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/eol", label: "Windows EOL", icon: CalendarClock },
       { href: "/diff", label: "So sánh máy (Diff)", icon: GitCompareArrows },
       {
-        href: "/offline-enroll",
-        label: "Máy cách ly — Ký CSR",
-        icon: KeyRound,
-        roles: ADMIN_ROLES,
-      },
-      {
         href: "/offline-import",
-        label: "Máy cách ly — Import",
+        label: "Máy BMNN — Import",
         icon: HardDriveDownload,
         roles: ADMIN_ROLES,
       },

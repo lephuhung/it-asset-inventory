@@ -20,7 +20,7 @@ const STATUS_OPTIONS = [
   { value: "", label: "Tất cả trạng thái" },
   { value: "online", label: "Online" },
   { value: "offline", label: "Offline" },
-  { value: "lost", label: "Máy ma" },
+  { value: "lost", label: "Mất kết nối (máy BMNN > 15 ngày)" },
   { value: "pending", label: "Chờ duyệt" },
   { value: "decommissioned", label: "Đã thanh lý" },
 ];

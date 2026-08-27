@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.db.models import Heartbeat, Machine, MachineStatus
 from app.db.session import get_db
 from app.schemas import HeartbeatRequest, HeartbeatResponse
-from app.services.agent_settings import effective_agent_config
+from app.services.agent_settings import compute_agent_config_hash, effective_agent_config
 
 router = APIRouter(prefix="/api/heartbeat", tags=["heartbeat"])
 
@@ -88,5 +88,7 @@ async def heartbeat(
         server_url=agent_cfg["agent_server_url"],
         agent_server_url=agent_cfg["agent_server_url"],
         inventory_interval_hours=agent_cfg["inventory_interval_hours"],
+        renew_before_percent=agent_cfg["renew_before_percent"],
+        agent_config_hash=compute_agent_config_hash(agent_cfg),
         rescan_requested=rescan_requested,
     )

@@ -13,7 +13,7 @@ import { Spinner } from "@/components/ui";
 const TITLES: Array<[string, string]> = [
   ["/dashboard", "Dashboard tổng quan"],
   ["/machines", "Danh sách máy"],
-  ["/ghost-machines", "Máy ma"],
+  ["/ghost-machines", "Máy mất kết nối"],
   ["/tokens", "Thêm máy mới"],
   ["/reports", "Xuất báo cáo"],
   ["/eol", "Báo cáo Windows EOL"],

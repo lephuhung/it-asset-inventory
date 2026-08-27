@@ -268,34 +268,37 @@ export interface OfflineImportResponse {
   decrypted?: boolean;
   apps_count?: number | null;
   collected_at?: string | null;
+  /** Người dùng hiện đang gán cho máy (nếu có). */
+  assigned_user_id?: string | null;
+  assigned_user_name?: string | null;
+  assigned_user_email?: string | null;
+  /** Org của máy — dùng để lọc danh sách user khi gán. */
+  org_id?: string | null;
 }
 
-/** Máy cách ly — admin proxy CSR ký ECDSA cho máy không gọi được server.
- *  Khớp với `OfflineEnrollRequest` / `OfflineEnrollResponse` backend. */
-export interface OfflineEnrollFingerprint {
-  smbios_uuid?: string;
-  machine_guid?: string;
-  mainboard_serial?: string;
+/** Request body cho `POST /api/machines/{id}/assign-user`. */
+export type AssignUserMode = "existing" | "new";
+
+export interface AssignUserRequest {
+  mode: AssignUserMode;
+  /** Bắt buộc nếu mode="existing". */
+  user_id?: string;
+  /** Bắt buộc nếu mode="new". */
+  full_name?: string;
+  email?: string;
+  phone?: string;
+  department?: string;
+  note?: string;
 }
 
-export interface OfflineEnrollRequest {
-  token: string;
-  hostname?: string;
-  fingerprint: OfflineEnrollFingerprint;
-  csr_pem: string;
-}
-
-export interface OfflineEnrollResponse {
+export interface AssignUserResponse {
   machine_id: string;
-  client_cert_pem: string;
-  ca_cert_pem?: string | null;
-  renew_after: string;
-  is_new_machine: boolean;
-  status: MachineStatus;
-  agent_server_url?: string | null;
-  heartbeat_interval_seconds?: number | null;
-  heartbeat_jitter_seconds?: number | null;
-  inventory_interval_hours?: number | null;
+  assigned_user_id: string;
+  assigned_user_name: string;
+  assigned_user_email: string;
+  phone_masked: string | null;
+  /** True nếu user mới được tạo ở request này. */
+  was_created: boolean;
 }
 
 /** Sự kiện realtime từ WebSocket (machine:events). */

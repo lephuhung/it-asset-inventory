@@ -225,6 +225,7 @@ async def import_offline(
             logged_user=spec_data.get("logged_user"),
             security=spec_data.get("security"),
             installed_software=spec_data.get("installed_software"),
+            public_ip=spec_data.get("public_ip"),
             collected_at=exported_dt,
             config_hash=spec_data.get("config_hash"),
         )
@@ -241,6 +242,13 @@ async def import_offline(
 
     installed_apps = spec_data.get("installed_software") or []
     logger.info("Offline import %s → %s (new=%s, decrypted=%s)", machine.id, hostname, is_new, is_decrypted)
+
+    # Lookup user hiện đang gán cho máy (nếu có) — để frontend hiển thị
+    # và cho admin biết cần gán hoặc đổi user hay không.
+    assigned_user = (
+        await db.execute(select(User).where(User.id == machine.assigned_user_id))
+    ).scalar_one_or_none() if machine.assigned_user_id else None
+
     return OfflineImportResponse(
         machine_id=machine.id,
         hostname=hostname,
@@ -249,4 +257,8 @@ async def import_offline(
         decrypted=is_decrypted,
         apps_count=len(installed_apps) if installed_apps else None,
         collected_at=exported_dt,
+        assigned_user_id=machine.assigned_user_id,
+        assigned_user_name=assigned_user.full_name if assigned_user else None,
+        assigned_user_email=assigned_user.email if assigned_user else None,
+        org_id=machine.org_id,
     )

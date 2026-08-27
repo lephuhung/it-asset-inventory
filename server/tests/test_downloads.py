@@ -80,3 +80,59 @@ async def test_downloads_require_no_auth(client, msi_dir):
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r3.status_code == 200
+
+
+# ── Offline package — ZIP KHÔNG password (yêu cầu nghiệp vụ) ────────────────
+
+
+async def test_offline_package_zip_is_not_password_protected(client):
+    """ZIP tải về (`/download/offline-package.zip`) KHÔNG được đặt password.
+
+    Lý do: operator copy qua USB dễ dàng, không cần nhớ password. Tính bí mật
+    được đảm bảo bằng mã hóa hybrid AES-256-GCM + RSA-OAEP ở file ZIP DO AGENT
+    sinh ra sau (xem OfflineBundleExporter), KHÔNG phải ZIP tải về này.
+    """
+    import io
+    import zipfile
+
+    r = await client.get("/download/offline-package.zip")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/zip")
+
+    # Mở thử bằng zipfile standard — nếu có password thì phải dùng mode='r' + pwd.
+    with zipfile.ZipFile(io.BytesIO(r.content), "r") as zf:
+        # ZipFile._password là internal attribute; kiểm tra cả 2 hướng.
+        assert not getattr(zf, "_password", None), (
+            f"ZIP tải về có password ({zf._password!r}) — phải KHÔNG có password"
+        )
+        # Nếu có setpassword thì list namelist vẫn trả về nhưng extract sẽ fail.
+        names = zf.namelist()
+        assert "install-offline.ps1" in names
+        # Thử extract không password — phải OK
+        ps1_content = zf.read("install-offline.ps1").decode("utf-8")
+        assert "install-offline" in ps1_content.lower()
+
+
+async def test_offline_package_zip_contains_required_files(client):
+    """ZIP phải chứa đủ 4 file cốt lõi (cmd/ps1/pub_key/config). MSI optional."""
+    import io
+    import zipfile
+
+    r = await client.get("/download/offline-package.zip")
+    assert r.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(r.content), "r") as zf:
+        names = set(zf.namelist())
+        # 4 file bắt buộc
+        assert "install-offline.cmd" in names, "Thiếu launcher batch"
+        assert "install-offline.ps1" in names, "Thiếu script PowerShell"
+        assert "server_public_key.pem" in names, "Thiếu khóa công khai Server"
+        assert "offline_config.json" in names, "Thiếu file cấu hình mẫu"
+
+        # config.json là JSON hợp lệ
+        import json
+        cfg = json.loads(zf.read("offline_config.json"))
+        assert "endpoints" in cfg or "agent_server_url" in cfg
+
+        # pubkey là PEM hợp lệ
+        pubkey = zf.read("server_public_key.pem").decode("utf-8")
+        assert "BEGIN" in pubkey and "END" in pubkey

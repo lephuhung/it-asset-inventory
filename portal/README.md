@@ -22,7 +22,7 @@ portal/
 │   │   ├── dashboard/            # KPI + realtime WebSocket + máy gần đây
 │   │   ├── machines/             # Danh sách máy (lọc org/status/tìm kiếm)
 │   │   ├── machines/[id]/        # Chi tiết máy (specs, mạng, bảo mật, fingerprint)
-│   │   ├── ghost-machines/       # Máy ma (> 30/60/90 ngày mất liên lạc)
+│   │   ├── ghost-machines/       # Máy mất kết nối (≥ 15 ngày — monitor tự chuyển trạng thái)
 │   │   ├── tokens/               # Sinh token + lệnh cài 1 dòng + phễu triển khai
 │   │   ├── reports/              # Xuất Excel (mask ĐT mặc định)
 │   │   ├── eol/                  # Báo cáo Windows EOL (tính client-side)

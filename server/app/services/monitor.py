@@ -30,6 +30,7 @@ OFFLINE_THRESHOLD = timedelta(seconds=settings.effective_online_ttl_seconds + 60
 OFFLINE_SCAN_SECONDS = 30
 PARTITION_SCAN_SECONDS = 3600  # mỗi giờ rà partition
 ALERT_SCAN_SECONDS = 60        # mỗi phút quét alert rules
+LOST_SCAN_SECONDS = 3600       # mỗi giờ quét máy mất kết nối lâu ngày
 MACHINE_NEW_WINDOW_MINUTES = 30
 
 
@@ -55,6 +56,48 @@ async def _sweep_offline() -> None:
             await publish_machine_event(m.id, MachineStatus.OFFLINE.value, m.hostname)
         if rows:
             await db.commit()
+
+
+async def _sweep_lost() -> None:
+    """Máy offline liên tục quá `lost_after_days` ngày → chuyển `lost` (máy mất kết nối).
+
+    Điều kiện: status=offline AND last_seen_at < now - lost_after_days.
+    Hiển thị trong trang /ghost-machines (label: "Máy mất kết nối").
+
+    Không tự động chuyển ngược: máy từng `lost` phải có heartbeat/import mới để
+    được admin/webhook chuyển về `online` (qua API).
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=settings.lost_after_days)
+    async with AsyncSessionLocal() as db:
+        try:
+            rows = (
+                (
+                    await db.execute(
+                        select(Machine).where(
+                            Machine.status == MachineStatus.OFFLINE.value,
+                            (Machine.last_seen_at.is_(None)) | (Machine.last_seen_at < cutoff),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for m in rows:
+                m.status = MachineStatus.LOST.value
+                logger.info(
+                    "Machine %s → lost (last_seen %s, threshold=%d days)",
+                    m.id, m.last_seen_at, settings.lost_after_days,
+                )
+                # Realtime: lỗi Redis không được block sweep
+                try:
+                    await publish_machine_event(m.id, MachineStatus.LOST.value, m.hostname)
+                except Exception:  # noqa: BLE001 — non-critical
+                    logger.debug("publish_machine_event failed (Redis down?)")
+            if rows:
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 — đừng làm vỡ monitor loop
+            logger.warning("Sweep lost lỗi: %s", exc)
+            await db.rollback()
 
 
 async def _ensure_partitions() -> None:
@@ -219,6 +262,7 @@ async def monitor_loop() -> None:
     # Chạy partition check NGAY ở vòng đầu (last=-3600 → now-(-3600)>=3600 luôn đúng)
     last_partition_check = -PARTITION_SCAN_SECONDS
     last_alert_check = -ALERT_SCAN_SECONDS
+    last_lost_check = -LOST_SCAN_SECONDS
     while True:
         try:
             await _sweep_offline()
@@ -229,6 +273,9 @@ async def monitor_loop() -> None:
             if now - last_alert_check >= ALERT_SCAN_SECONDS:
                 await _scan_alerts()
                 last_alert_check = now
+            if now - last_lost_check >= LOST_SCAN_SECONDS:
+                await _sweep_lost()
+                last_lost_check = now
         except Exception as exc:  # noqa: BLE001
             logger.warning("Monitor loop error: %s", exc)
         await asyncio.sleep(OFFLINE_SCAN_SECONDS)

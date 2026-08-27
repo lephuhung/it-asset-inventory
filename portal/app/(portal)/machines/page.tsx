@@ -32,7 +32,7 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Tất cả trạng thái" },
   { value: "online", label: "Online" },
   { value: "offline", label: "Offline" },
-  { value: "lost", label: "Máy ma" },
+  { value: "lost", label: "Máy mất kết nối" },
   { value: "pending", label: "Chờ duyệt" },
   { value: "decommissioned", label: "Đã thanh lý" },
 ];

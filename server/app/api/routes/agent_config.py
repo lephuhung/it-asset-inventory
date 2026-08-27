@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_client_machine_id
 from app.db.session import get_db
 from app.schemas import AgentConfigResponse
-from app.services.agent_settings import effective_agent_config
+from app.services.agent_settings import compute_agent_config_hash, effective_agent_config
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
@@ -37,5 +37,6 @@ async def agent_config(
         online_ttl_seconds=agent_cfg["online_ttl_seconds"],
         inventory_interval_hours=agent_cfg["inventory_interval_hours"],
         renew_before_percent=agent_cfg["renew_before_percent"],
+        agent_config_hash=compute_agent_config_hash(agent_cfg),
         server_time=datetime.now(UTC),
     )

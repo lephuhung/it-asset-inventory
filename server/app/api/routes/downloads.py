@@ -128,7 +128,12 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
     template_dir = Path(__file__).resolve().parents[2] / "templates"
     zip_buf = io.BytesIO()
 
+    # ⚠️ ZIP này KHÔNG đặt password (yêu cầu nghiệp vụ — operator copy qua USB không
+    # cần nhập password; tính bí mật dựa vào mã hóa RSA-OAEP của file ZIP do agent
+    # sinh ra SAU, không phải ZIP tải về này). Tuyệt đối KHÔNG gọi zf.setpassword().
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        assert not hasattr(zf, "_password") or zf._password is None, "ZIP tải về phải KHÔNG có password"
+
         cmd_path = template_dir / "install-offline.cmd"
         if cmd_path.exists():
             zf.writestr("install-offline.cmd", cmd_path.read_text(encoding="utf-8"))

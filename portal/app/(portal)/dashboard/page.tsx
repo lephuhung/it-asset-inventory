@@ -115,7 +115,7 @@ export default function DashboardPage() {
               sub="Quá chu kỳ heartbeat"
             />
             <KpiCard
-              label="Máy ma"
+              label="Máy mất kết nối"
               value={stats?.lost ?? 0}
               icon={<Ghost className="size-4 text-rose-600" />}
               accent="bg-rose-50"

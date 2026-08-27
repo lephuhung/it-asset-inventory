@@ -5,6 +5,9 @@ Mọi nơi trả cấu hình cho agent (`/api/agent/config`, heartbeat, enroll) 
 """
 from __future__ import annotations
 
+import hashlib
+import json
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,3 +52,29 @@ async def effective_agent_config(db: AsyncSession) -> dict:
         ov.agent_server_url if ov is not None and ov.agent_server_url else settings.agent_server_url
     )
     return payload
+
+
+def compute_agent_config_hash(cfg: dict) -> str:
+    """SHA-256 hex của canonical JSON (sort_keys, ensure_ascii=False) của cấu hình agent.
+
+    Agent dùng hash này để so sánh với hash cũ trong heartbeat response — nếu khác
+    thì agent gọi lại GET /api/agent/config để lấy cấu hình mới nhất thay vì chờ
+    tới chu kỳ ConfigSync 6h. Tránh được tình trạng admin đổi cấu hình trên portal
+    mà agent phải đợi tối đa 6h mới nhận được.
+
+    ⚠️ Phải khớp với cách C# `AgentConfig.ComputeConfigHash()` serialize (exclude
+    agent_server_url? — KHÔNG: agent hash dựa trên endpoint, interval, jitter, inv,
+    renew. Trường `agent_server_url` cũng có trong hash vì nó nằm trong
+    `ComputeConfigHash` của agent — xem agent/src/OrgInventoryAgent/AgentConfig.cs).
+    """
+    payload = {
+        "endpoints": [cfg.get("agent_server_url")],
+        "heartbeat_interval_seconds": cfg["heartbeat_interval_seconds"],
+        "heartbeat_jitter_seconds": cfg["heartbeat_jitter_seconds"],
+        "inventory_interval_hours": cfg["inventory_interval_hours"],
+        "renew_before_percent": cfg["renew_before_percent"],
+    }
+    # Lọc None để khớp với C# (DefaultIgnoreCondition.WhenWritingNull bỏ field null)
+    payload = {k: v for k, v in payload.items() if v is not None}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
