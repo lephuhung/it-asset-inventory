@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -85,6 +85,193 @@ const BIOS_LABELS: Record<string, string> = {
   release_date: "Ngày phát hành:",
   smbios_version: "SMBIOS:",
 };
+
+/** Cổng đang mở — gọn theo dạng chip, có nút bung/thu khi danh sách dài.
+ *  Mỗi chip chỉ hiện port + protocol; địa chỉ lắng nghe có ở tooltip khi hover.
+ *  Chip listen trên 0.0.0.0 / :: / * (mọi interface → public) tô amber cảnh báo. */
+function CompactPortList({ ports }: { ports: Array<Record<string, unknown>> }) {
+  const [expanded, setExpanded] = useState(false);
+  const PREVIEW = 20;
+  const sorted = useMemo(
+    () => [...ports].sort((a, b) => Number(a.port ?? 0) - Number(b.port ?? 0)),
+    [ports],
+  );
+  const visible = expanded ? sorted : sorted.slice(0, PREVIEW);
+  const remaining = sorted.length - PREVIEW;
+
+  return (
+    <div className="py-2 text-sm">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-slate-500">Cổng đang mở ({sorted.length})</span>
+        {remaining > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[11px] font-medium text-brand-600 hover:underline"
+          >
+            {expanded ? "Thu gọn" : `Xem tất cả (${sorted.length})`}
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {visible.map((p, i) => {
+          const addr = String(p.address ?? "").trim();
+          const port = String(p.port ?? "").trim() || "—";
+          const isPublic = addr === "0.0.0.0" || addr === "::" || addr === "*";
+          return (
+            <span
+              key={i}
+              className={
+                "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] " +
+                (isPublic
+                  ? "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+                  : "bg-slate-100 text-slate-700")
+              }
+              title={`${addr || "?"}:${port} (${kv(p.protocol)})`}
+            >
+              <span className="font-semibold">{port}</span>
+              <span
+                className={
+                  "text-[10px] uppercase " + (isPublic ? "text-amber-600" : "text-slate-400")
+                }
+              >
+                {kv(p.protocol)}
+              </span>
+            </span>
+          );
+        })}
+        {!expanded && remaining > 0 && (
+          <span className="inline-flex items-center rounded bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-400">
+            +{remaining}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Khởi động cùng Windows — 1 dòng/item (name · location · command-truncated),
+ *  gom theo location để dễ quét (HKLM\Run, HKCU\Run, Startup folder…).
+ *  Bung/thu khi > 5 chương trình. */
+function CompactStartupList({ programs }: { programs: Array<Record<string, unknown>> }) {
+  const [expanded, setExpanded] = useState(false);
+  const PREVIEW = 5;
+  const sorted = useMemo(
+    () =>
+      [...programs].sort((a, b) => {
+        const locCmp = String(a.location ?? "").localeCompare(String(b.location ?? ""));
+        return locCmp !== 0
+          ? locCmp
+          : String(a.name ?? "").localeCompare(String(b.name ?? ""));
+      }),
+    [programs],
+  );
+  const visible = expanded ? sorted : sorted.slice(0, PREVIEW);
+  const remaining = sorted.length - PREVIEW;
+
+  return (
+    <div className="py-2 text-sm">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="text-slate-500">Khởi động cùng Windows ({sorted.length})</span>
+        {remaining > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[11px] font-medium text-brand-600 hover:underline"
+          >
+            {expanded ? "Thu gọn" : `Xem tất cả (${sorted.length})`}
+          </button>
+        )}
+      </div>
+      <ul className="space-y-0.5">
+        {visible.map((p, i) => (
+          <li
+            key={i}
+            className="flex items-center gap-1.5 rounded bg-slate-50 px-2 py-1 text-xs"
+          >
+            <span
+              className="shrink-0 max-w-[40%] truncate font-medium text-slate-700"
+              title={kv(p.name)}
+            >
+              {kv(p.name)}
+            </span>
+            <span className="shrink-0 truncate rounded bg-slate-200 px-1 py-px text-[10px] uppercase text-slate-500">
+              {kv(p.location)}
+            </span>
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-400"
+              title={kv(p.command)}
+            >
+              {kv(p.command)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {!expanded && remaining > 0 && (
+        <p className="mt-1 text-[11px] text-slate-400">+{remaining} chương trình khác</p>
+      )}
+    </div>
+  );
+}
+
+/** Phần mềm đã cài — gọn, có nút bung/thu khi danh sách dài.
+ *  - Mặc định hiện 10 dòng phẳng, không scroll.
+ *  - Khi bấm "Xem tất cả" → list `flex-1 min-h-0 overflow-y-auto` lấp đầy body Card
+ *    (Card được truyền `bodyClass="flex flex-col min-h-0 flex-1"`), khớp chiều cao
+ *    với card "Trạng thái bảo mật" bên trái trong cùng grid row → không khoảng trắng thừa.
+ *    Nội dung dài hơn khung thì scroll trong list. */
+function CompactSoftwareList({ software }: { software: Array<Record<string, unknown>> }) {
+  const [expanded, setExpanded] = useState(false);
+  const PREVIEW = 10;
+  const sorted = useMemo(
+    () =>
+      [...software].sort((a, b) =>
+        String(a.display_name ?? a.name ?? "").localeCompare(
+          String(b.display_name ?? b.name ?? ""),
+        ),
+      ),
+    [software],
+  );
+  const visible = expanded ? sorted : sorted.slice(0, PREVIEW);
+  const remaining = sorted.length - PREVIEW;
+
+  return (
+    <>
+      <p className="mb-2 text-xs text-slate-400">
+        {sorted.length} phần mềm — phát hiện phần mềm không phép / không bản quyền.
+        {remaining > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="ml-2 text-[11px] font-medium text-brand-600 hover:underline"
+          >
+            {expanded ? "Thu gọn" : `Xem tất cả (${sorted.length})`}
+          </button>
+        )}
+      </p>
+      <div
+        className={
+          expanded
+            ? "flex-1 min-h-0 overflow-y-auto divide-y divide-slate-50"
+            : "divide-y divide-slate-50"
+        }
+      >
+        {visible.map((s, i) => (
+          <div key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+            <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
+              <Package className="size-3.5 shrink-0 text-slate-400" />
+              <span className="truncate">{kv(s.display_name ?? s.name ?? "(không có tên)")}</span>
+            </span>
+            <span className="shrink-0 text-xs text-slate-400">{kv(s.version)}</span>
+          </div>
+        ))}
+      </div>
+      {!expanded && remaining > 0 && (
+        <p className="mt-1 text-[11px] text-slate-400">+{remaining} phần mềm khác</p>
+      )}
+    </>
+  );
+}
 
 /** Dòng thông tin — TỰ ẨN khi không có dữ liệu (không hiển thị dòng "—" thừa). */
 function SpecRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -414,87 +601,97 @@ export default function MachineDetailPage() {
 
               {weakProtocols.length > 0 && (
                 <div className="py-2 text-sm">
-                  <span className="text-slate-500">Giao thức yếu</span>
-                  <ul className="mt-1.5 space-y-1">
-                    {weakProtocols.map(([key, label]) => (
-                      <li key={key} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5">
-                        <span className="text-slate-700">{label}</span>
-                        {security?.weak_protocols?.[key] === true ? (
-                          <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
-                            <CheckCircle2 className="size-3" /> Đã tắt
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-amber-50 text-amber-700 ring-amber-600/20">
-                            <AlertTriangle className="size-3" /> Đang bật
-                          </Badge>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-slate-500">Giao thức yếu</span>
+                    <span className="text-[11px] text-slate-400">
+                      {weakProtocols.filter(([k]) => security?.weak_protocols?.[k] === true).length}/{weakProtocols.length} đã tắt
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {weakProtocols.map(([key, label]) => {
+                      const disabled = security?.weak_protocols?.[key] === true;
+                      return (
+                        <span
+                          key={key}
+                          className={
+                            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] " +
+                            (disabled
+                              ? "bg-emerald-50 text-emerald-700"
+                              : "bg-amber-50 text-amber-700 ring-1 ring-amber-200")
+                          }
+                          title={`${label}: ${disabled ? "Đã tắt (an toàn)" : "Đang bật (rủi ro)"}`}
+                        >
+                          {disabled ? (
+                            <CheckCircle2 className="size-3" />
+                          ) : (
+                            <AlertTriangle className="size-3" />
+                          )}
+                          <span className="font-medium">{label}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
               {(security?.listening_ports ?? []).length > 0 && (
-                <div className="py-2 text-sm">
-                  <span className="text-slate-500">Cổng đang mở ({security?.listening_ports?.length})</span>
-                  <ul className="mt-1.5 space-y-1">
-                    {(security?.listening_ports as Array<Record<string, unknown>>).map((p, i) => (
-                      <li key={i} className="flex items-center justify-between rounded-md bg-slate-50 px-2.5 py-1.5 font-mono text-xs">
-                        <span className="text-slate-700">{kv(p.address)}:{kv(p.port)}</span>
-                        <span className="text-slate-500">{kv(p.protocol)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <CompactPortList
+                  ports={(security?.listening_ports ?? []) as Array<Record<string, unknown>>}
+                />
               )}
               {(security?.startup_programs ?? []).length > 0 && (
-                <div className="py-2 text-sm">
-                  <span className="text-slate-500">Chương trình khởi động ({security?.startup_programs?.length})</span>
-                  <ul className="mt-1.5 space-y-1">
-                    {(security?.startup_programs as Array<Record<string, unknown>>).map((p, i) => (
-                      <li key={i} className="rounded-md bg-slate-50 px-2.5 py-1.5">
-                        <span className="text-slate-700">{kv(p.name)}</span>
-                        <span className="ml-2 rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-500">{kv(p.location)}</span>
-                        <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">{kv(p.command)}</div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <CompactStartupList
+                  programs={(security?.startup_programs ?? []) as Array<Record<string, unknown>>}
+                />
               )}
               {(security?.smarts ?? []).length > 0 && (
                 <div className="py-2 text-sm">
-                  <span className="text-slate-500">Sức khỏe ổ cứng (SMART)</span>
-                  <ul className="mt-1.5 space-y-1">
-                    {(security?.smarts as Array<Record<string, unknown>>).map((s, i) => (
-                      <li key={i} className="rounded-md bg-slate-50 px-2.5 py-1.5 text-slate-700">
-                        {kv(s.model ?? s.device ?? "Ổ đĩa")} — {kv(s.status ?? s.health)}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-slate-500">Sức khỏe ổ cứng ({security?.smarts?.length})</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(security?.smarts as Array<Record<string, unknown>>).map((s, i) => {
+                      const model = kv(s.model ?? s.device ?? "Ổ đĩa");
+                      const statusRaw = kv(s.status ?? s.health ?? "");
+                      const status = statusRaw.toLowerCase();
+                      const isFail = /(fail|error|critical|bad|dead)/.test(status);
+                      const isWarn = /(warn|caution|degrad|risk)/.test(status);
+                      const isGood = !isFail && !isWarn && /(good|ok|healthy|pass)/.test(status);
+                      const cls = isFail
+                        ? "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
+                        : isWarn
+                          ? "bg-amber-50 text-amber-700"
+                          : isGood
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-slate-100 text-slate-600";
+                      const Icon = isFail || isWarn ? AlertTriangle : CheckCircle2;
+                      return (
+                        <span
+                          key={i}
+                          className={"inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] " + cls}
+                          title={`${model} — ${statusRaw || "không rõ"}`}
+                        >
+                          <Icon className="size-3" />
+                          <span className="max-w-[160px] truncate font-medium">{model}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
           </Card>
         )}
 
-        <Card title="Phần mềm đã cài" subtitle="Software inventory (Phase 2)">
+        <Card
+          title="Phần mềm đã cài"
+          subtitle="Software inventory (Phase 2)"
+          bodyClass="flex flex-col min-h-0 flex-1"
+        >
           {software.length === 0 ? (
             <p className="text-sm text-slate-500">Chưa có dữ liệu phần mềm.</p>
           ) : (
-            <>
-              <p className="mb-2 text-xs text-slate-400">{software.length} phần mềm — phát hiện phần mềm không phép / không bản quyền.</p>
-              <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">
-                {software.map((s, i) => (
-                  <div key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
-                    <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
-                      <Package className="size-3.5 shrink-0 text-slate-400" />
-                      <span className="truncate">{kv(s.display_name ?? s.name ?? "(không có tên)")}</span>
-                    </span>
-                    <span className="shrink-0 text-xs text-slate-400">{kv(s.version)}</span>
-                  </div>
-                ))}
-              </div>
-            </>
+            <CompactSoftwareList software={software as Array<Record<string, unknown>>} />
           )}
         </Card>
 

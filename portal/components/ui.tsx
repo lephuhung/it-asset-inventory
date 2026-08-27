@@ -59,6 +59,7 @@ export function Card({
   actions,
   children,
   className = "",
+  bodyClass = "",
   padded = true,
   headerClass = "",
 }: {
@@ -67,12 +68,15 @@ export function Card({
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** Bổ sung class cho body — dùng khi muốn body lấp đầy card (vd `flex flex-col min-h-0 flex-1`)
+   *  để danh sách con dùng được `flex-1` và khớp chiều cao với card bên cạnh trong grid. */
+  bodyClass?: string;
   padded?: boolean;
   headerClass?: string;
 }) {
   return (
     <section
-      className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}
+      className={`flex flex-col rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}
     >
       {(title || actions) && (
         <header className={`flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 ${headerClass}`}>
@@ -83,7 +87,7 @@ export function Card({
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
       )}
-      <div className={padded ? "p-5" : ""}>{children}</div>
+      <div className={`${padded ? "p-5" : ""} ${bodyClass}`}>{children}</div>
     </section>
   );
 }
