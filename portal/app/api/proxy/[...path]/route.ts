@@ -11,11 +11,17 @@ export const dynamic = "force-dynamic";
 async function handle(request: Request, segments: string[], method: string) {
   const path = `/api/${segments.join("/")}`;
   const search = new URL(request.url).search;
-  let body: string | undefined;
+  let body: BodyInit | undefined;
+  const contentType = request.headers.get("content-type");
+
   if (method !== "GET" && method !== "HEAD") {
-    body = await request.text();
+    if (contentType && contentType.includes("multipart/form-data")) {
+      body = await request.arrayBuffer();
+    } else {
+      body = await request.text();
+    }
   }
-  return proxyRequest(request, `${path}${search}`, method, body || undefined);
+  return proxyRequest(request, `${path}${search}`, method, body || undefined, contentType);
 }
 
 export async function GET(request: Request, context: { params: Promise<{ path: string[] }> }) {

@@ -144,7 +144,39 @@ public sealed class EnrollCoordinator
 
         _logger.LogInformation("Enroll thành công: machine_id={MachineId}, is_new={IsNew}, status={Status}, server={Server}",
             response.MachineId, response.IsNewMachine, response.Status, _config.PrimaryEndpoint);
+
+        // Tải cấu hình đầy đủ từ /api/agent/config bằng client cert mTLS vừa cài
+        try
+        {
+            var cfgResp = await _api.GetJsonAsync("/api/agent/config", ct, useClientCert: true, timeoutSeconds: 30);
+            if (cfgResp.Ok && cfgResp.Body is not null)
+            {
+                var sUrl = cfgResp.Body["server_url"]?.GetValue<string>();
+                int? hb = TryGetInt(cfgResp.Body["heartbeat_interval_seconds"]);
+                int? jit = TryGetInt(cfgResp.Body["heartbeat_jitter_seconds"]);
+                int? inv = TryGetInt(cfgResp.Body["inventory_interval_hours"]);
+                int? renew = TryGetInt(cfgResp.Body["renew_before_percent"]);
+                if (_config.ApplyServerSettings(sUrl, hb, jit, inv, renew))
+                {
+                    _config.Save();
+                    _logger.LogInformation("Đã tải cấu hình agent hoàn chỉnh từ /api/agent/config: server={Server}, interval={I}s, jitter={J}s, inv={H}h, renew={R}%",
+                        _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds,
+                        _config.InventoryIntervalHours, _config.RenewBeforePercent);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Không tải được /api/agent/config sau enroll (sẽ đồng bộ lại ở chu kỳ kế tiếp): {Msg}", ex.Message);
+        }
+
         return true;
+    }
+
+    private static int? TryGetInt(System.Text.Json.Nodes.JsonNode? node)
+    {
+        try { var v = node?.GetValue<int>(); return v is > 0 ? v : null; }
+        catch { return null; }
     }
 
     private string? SafeHostname()

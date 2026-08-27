@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Build MSI cho OrgInventory Agent (WiX Toolset v4+). CHỈ CHẠY ĐƯỢC TRÊN WINDOWS.
 

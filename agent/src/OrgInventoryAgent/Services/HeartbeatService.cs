@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
+using OrgInventoryAgent.Crypto;
 using OrgInventoryAgent.Net;
 
 namespace OrgInventoryAgent.Services;
@@ -9,9 +10,13 @@ namespace OrgInventoryAgent.Services;
 /// Heartbeat định kỳ: chu kỳ ngẫu nhiên trong [interval - jitter, interval + jitter]
 /// (mặc định 30±8s ≈ 22–38s) — chống pattern C2. Trước khi gửi: flush offline cache.
 /// Đồng bộ interval/jitter/renew_after từ response; rescan_requested → chạy inventory ngay.
+/// Định kỳ (mỗi 20 chu kỳ) kiểm tra cert thực sự tồn tại trong store — nếu mất (ví dụ OS
+/// cài lại) thì reset enrollment state để tự re-enroll.
 /// </summary>
 public sealed class HeartbeatService : BackgroundService
 {
+    private const int CertCheckEvery = 20; // chu kỳ kiểm tra cert thực sự
+
     private readonly AgentConfig _config;
     private readonly ApiClient _api;
     private readonly EndpointManager _endpoints;
@@ -19,11 +24,13 @@ public sealed class HeartbeatService : BackgroundService
     private readonly OfflineCache _cache;
     private readonly InventoryCollector _inventory;
     private readonly InventoryService _inventoryService;
+    private readonly KeyStore _keyStore;
     private readonly ILogger<HeartbeatService> _logger;
+    private int _cycleCount;
 
     public HeartbeatService(AgentConfig config, ApiClient api, EndpointManager endpoints,
         EnrollCoordinator enroll, OfflineCache cache, InventoryCollector inventory,
-        InventoryService inventoryService, ILogger<HeartbeatService> logger)
+        InventoryService inventoryService, KeyStore keyStore, ILogger<HeartbeatService> logger)
     {
         _config = config;
         _api = api;
@@ -32,6 +39,7 @@ public sealed class HeartbeatService : BackgroundService
         _cache = cache;
         _inventory = inventory;
         _inventoryService = inventoryService;
+        _keyStore = keyStore;
         _logger = logger;
     }
 
@@ -47,6 +55,27 @@ public sealed class HeartbeatService : BackgroundService
                 if (!AgentIdentity.IsEnrolled(_config))
                 {
                     await _enroll.EnsureEnrolledAsync(ct);
+                }
+                else
+                {
+                    // Định kỳ kiểm tra cert thực sự còn trong store (ví dụ: OS được cài lại)
+                    _cycleCount++;
+                    if (_cycleCount % CertCheckEvery == 0)
+                    {
+                        var status = AgentIdentity.Validate(_config, _keyStore);
+                        if (status == EnrollStatus.CertMissing)
+                        {
+                            _logger.LogCritical(
+                                "Client cert (thumbprint={Thumb}) không còn trong Windows Certificate Store. " +
+                                "Có thể OS được cài lại hoặc store bị xóa. " +
+                                "Đặt lại trạng thái enrollment để tự re-enroll.",
+                                _config.ClientCertThumbprint);
+                            // Reset để EnsureEnrolledAsync chạy lại ở chu kỳ sau
+                            _config.Enrolled = false;
+                            _config.ClientCertThumbprint = null;
+                            _config.Save();
+                        }
+                    }
                 }
 
                 if (AgentIdentity.IsEnrolled(_config))
@@ -102,26 +131,36 @@ public sealed class HeartbeatService : BackgroundService
             var resp = await _api.PostJsonAsync("/api/heartbeat", payload, ct, useClientCert: true, timeoutSeconds: 20);
             if (!resp.Ok)
             {
-                _logger.LogWarning("Heartbeat thất bại HTTP {(int)Status}: {Detail}", resp.Status, resp.Detail);
+                _logger.LogWarning("Heartbeat thất bại HTTP {StatusCode}: {Detail}", (int)resp.Status, resp.Detail);
                 return false;
             }
 
             var body = resp.Body;
-            _logger.LogDebug("Heartbeat ok, server_time={Time}", body?["server_time"]?.GetValue<string>());
+            _logger.LogInformation("Heartbeat thành công -> Server={Endpoint}, server_time={Time}, user={User}, ip={Ip}",
+                _endpoints.Current, body?["server_time"]?.GetValue<string>(), payload.logged_user, payload.ip);
 
-            // Đồng bộ cấu hình từ server
-            bool changed = false;
-            if (body?["heartbeat_interval_seconds"] is not null)
-                changed |= SyncInt(body["heartbeat_interval_seconds"], v => _config.HeartbeatIntervalSeconds = v);
-            if (body?["heartbeat_jitter_seconds"] is not null)
-                changed |= SyncInt(body["heartbeat_jitter_seconds"], v => _config.HeartbeatJitterSeconds = v);
+            // Đồng bộ cấu hình từ server (server_url / heartbeat / jitter / inventory interval / renew_after)
+            var serverUrl = body?["server_url"]?.GetValue<string>() ?? body?["agent_server_url"]?.GetValue<string>();
+            int? interval = TryGetInt(body?["heartbeat_interval_seconds"]);
+            int? jitter = TryGetInt(body?["heartbeat_jitter_seconds"]);
+            int? invHours = TryGetInt(body?["inventory_interval_hours"]);
+            int? renewPct = TryGetInt(body?["renew_before_percent"]);
+
+            bool changed = _config.ApplyServerSettings(serverUrl, interval, jitter, invHours, renewPct);
+
             var renewAfter = body?["renew_after"]?.GetValue<string>();
             if (!string.IsNullOrWhiteSpace(renewAfter) && _config.RenewAfter != renewAfter)
             {
                 _config.RenewAfter = renewAfter;
                 changed = true;
             }
-            if (changed) _config.Save();
+
+            if (changed)
+            {
+                _config.Save();
+                _logger.LogInformation("Đã cập nhật cấu hình từ heartbeat response: server={Server}, interval={I}s, jitter={J}s, inv={H}h",
+                    _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds, _config.InventoryIntervalHours);
+            }
 
             // Phase 3: on-demand rescan từ portal
             if (body?["rescan_requested"]?.GetValue<bool>() == true)
@@ -139,15 +178,14 @@ public sealed class HeartbeatService : BackgroundService
         }
     }
 
-    private bool SyncInt(System.Text.Json.Nodes.JsonNode? node, Action<int> setter)
+    private static int? TryGetInt(System.Text.Json.Nodes.JsonNode? node)
     {
         try
         {
             var v = node?.GetValue<int>();
-            if (v is > 0) { setter(v.Value); return true; }
+            return v is > 0 ? v : null;
         }
-        catch { }
-        return false;
+        catch { return null; }
     }
 
     /// <summary>Gửi bù offline cache khi online (giữ nguyên body — không thay đổi nội dung).</summary>

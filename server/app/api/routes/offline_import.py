@@ -1,8 +1,13 @@
 """Chế độ máy cách ly — import file ký số từ USB (tính năng #12, Phase 3).
 
-Agent ở mạng không ra internet ghi inventory ra file JSON ký ECDSA (private key
-client cert); cán bộ copy USB → import vào đây. Server verify chữ ký (SHA-256 +
-ECDSA) trước khi ghi dữ liệu — file sửa đổi sẽ bị từ chối.
+Hỗ trợ 2 định dạng:
+1. Gói ZIP mã hóa 1-Click (multipart/form-data):
+   - Agent đóng gói: inventory.json + signature.sig + public_key.pem + manifest.json
+   - Mã hóa lai AES-256-GCM + RSA Server Public Key.
+   - Backend giải mã bằng Server Private Key → verify chữ ký ECDSA → cập nhật hệ thống.
+2. File JSON phẳng truyền thống (application/json):
+   - Nhận OfflineImportRequest {payload, signature_b64, public_key_pem}.
+   - Phục vụ tương thích ngược cho automation scripts.
 """
 from __future__ import annotations
 
@@ -28,18 +33,19 @@ from app.schemas import OfflineImportRequest, OfflineImportResponse
 from app.services.fingerprint import compute_weighted_id, is_same_machine
 from app.services.inventory_normalize import derive_os_fields
 from app.services.inventory_sync import upsert_current_and_software
+from app.services.server_crypto import decrypt_offline_bundle
 
 logger = logging.getLogger("offline_import")
 router = APIRouter(prefix="/api/offline", tags=["offline"])
 
 
 def _canonical_json(payload: dict) -> bytes:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
 def _verify_signature(payload: dict, signature_b64: str, public_key_pem: str) -> bool:
     try:
-        pub = serialization.load_pem_public_key(public_key_pem.encode())
+        pub = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
         if not isinstance(pub, ec.EllipticCurvePublicKey):
             return False
         digest = hashlib.sha256(_canonical_json(payload)).digest()
@@ -62,19 +68,61 @@ def _spec_from_payload(spec: dict | None) -> dict:
 
 @router.post("/import", response_model=OfflineImportResponse)
 async def import_offline(
-    body: OfflineImportRequest,
     request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import 1 file máy cách ly (payload ký số)."""
-    if not _verify_signature(body.payload, body.signature_b64, body.public_key_pem):
+    """Import file máy cách ly (hỗ trợ cả gói ZIP mã hóa lẫn payload JSON ký số)."""
+    content_type = request.headers.get("content-type", "").lower()
+    is_decrypted = False
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file_item = form.get("file")
+        if file_item is None or not hasattr(file_item, "read"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Thiếu file upload trong form data")
+
+        zip_bytes = await file_item.read()
+        try:
+            bundle = decrypt_offline_bundle(zip_bytes)
+        except ValueError as ex:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(ex))
+
+        payload = bundle["payload"]
+        signature_b64 = bundle["signature_b64"]
+        public_key_pem = bundle["public_key_pem"]
+        manifest = bundle.get("manifest") or {}
+
+        # Merge metadata từ manifest nếu payload chưa có
+        for field in ("machine_uuid", "hostname", "fingerprint", "org_id", "exported_at"):
+            if field not in payload and field in manifest:
+                payload[field] = manifest[field]
+
+        form_org_id = form.get("org_id")
+        if form_org_id:
+            payload["org_id"] = str(form_org_id)
+
+        is_decrypted = True
+    else:
+        try:
+            json_data = await request.json()
+            body = OfflineImportRequest(**json_data)
+        except Exception as ex:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Dữ liệu JSON không hợp lệ: {ex}")
+        payload = body.payload
+        signature_b64 = body.signature_b64
+        public_key_pem = body.public_key_pem
+        is_decrypted = False
+
+    # Xác thực chữ ký số ECDSA
+    # Lưu ý: Nếu payload có dạng {spec: ...} hoặc phẳng (spec trực tiếp trong payload)
+    # Ta verify trên đúng object payload được ký.
+    if not _verify_signature(payload, signature_b64, public_key_pem):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail="Chữ ký không hợp lệ — file có thể đã bị sửa đổi; không import",
         )
 
-    payload = body.payload
     machine_uuid = str(payload.get("machine_uuid") or "").strip()
     hostname = payload.get("hostname")
     fp_dict = payload.get("fingerprint") or {}
@@ -124,6 +172,7 @@ async def import_offline(
     is_new = machine is None
     if is_new:
         machine = Machine(
+            id=uuid.uuid4(),
             org_id=org_uuid,
             machine_uuid=weighted,
             hostname=hostname,
@@ -138,7 +187,9 @@ async def import_offline(
         machine.last_seen_at = exported_dt
         machine.hostname = hostname or machine.hostname
 
-    spec_data = _spec_from_payload(payload.get("spec") or {})
+    # Nếu payload có bọc trong key "spec" thì lấy từ spec, nếu không thì lấy trực tiếp từ payload
+    inner_spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else payload
+    spec_data = _spec_from_payload(inner_spec)
     if spec_data:
         # Chuẩn hóa OS phía server (agent/offline file không cần đổi)
         product, release, family = derive_os_fields(
@@ -180,12 +231,22 @@ async def import_offline(
 
     await append_audit(
         db,
-        action="offline.import",
+        action="offline.import_zip" if is_decrypted else "offline.import",
         actor=str(admin.id),
         target=str(machine.id),
         ip=request.client.host if request.client else None,
         machine_id=machine.id,
     )
     await db.commit()
-    logger.info("Offline import %s → %s (new=%s)", machine.id, hostname, is_new)
-    return OfflineImportResponse(machine_id=machine.id, hostname=hostname, is_new=is_new, verified=True)
+
+    installed_apps = spec_data.get("installed_software") or []
+    logger.info("Offline import %s → %s (new=%s, decrypted=%s)", machine.id, hostname, is_new, is_decrypted)
+    return OfflineImportResponse(
+        machine_id=machine.id,
+        hostname=hostname,
+        is_new=is_new,
+        verified=True,
+        decrypted=is_decrypted,
+        apps_count=len(installed_apps) if installed_apps else None,
+        collected_at=exported_dt,
+    )

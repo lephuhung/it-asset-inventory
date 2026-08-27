@@ -22,6 +22,7 @@ public sealed class AgentConfig
     public int HeartbeatIntervalSeconds { get; set; } = 30;
     public int HeartbeatJitterSeconds { get; set; } = 8;
     public int InventoryIntervalHours { get; set; } = 24;
+    public int? InventoryIntervalSeconds { get; set; }
     public int RenewBeforePercent { get; set; } = 70;
 
     // ── Trạng thái enrollment ──
@@ -109,14 +110,19 @@ public sealed class AgentConfig
         }
     }
 
-    /// <summary>Chuẩn hóa: đảm bảo giá trị hợp lệ, không null.</summary>
     public void Normalize()
     {
         Endpoints ??= Array.Empty<string>();
-        Endpoints = Endpoints.Where(e => !string.IsNullOrWhiteSpace(e)).Select(e => e.Trim()).ToArray();
+        Endpoints = Endpoints
+            .Where(e => !string.IsNullOrWhiteSpace(e))
+            .Select(e => e.Trim().TrimEnd('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         HeartbeatIntervalSeconds = Math.Clamp(HeartbeatIntervalSeconds, 5, 3600);
         HeartbeatJitterSeconds = Math.Clamp(HeartbeatJitterSeconds, 0, HeartbeatIntervalSeconds - 1);
         InventoryIntervalHours = Math.Clamp(InventoryIntervalHours, 1, 24 * 30);
+        if (InventoryIntervalSeconds.HasValue && InventoryIntervalSeconds.Value < 5)
+            InventoryIntervalSeconds = 5;
         RenewBeforePercent = Math.Clamp(RenewBeforePercent, 1, 99);
     }
 
@@ -240,5 +246,19 @@ public static class CanonicalJson
             obj.Remove(excludeProperty);
         var canonical = Sort(node)?.ToJsonString() ?? "null";
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    /// <summary>Trả về bytes UTF-8 của canonical JSON (khớp python json.dumps sort_keys=True separators=(',', ':') ensure_ascii=False).</summary>
+    public static byte[] ToCanonicalBytes(object? payload)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(
+            System.Text.Json.JsonSerializer.Serialize(payload, Json.Options));
+        var sorted = Sort(node);
+        var opt = new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = false,
+        };
+        return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(sorted, opt));
     }
 }

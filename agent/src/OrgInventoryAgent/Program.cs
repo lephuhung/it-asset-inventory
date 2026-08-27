@@ -48,11 +48,30 @@ internal static class Program
             return 0;
         }
 
+        if (cli.PrintInventory)
+        {
+            using var loggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole());
+            var inv = new InventoryCollector(loggerFactory.CreateLogger<InventoryCollector>()).Collect();
+            Console.WriteLine(JsonSerializer.Serialize(inv, new JsonSerializerOptions(Json.Options) { WriteIndented = true }));
+            return 0;
+        }
+
+        if (cli.PrintSecurity)
+        {
+            using var loggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole());
+            var sec = SecurityCollector.Collect(loggerFactory.CreateLogger(nameof(SecurityCollector)));
+            Console.WriteLine(JsonSerializer.Serialize(sec, new JsonSerializerOptions(Json.Options) { WriteIndented = true }));
+            return 0;
+        }
+
         var config = AgentConfig.Load();
 
         // Ghi đè endpoint từ CLI (dev/test)
         if (!string.IsNullOrWhiteSpace(cli.Endpoint))
             config.SetPrimaryEndpoint(cli.Endpoint);
+
+        if (cli.InventorySeconds.HasValue)
+            config.InventoryIntervalSeconds = cli.InventorySeconds.Value;
 
         // Token từ CLI được lưu vào config để service retry được (token 1 lần — xóa sau enroll)
         if (!string.IsNullOrWhiteSpace(cli.EnrollToken))
@@ -82,6 +101,19 @@ internal static class Program
             };
             Console.WriteLine(JsonSerializer.Serialize(masked, new JsonSerializerOptions { WriteIndented = true }));
             return 0;
+        }
+
+        if (!string.IsNullOrWhiteSpace(cli.ExportBundlePath))
+        {
+            using var loggerFactory = LoggerFactory.Create(b => b.AddSimpleConsole(o => { o.SingleLine = true; }));
+            var logger = loggerFactory.CreateLogger("ExportBundle");
+            var ok = await OfflineBundleExporter.ExportBundleAsync(
+                cli.ExportBundlePath,
+                cli.ServerKeyPath,
+                cli.OrgId,
+                config,
+                logger);
+            return ok ? 0 : 1;
         }
 
         if (cli.Once)
@@ -150,9 +182,13 @@ internal static class Program
                 return 1;
             }
 
+            var configSync = new ConfigSyncService(config, api, coordinator, loggerFactory.CreateLogger<ConfigSyncService>());
+            var cfgOk = await configSync.SyncAsync(cts.Token);
+            logger.LogInformation("--once config sync: {Ok}", cfgOk ? "OK" : "FAIL");
+
             var inv = new InventoryService(config, api, endpoints, coordinator, cache, inventoryCollector,
                 loggerFactory.CreateLogger<InventoryService>());
-            var hb = new HeartbeatService(config, api, endpoints, coordinator, cache, inventoryCollector, inv,
+            var hb = new HeartbeatService(config, api, endpoints, coordinator, cache, inventoryCollector, inv, keyStore,
                 loggerFactory.CreateLogger<HeartbeatService>());
 
             var hbOk = await hb.SendOnceAsync(cts.Token);
@@ -216,6 +252,11 @@ internal static class Program
               --endpoint <url>        Endpoint server (primary). Ghi đè config.
               --print-config          In cấu hình hiện tại (token được che) rồi thoát.
               --print-fingerprint     Thu thập và in fingerprint 3 nguồn rồi thoát.
+              --print-inventory       Thu thập và in toàn bộ JSON Inventory rồi thoát.
+              --print-security        Thu thập và in toàn bộ JSON Security Posture rồi thoát.
+              --export-bundle <path>  Thu thập, ký số ECDSA và mã hóa lai ra gói ZIP offline rồi thoát.
+              --server-key <path>     Đường dẫn file server_public_key.pem (dùng khi export-bundle).
+              --org-id <guid>         Mã tổ chức gán cho máy cách ly khi export-bundle.
               --version               In phiên bản.
               --once                  Chạy 1 lần: enroll → heartbeat → inventory rồi thoát (test/CI).
               --help                  Hướng dẫn này.
@@ -233,8 +274,14 @@ internal sealed class CliArgs
     public string? DataDir { get; private set; }
     public string? EnrollToken { get; private set; }
     public string? Endpoint { get; private set; }
+    public int? InventorySeconds { get; private set; }
     public bool PrintConfig { get; private set; }
     public bool PrintFingerprint { get; private set; }
+    public bool PrintInventory { get; private set; }
+    public bool PrintSecurity { get; private set; }
+    public string? ExportBundlePath { get; private set; }
+    public string? ServerKeyPath { get; private set; }
+    public string? OrgId { get; private set; }
     public bool PrintVersion { get; private set; }
     public bool Once { get; private set; }
     public bool ShowHelp { get; private set; }
@@ -252,8 +299,17 @@ internal sealed class CliArgs
                 case "--data-dir": cli.DataDir = Next(); break;
                 case "--enroll-token": cli.EnrollToken = Next(); break;
                 case "--endpoint": cli.Endpoint = Next(); break;
+                case "--inventory-seconds":
+                case "--inventory-interval":
+                    if (int.TryParse(Next(), out var sec)) cli.InventorySeconds = sec;
+                    break;
                 case "--print-config": cli.PrintConfig = true; break;
                 case "--print-fingerprint": cli.PrintFingerprint = true; break;
+                case "--print-inventory": cli.PrintInventory = true; break;
+                case "--print-security": cli.PrintSecurity = true; break;
+                case "--export-bundle": cli.ExportBundlePath = Next(); break;
+                case "--server-key": cli.ServerKeyPath = Next(); break;
+                case "--org-id": cli.OrgId = Next(); break;
                 case "--version": cli.PrintVersion = true; break;
                 case "--once": cli.Once = true; break;
                 case "--help":

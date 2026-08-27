@@ -59,11 +59,16 @@ export async function fetchUpstream(
   path: string,
   method: string,
   accessToken: string | null,
-  body?: string,
+  body?: BodyInit,
+  contentType?: string | null,
 ) {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (contentType) {
+    headers["Content-Type"] = contentType;
+  } else if (body !== undefined && typeof body === "string") {
+    headers["Content-Type"] = "application/json";
+  }
 
   return fetch(`${API_BASE}${path}`, {
     method,
@@ -99,17 +104,18 @@ export async function proxyRequest(
   request: Request,
   path: string,
   method: string,
-  body?: string,
+  body?: BodyInit,
+  contentType?: string | null,
 ): Promise<NextResponse> {
   const { access, refresh } = await getSessionTokens();
-  let res = await fetchUpstream(path, method, access, body);
+  let res = await fetchUpstream(path, method, access, body, contentType);
   let newPair: { access: string; refresh: string } | null = null;
 
   // Access hết hạn → thử refresh một lần, retry request gốc.
   if (res.status === 401 && refresh) {
     newPair = await refreshTokens(refresh);
     if (newPair) {
-      res = await fetchUpstream(path, method, newPair.access, body);
+      res = await fetchUpstream(path, method, newPair.access, body, contentType);
     }
   }
 

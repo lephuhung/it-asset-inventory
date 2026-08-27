@@ -1,23 +1,38 @@
 # API CONTRACT — Hệ thống IT Asset Inventory (Phase 1 MVP)
 
 > Hợp đồng dùng chung cho 3 thành phần: `agent/` (C#), `server/` (FastAPI), `portal/` (Next.js).
-> **v1.4 — khớp implementation thực tế của server** (đã verify 78/78 test). Mọi dev khi code PHẢI bám đúng file này; thay đổi phải sửa contract trước.
+> **v1.6 — tối ưu hóa quy trình 1-click nháy đúp chuột cho máy cách ly** (khớp implementation thực tế của server & portal).
+> Mọi dev khi code PHẢI bám đúng file này; thay đổi phải sửa contract trước.
 >
-> **v1.4 (2026-08-26)**: refactor schema thống kê phía server — bảng `machine_current` +
-> `machine_software` (xem mục 3.7). **Agent KHÔNG đổi**: payload v1/v2/v3 vẫn được chấp nhận
-> nguyên vẹn; mọi chuẩn hóa (os_product/os_release/os_family, security → cột) do server tính.
+> **v1.6 (2026-08-27)**: Chuẩn hóa 2 chế độ triển khai của Agent theo phản hồi thực tế:
+> 1. **Chế độ 1 (Trực tuyến — Online / Web Link)**: Cài đặt 1 lệnh copy từ trình duyệt Web Portal (`irm .../i/{token} | iex`), tự động enroll và đẩy dữ liệu liên tục qua mTLS.
+> 2. **Chế độ 2 (Ngoại tuyến — Offline / Máy cách ly USB)**: Đơn giản hóa tối đa cho người dùng cuối — **chỉ cần nháy đúp chuột vào file `install-offline` trên USB** (không bắt nhập tham số `-Token` hay `-Endpoints`). Kết quả tự động sinh ra **1 file ZIP được mã hóa và ký số** ngay trên USB. Backend thực hiện giải mã, kiểm tra chữ ký số và tự động parse dữ liệu cập nhật hệ thống.
 
 ---
 
-## 1. Quy ước chung
+## 1. Mô hình 2 chế độ vận hành & Quy ước chung
 
-- **Định dạng:** JSON UTF-8, `Content-Type: application/json; charset=utf-8`.
+### 1.1. Bảng so sánh 2 chế độ hoạt động của Agent
+
+| Tiêu chí | Chế độ 1: Trực tuyến (Online / Web Link) | Chế độ 2: Ngoại tuyến (Offline / Máy cách ly USB) |
+|---|---|---|
+| **Môi trường máy** | Có mạng LAN / VPN / Internet tới Server | Cách ly hoàn toàn (Air-gapped), không có kết nối tới Server |
+| **Thao tác cài đặt** | Copy lệnh 1 dòng từ trình duyệt Portal: `irm https://<host>/i/<token> \| iex` | Cắm USB, **chỉ cần nháy đúp chuột** vào `install-offline` (không cần gõ lệnh, không cần tham số) |
+| **Cơ chế thu thập** | Tự động chạy nền (Windows Service), gửi định kỳ qua mTLS | Tự động thực thi ngay khi nháy đúp chuột, xuất ra **1 file ZIP mã hóa** trên USB |
+| **Cơ chế an ninh 2 lớp** | Kênh truyền bảo mật **mTLS** trực tiếp (Client Cert ECDSA do CA server cấp) | **Lớp 1: Ký số ECDSA P-256** (chống sửa dữ liệu) + **Lớp 2: Mã hóa gói ZIP bằng Server Public Key** (chống lộ dữ liệu trên USB) |
+| **Chuyển dữ liệu lên hệ thống**| Tự động gửi qua mTLS: `POST /api/inventory` (24h/lần hoặc khi cấu hình thay đổi) | Admin mang file ZIP về máy có mạng $\rightarrow$ Upload lên Portal (`/offline-import`) $\rightarrow$ Backend tự giải mã, verify chữ ký và parse dữ liệu |
+| **Trạng thái máy** | Tự động gửi `POST /api/heartbeat` (30±8s) $\rightarrow$ `online` | Không gửi heartbeat $\rightarrow$ trạng thái `offline`, cập nhật `last_seen_at` theo thời điểm xuất file |
+
+### 1.2. Quy ước chung
+
+- **Định dạng dữ liệu:** JSON UTF-8, `Content-Type: application/json; charset=utf-8` hoặc `multipart/form-data` (khi upload file ZIP mã hóa).
 - **Thời gian:** ISO 8601 UTC (`2025-01-01T00:00:00Z`).
-- **Mã hóa truyền tải:** TLS 1.2+; sau enroll là **mTLS**. Không mã hóa chồng tầng ứng dụng.
-- **Payload flat** (không envelope) trong Phase 1: agent gửi trực tiếp schema của từng endpoint. Envelope `{schema_version, request_id, ts}` dự kiến Phase 2.
-- Lỗi: `{ "detail": "..." }` với HTTP status chuẩn (400/401/403/404/409/410/422/429).
+- **Mã hóa truyền tải:** TLS 1.2+; với chế độ trực tuyến sau enroll là **mTLS**. Không mã hóa chồng tầng ứng dụng khi đã có mTLS.
+- **Quy ước lỗi:** `{ "detail": "..." }` với HTTP status chuẩn (400/401/403/404/409/410/422/429).
 
-## 2. mTLS qua nginx → FastAPI
+---
+
+## 2. mTLS qua nginx → FastAPI (Chế độ Trực tuyến)
 
 nginx verify client cert (`ssl_verify_client optional` + CRL) rồi forward header:
 
@@ -28,13 +43,19 @@ nginx verify client cert (`ssl_verify_client optional` + CRL) rồi forward head
 | `X-SSL-Client-Serial` | serial cert (phục vụ revoke khi renew) |
 
 - FastAPI chỉ bind IP nội bộ, chỉ nhận traffic từ nginx. Setting `require_agent_mtls_header=True` (prod) → app tự chặn verify != SUCCESS.
-- Endpoint `/api/enroll` và `/i/{token}` KHÔNG cần client cert (dùng HTTPS + token).
+- Endpoint `/api/enroll`, `/i/{token}`, và `/download/*` KHÔNG cần client cert (dùng HTTPS public + token nếu có).
 
-## 3. Agent API (đã khớp server)
+---
+
+## 3. Chế độ 1 — Agent API Trực tuyến (Online / Web Link)
+
+Dành cho máy trạm có kết nối mạng tới Server. Quản trị viên copy lệnh cài từ trình duyệt Web Portal, dán vào PowerShell trên máy trạm; toàn bộ quá trình cài đặt, đăng ký, báo online và đẩy thông số diễn ra tự động 100%.
 
 ### 3.1. POST /api/enroll (không mTLS, rate-limit 30/min theo IP)
 
-Request:
+Agent tự động gọi ngay sau khi cài đặt thành công bằng script trực tuyến.
+
+**Request:**
 ```json
 {
   "token": "t_Ab3xK9mQ2vR8nL4p...",
@@ -48,7 +69,7 @@ Request:
 }
 ```
 
-Response 200:
+**Response 200:**
 ```json
 {
   "machine_id": "uuid",
@@ -66,12 +87,14 @@ Response 200:
 
 - Token sai → 401; hết hạn → 401 (server tự đổi status expired); đã dùng → 401; revoked → 401.
 - Fuzzy-match: máy cũ (ghost Win/thay linh kiện) → cấp lại machine_id cũ, `is_new_machine=false`; drift → server ghi `fingerprint_drifts` chờ duyệt.
-- **Cert**: ECDSA P-256, CN=`machine-<machine_id>`, hiệu lực `client_cert_valid_days` (365). Agent phải lưu private key (KHÔNG gửi lên server), cài cert vào Windows Certificate Store.
+- **Cert**: ECDSA P-256, CN=`machine-<machine_id>`, hiệu lực `client_cert_valid_days` (365). Agent phải lưu private key (KHÔNG gửi lên server), cài cert vào Windows Certificate Store (`LocalMachine\My`).
 - Agent phải **lưu config** từ response: endpoints (=agent_server_url), heartbeat interval/jitter, inventory interval.
 
 ### 3.2. POST /api/heartbeat (mTLS bắt buộc)
 
-Request:
+Agent gửi định kỳ để duy trì trạng thái `online` trên hệ thống và nhận tín hiệu điều khiển (rescan).
+
+**Request:**
 ```json
 {
   "logged_user": "DOMAIN\\nguyenvana | null",
@@ -80,7 +103,7 @@ Request:
 }
 ```
 
-Response 200:
+**Response 200:**
 ```json
 {
   "ok": true,
@@ -95,13 +118,12 @@ Response 200:
 
 - Agent gửi theo chu kỳ ngẫu nhiên trong `[interval-jitter, interval+jitter]` (mặc định 30±8s ≈ 22–38s).
 - Agent đồng bộ interval/jitter từ response (server điều chỉnh 1 chỗ).
-- `rescan_requested=true` → agent chạy inventory ngay (Phase 3 on-demand).
+- `rescan_requested=true` → agent chạy inventory ngay (on-demand).
 
 ### 3.3. POST /api/inventory (mTLS bắt buộc)
 
-Request (tất cả trường optional — agent không đọc được trường nào thì bỏ trống). Đây là
-payload **chuẩn agent Windows đẩy lên** (schema v2 — đầy đủ cpu/disks+partitions/gpu/
-mainboard/bios/network mở rộng/installed_software/security):
+Request (tất cả trường optional — agent không đọc được trường nào thì bỏ trống). Đây là payload **chuẩn agent Windows đẩy lên** (schema v2/v3 — đầy đủ cpu, disks, partitions, gpu, mainboard, bios, network mở rộng, installed_software, security):
+
 ```json
 {
   "os_name": "Windows 11 Pro 25H2",
@@ -153,41 +175,39 @@ mainboard/bios/network mở rộng/installed_software/security):
   "security": {
     "antivirus": [ { "displayName": "Windows Defender", "enabled": true, "upToDate": true } ],
     "windows_update_status": "up-to-date",
-    "bitlocker": "on",
+    "bitlocker": "off",
     "rdp_enabled": false,
+    "firewall_enabled": true,
+    "uac_enabled": true,
+    "secure_boot_enabled": true,
+    "usb_storage_blocked": false,
+    "weak_protocols": {
+      "smbv1_disabled": true,
+      "tls10_disabled": true,
+      "tls11_disabled": true,
+      "ssl3_disabled": true
+    },
+    "listening_ports": [
+      { "port": 135, "protocol": "TCP", "address": "0.0.0.0" },
+      { "port": 445, "protocol": "TCP", "address": "0.0.0.0" }
+    ],
+    "startup_programs": [
+      { "name": "SecurityHealth", "command": "%windir%\\system32\\SecurityHealthSystray.exe", "location": "HKLM_Run" },
+      { "name": "UniKey", "command": "\"C:\\Program Files\\UniKey\\UniKeyNT.exe\"", "location": "HKCU_Run" }
+    ],
     "local_accounts": [ { "username": "Administrator", "full_name": "Quản trị hệ thống", "disabled": true, "has_password": true, "is_admin": true } ],
     "smarts": [ { "device": "PhysicalDrive0", "model": "NVMe SAMSUNG MZVL21T0HDLU-00B00", "health": "OK" } ]
   }
 }
 ```
 
-Ghi chú:
-- **Backward-compat**: payload cũ (v1 — `cpu.{model,cores}`, `disks[].{serial,size_gb,type}`,
-  `security.antivirus[].{name,status}`…) vẫn được chấp nhận; trường lạ bị bỏ qua (không 422).
-- **Alias/legacy fields**: agent gửi song song cả hai tên (vd `installed_software[].{display_name,name}`,
-  `security.antivirus[].{displayName,name,status,enabled}`, `security.local_accounts[].{username,name}`,
-  `disks[].{size_bytes,size,size_gb}`, `mainboard.{model,manufacturer,product}`) — server giữ nguyên
-  tất cả, front-end ưu tiên đọc tên chuẩn v2 rồi fallback v1.
-- **Security mở rộng (v3)**: `firewall_enabled`, `uac_enabled`, `secure_boot_enabled`,
-  `usb_storage_blocked`, `weak_protocols.{smbv1_disabled,tls10_disabled,tls11_disabled,ssl3_disabled}`,
-  `listening_ports[].{port,protocol,address}`, `startup_programs[].{name,command,location}` — lưu
-  trong JSONB `security`, portal hiển thị ở thẻ "Trạng thái bảo mật".
-- `config_hash` do agent tính (sha256 của payload trừ chính `config_hash`) — server không nhận
-  thì tự tính. Gửi lại cùng hash → `config_changed=false`, không lưu snapshot trùng.
-- Trường sai kiểu (vd `cpu.threads` là chuỗi) → **422**, không lưu dữ liệu hỏng.
-
-Response 200: `{ "ok": true, "config_changed": false }`
+**Response 200:** `{ "ok": true, "config_changed": false }`
 
 - Gửi: lần đầu sau enroll, khi cấu hình thay đổi (config_hash mới), định kỳ `inventory_interval_hours` (24h).
-- Máy lưu đủ: os (kể cả `os_installed_at`, `activation_status`), cpu, ram, disks+partitions,
-  gpu, mainboard, bios, network (kể cả `gateway`/`dhcp_enabled`/`dns_servers`/`speed_mbps`),
-  logged_user, installed_software, security (kể cả nhóm mở rộng v3), config_hash — trả về qua
-  `GET /api/machines/{id}` → `latest_spec`.
 
-### 3.7. Chuẩn hóa dữ liệu phía server (v1.4 — agent KHÔNG cần đổi)
+### 3.4. Chuẩn hóa dữ liệu phía server khi nhận inventory (v1.4 — agent KHÔNG cần đổi)
 
-Kể từ v1.4, khi nhận inventory server ghi **thêm** 2 bảng phục vụ thống kê (cùng transaction
-với `machine_specs` — xem `docs/REFACTOR_SCHEMA_THONG_KE.md`):
+Khi nhận inventory (cả qua API mTLS lẫn import gói ZIP offline từ USB), server ghi **thêm** 2 bảng phục vụ thống kê (cùng transaction với `machine_specs` — xem `docs/REFACTOR_SCHEMA_THONG_KE.md`):
 
 | Bảng | Vai trò | Ghi khi |
 |---|---|---|
@@ -195,24 +215,12 @@ với `machine_specs` — xem `docs/REFACTOR_SCHEMA_THONG_KE.md`):
 | `machine_software` | Phần mềm đã cài — **1 dòng/app/máy** (unique `machine_id + lower(name)`) | Replace toàn bộ app của máy (delete + insert) |
 
 Chuẩn hóa **phía server** từ payload agent gửi (agent giữ nguyên):
+- `os_product` (ProductName thuần, VD "Windows 11 Pro") + `os_release` (DisplayVersion, VD "25H2"): tách từ `os_name` (token `\d{2}H\d` ở đuôi) hoặc fallback `os_version`.
+- `os_family` (windows_10 | windows_11 | windows_server_YYYY | linux | other): phân loại theo ProductName — dùng cho thống kê "số máy Win10/Win11" (GROUP BY).
+- Security (JSONB) → cột phẳng có kiểu: `firewall_enabled`, `windows_update_status`, `windows_update_enabled`, `antivirus_enabled`, `antivirus_up_to_date`, `bitlocker`, `uac_enabled`, `secure_boot_enabled`, `rdp_enabled`, `usb_storage_blocked`.
+- `installed_software` → dòng chuẩn `{name, version, publisher, install_date}` (name ưu tiên `display_name`, fallback `name`).
 
-- `os_product` (ProductName thuần, VD "Windows 11 Pro") + `os_release` (DisplayVersion, VD "25H2"):
-  tách từ `os_name` (token `\d{2}H\d` ở đuôi) hoặc fallback `os_version`. Lý do: `os_version`
-  luôn là `10.0.<build>` cho CẢ Win10 lẫn Win11 → không phân biệt được.
-- `os_family` (windows_10 | windows_11 | windows_server_YYYY | linux | other): phân loại theo
-  ProductName — dùng cho thống kê "số máy Win10/Win11" (GROUP BY).
-- Security (JSONB) → cột phẳng có kiểu: `firewall_enabled`, `windows_update_status`,
-  `windows_update_enabled` (suy từ status: up-to-date/pending/checking/enabled → true;
-  disabled/off/never/paused → false), `antivirus_enabled`, `antivirus_up_to_date`,
-  `bitlocker`, `uac_enabled`, `secure_boot_enabled`, `rdp_enabled`, `usb_storage_blocked`.
-- `installed_software` → dòng chuẩn `{name, version, publisher, install_date}` (name ưu tiên
-  `display_name`, fallback `name`).
-
-> ⚠️ Agent hiện tại **chưa gửi** `firewall_enabled`/`windows_update_status` (chỉ có trong schema
-> v3 và payload test) — các thống kê tương ứng trả `unknown` cho tới khi agent release mới
-> bổ sung collector. Đây là giới hạn dữ liệu, không phải lỗi schema.
-
-### 3.4. POST /api/renew (mTLS bắt buộc) — tự gia hạn client cert
+### 3.5. POST /api/renew (mTLS bắt buộc) — Tự gia hạn client cert
 
 Request: `{ "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----..." }`
 
@@ -226,191 +234,260 @@ Response 200:
 }
 ```
 
-- Agent gọi khi cert còn < `renew_before_percent` (70%) vòng đời — lấy từ `GET /api/agent/config` hoặc tự tính theo `renew_after`.
-- Server thu hồi cert cũ (serial từ X-SSL-Client-Serial) rồi ký cert mới cùng CN=`machine-<uuid>`.
+### 3.6. GET /api/agent/config (mTLS bắt buộc) — Cấu hình Động & Ký số Chống Thay Đổi (Signed & Tamper-proof)
 
-### 3.5. GET /api/agent/config (mTLS bắt buộc) — config-driven
+**Mục đích:** Cung cấp cấu hình hiệu lực cho Agent sau khi cài đặt hoặc định kỳ đồng bộ (mỗi 6h / khi khởi động lại service). Đảm bảo tính toàn vẹn tuyệt đối: chống sửa đổi trái phép (tamper-proof), chống tấn công DNS hijacking, chống proxy giả mạo và chống replay attack.
 
-Response 200:
+#### Cấu trúc Response có Ký số (Signed Config Envelope):
 ```json
 {
-  "server_url": "https://agent.example.gov.vn",
-  "heartbeat_interval_seconds": 30,
-  "heartbeat_jitter_seconds": 8,
-  "online_ttl_seconds": 76,
-  "inventory_interval_hours": 24,
-  "renew_before_percent": 70,
-  "server_time": "2025-...Z"
+  "version": 2,
+  "issued_at": "2026-08-27T08:00:00Z",
+  "payload": {
+    "server_url": "https://agent.example.gov.vn",
+    "heartbeat_interval_seconds": 30,
+    "heartbeat_jitter_seconds": 8,
+    "online_ttl_seconds": 76,
+    "inventory_interval_hours": 24,
+    "renew_before_percent": 70,
+    "server_time": "2026-08-27T08:00:00Z"
+  },
+  "signature": "MEUCIQD...",
+  "signer_key_id": "server-config-key-v1"
 }
 ```
 
-- Agent gọi định kỳ (VD mỗi 6h) để đồng bộ cấu hình — **binary agent không đổi, hành vi do server điều chỉnh**.
+*(Ghi chú: Để tương thích ngược với client cũ, các trường trong `payload` vẫn được ánh xạ trực tiếp ở root level nếu client yêu cầu schema phẳng).*
 
-### 3.6. GET /i/{token} — render install.ps1 động (không auth)
+#### Cơ chế Bảo vệ Chống Thay Đổi (Tamper-proofing) & Mã hóa:
+1. **Chữ ký số Server (Digital Signature):**
+   - Server tính mã băm SHA-256 trên Canonical JSON của `{version, issued_at, payload}`.
+   - Ký bằng Server Private Key (ECDSA secp256r1) lưu trong Vault/HSM.
+   - Agent xác thực chữ ký bằng Server Public Key được nhúng sẵn trong binary hoặc CA Trust Store trước khi áp dụng. Nếu chữ ký không khớp dù chỉ 1 bit, Agent lập tức hủy bỏ cập nhật và ghi log cảnh báo an ninh.
+2. **Chống Replay Attack:**
+   - Trường `version` tăng dần đơn điệu (monotonic integer). Agent chỉ chấp nhận cấu hình khi `version > current_config_version`.
+3. **Mã hóa truyền tải & Lưu trữ an toàn tại máy trạm:**
+   - **Kênh truyền:** Bắt buộc mTLS (TLS 1.3 với client cert định danh máy) mã hóa toàn bộ dữ liệu trên đường truyền.
+   - **Lưu trữ trên Disk (`%ProgramData%\OrgInventory\config.json`):**
+     - Thiết lập Windows ACL nghiêm ngặt: chỉ `NT AUTHORITY\SYSTEM` và `BUILTIN\Administrators` có quyền Full Control; chặn quyền sửa đổi từ người dùng thông thường (`Users`).
+     - Dữ liệu nhạy cảm (token, machine credentials) được mã hóa bằng **Windows DPAPI** (`DataProtectionScope.LocalMachine`) hoặc AES-256-GCM.
+4. **Cơ chế Tự động Hoàn nguyên (Rollback):**
+   - Agent sao lưu cấu hình hợp lệ trước đó vào `config.json.bak`.
+   - Nếu cấu hình mới nhận được hợp lệ nhưng không thể kết nối tới `server_url` mới sau 5 lần thử liên tiếp, Agent tự động rollback về cấu hình cũ và báo cáo lỗi lên server khi có mạng lại.
 
-- Trả `text/plain` PowerShell: kiểm tra Admin → tải MSI → verify SHA256 + chữ ký Authenticode → `msiexec /qn ENROLL_TOKEN=...` → in "✔ Cài đặt thành công".
-- Token hết hạn/đã dùng/revoked → 401/404.
+---
 
-### 3.7. GET /download/* — phục vụ MSI installer (không auth, public)
+### 3.7. GET /i/{token} — Script cài đặt trực tuyến động (PowerShell)
 
-Phục vụ **2 phương pháp cài đặt agent** (xem `docs/OFFLINE_AGENT_SPEC.md` mục 1):
+**Mục đích:** Hỗ trợ người dùng/admin **sao chép link/lệnh trực tiếp từ trình duyệt Web Portal** để dán vào PowerShell cài đặt tự động 1-click.
 
-| Method | Path | Trả về | Dùng cho |
-|---|---|---|---|
-| GET | `/download/agent.msi` | `application/x-msi` — file MSI đã ký Authenticode | Phương pháp A (script `install.ps1`) + Phương pháp B (admin tải tay qua USB) |
-| GET | `/download/agent.msi.sha256` | `text/plain` — chuỗi SHA-256 hex của MSI | Phương pháp B (verify trước khi cài) |
-| GET | `/download/install-offline.ps1` | `text/plain` — wrapper cài cho máy cách ly | Phương pháp B |
+**Luồng thực thi:**
+1. Quản trị viên vào Portal (`/tokens` hoặc trang Self-service link), nhấn **Copy lệnh cài đặt**:
+   ```powershell
+   powershell -EP Bypass -c "irm https://portal.example.gov.vn/i/t_Ab3xK9mQ2vR8nL4p | iex"
+   ```
+2. Dán vào PowerShell (Admin) trên máy trạm: gọi `GET /i/{token}` tải script `install.ps1`.
+3. Script tự động lấy `agent_server_url` hiệu lực từ Backend, tải MSI từ `GET /download/agent.msi`, verify checksum SHA256 từ `GET /download/agent.msi.sha256` và chữ ký số Authenticode, chạy `msiexec /qn ENROLL_TOKEN=<token> ENDPOINTS=<agent_server_url>`.
+4. Windows Service `OrgInventoryAgent` khởi chạy, tự động enroll qua HTTPS và chuyển sang mTLS.
 
-**Yêu cầu server**: file `OrgInventoryAgent.msi` + `OrgInventoryAgent.msi.sha256` phải
-được build và copy vào thư mục `AGENT_MSI_DIR` (mặc định `./agent_dist/`,
-config được trong `app/core/config.py`). Endpoint trả **404** với hướng dẫn nếu
-chưa có file.
+---
 
-**Build (chỉ chạy trên Windows)**:
-```powershell
-cd agent
-dotnet publish src/OrgInventoryAgent -c Release -r win-x64
-powershell installer/build-msi.ps1 -CertificateThumbprint "<EV code signing thumbprint>"
-# → copy OrgInventoryAgent.msi + .sha256 vào server:$AGENT_MSI_DIR/
+### 3.8. GET /download/* — Phục vụ bộ cài MSI & Gói Offline (Công khai)
+
+| Method | Path | Content-Type | Dùng cho | Cơ chế bảo vệ & chống can thiệp |
+|---|---|---|---|---|
+| GET | `/download/agent.msi` | `application/x-msi` | Cả 2 chế độ: Online & Offline | Ký số EV Authenticode (chống SmartScreen & giả mạo) |
+| GET | `/download/agent.msi.sha256` | `text/plain` | Cả 2 chế độ: Verify toàn vẹn | Mã băm SHA-256 đối chiếu trước khi thực thi |
+| GET | `/download/install-offline.cmd` | `text/plain` | **Chế độ 2**: Launcher 1-click | Script batch nháy đúp chuột, tự động xin quyền UAC |
+| GET | `/download/install-offline.ps1` | `text/plain` | **Chế độ 2**: Bộ điều phối thu thập | Xác thực chữ ký số file config và kiểm tra toàn vẹn MSI |
+| GET | `/download/server_public_key.pem` | `text/plain` | **Chế độ 2**: Khóa công khai Server | Dùng để verify chữ ký file config và mã hóa gói kết quả |
+| GET | `/download/offline-package.zip` | `application/zip` | **Chế độ 2**: Gói bundle trọn gói USB | Chứa bộ cài, script, khóa công khai và `offline_config.json` đã ký số |
+
+#### Quy cách File cấu hình tải về `offline_config.json`:
+Để chống việc can thiệp hoặc sửa đổi tham số cài đặt trên USB (như sửa đổi URL máy chủ, thay đổi tổ chức `org_id` hoặc chèn token giả mạo), file `offline_config.json` trong gói ZIP tải về tuân thủ cấu trúc envelope ký số:
+```json
+{
+  "version": 1,
+  "issued_at": "2026-08-27T08:00:00Z",
+  "payload": {
+    "token": "t_Ab3xK9mQ2vR8nL4p",
+    "endpoints": "https://agent.example.gov.vn",
+    "note": "Cấu hình offline tạo bởi IT Asset Inventory Portal"
+  },
+  "signature": "<ECDSA_SHA256_BASE64>",
+  "signer": "server_public_key.pem"
+}
 ```
+- **Xác thực trước khi cài đặt:** `install-offline.ps1` dùng `server_public_key.pem` kiểm tra chữ ký của `offline_config.json`. Nếu file bị sửa đổi nội dung trên USB $\rightarrow$ dừng ngay lập tức, báo lỗi đỏ và không cho phép tiến hành cài đặt.
+- **Tùy chọn mã hóa (`offline_config.enc`):** Trong môi trường bảo mật cao, file cấu hình được mã hóa bằng AES-256-GCM với khóa mã hóa bảo vệ, chống đọc trộm thông tin token hoặc cấu hình mạng nội bộ khi lưu trữ trên USB.
+
+---
+
+---
 
 ## 4. Portal API (JWT Bearer, RBAC)
 
-Roles: `super_admin` (toàn quyền), `org_admin` (cây org của mình + cấp dưới), `viewer` (read-only).
-
 | Method | Path | Mô tả |
 |---|---|---|
-| POST | /api/auth/login | `{email, password, totp_code?}` → `{access_token, refresh_token, token_type, requires_2fa}` |
-| POST | /api/auth/refresh | `{refresh_token}` → LoginResponse |
-| POST | /api/auth/logout | thu hồi refresh |
-| GET | /api/auth/me | thông tin user hiện tại |
-| POST | /api/auth/totp/setup | → `{secret, uri, backup_codes}` |
-| POST | /api/auth/totp/confirm | `{code}` → bật 2FA, trả LoginResponse |
-| GET | /api/compliance/current | bản tuân thủ hiện hành (hoặc null) |
-| GET | /api/compliance/pending | `bool` — user còn phải xác nhận? |
-| POST | /api/compliance/acknowledge | ghi xác nhận |
-| POST | /api/tokens | `{org_id, full_name, department, position, email?, phone?, note?, ttl_hours=72}` → `{token, install_command, expires_at}` — **token hiện 1 lần** |
-| POST | /api/tokens/bulk | CSV hàng loạt → `{created, errors}` |
-| GET | /api/tokens?status= | phễu triển khai |
-| POST | /api/tokens/revoke | `{token_id}` |
-| GET | /api/machines?org_id=&status=&q= | danh sách máy |
-| GET | /api/machines/{id} | chi tiết + latest_spec |
-| GET | /api/machines/stats | thống kê |
-| POST | /api/machines/{id}/approve · /reject · /rescan · PATCH /lifecycle | vận hành |
-| GET | /api/machines/{id}/timeline | lịch sử bật/tắt |
-| GET | /api/stats/overview | `{total_machines, online, ...}` |
-| GET | /api/stats/inventory | thống kê cấu hình **hiện tại**: `total_machines`, `by_os_family` (Win10/Win11…), `by_os_arch`, `by_is_vm`, `by_ram_gb` (`<4/4–8/8–16/16–32/32+ GB` + `unknown`), `by_firewall`, `by_windows_update_status/enabled`, `by_antivirus`, `by_bitlocker`, `top_software` (query: `org_id`?, `top_software_limit`=20, max 100) |
-| POST | /api/reports/export | Excel (mask SĐT mặc định) |
-| POST | /api/reports/export-pdf | PDF (Phase 4) |
-| GET | /api/orgs | cây tổ chức |
-| GET | /api/audit? | audit read-only (super_admin) |
-| GET | /api/audit/verify | kiểm tra hash chain |
-| GET | /api/ws?token= | WebSocket: `{type:"machine_status", machine_id, status, ts}` + `{type:"stats", ...}` |
+| POST | /api/auth/login | Đăng nhập `{email, password, totp_code?}` → Token pair |
+| POST | /api/auth/refresh | Làm mới token `{refresh_token}` |
+| POST | /api/tokens | Sinh token cài đặt cá nhân (hiển thị lệnh 1 click Chế độ 1 và nút tải gói USB Chế độ 2) |
+| POST | /api/tokens/bulk | Sinh token hàng loạt qua CSV |
+| GET | /api/tokens | Danh sách token & phễu triển khai |
+| POST | /api/tokens/revoke | Thu hồi token chưa sử dụng |
+| GET | /api/machines | Danh sách máy (lọc theo org, trạng thái online/offline/pending) |
+| GET | /api/machines/{id} | Chi tiết máy + snapshot latest_spec |
+| POST | /api/machines/{id}/approve | Phê duyệt máy mới / drift |
+| POST | /api/machines/{id}/reject | Từ chối máy lạ |
+| POST | /api/machines/{id}/rescan | Gửi cờ yêu cầu máy thu thập lại cấu hình |
+| PATCH | /api/machines/{id}/lifecycle | Cập nhật vòng đời máy (`in_use`, `in_repair`, `decommissioned`) |
+| GET | /api/stats/overview | Tổng quan số lượng máy, online/offline |
+| GET | /api/stats/inventory | Thống kê chuyên sâu (OS family, RAM, CPU, Antivirus, BitLocker, Phần mềm) |
+| POST | /api/reports/export | Xuất danh sách máy ra Excel |
+| GET | /api/self-service/links | Quản lý link tự khai báo |
+| POST | /api/self-service/links | Tạo link tự khai báo cho đơn vị |
+| GET | /api/ws?token= | WebSocket cập nhật trạng thái máy thời gian thực |
 
-## 5. Máy cách ly (offline USB) — Phase 3
+---
 
-> Máy không thể gọi trực tiếp server. Mọi trao đổi là **file JSON trên USB**, được
-> ký ECDSA bằng private key của agent (private key **không bao giờ rời máy cách ly**).
-> Chi tiết vận hành + đặc tả ký số: `docs/OFFLINE_AGENT_SPEC.md`.
+## 5. Chế độ 2 — Máy cách ly mạng (Offline USB & Gói ZIP Mã hóa Ký số)
 
-### 5.1. POST /api/offline/enroll (auth: admin)
+> **Mục tiêu:** Tối ưu hóa trải nghiệm người dùng cuối ở mức cao nhất.
+> Người dùng hoặc cán bộ kỹ thuật tại máy cách ly **KHÔNG cần nhớ lệnh, KHÔNG cần nhập tham số `-Token` hay `-Endpoints`**.
+>
+> **Chỉ cần duy nhất 1 thao tác:** **Nháy đúp chuột vào file `install-offline` trên USB**.
+> Kết quả sinh ra là **1 file ZIP được mã hóa và ký số**. Backend sẽ giải mã, kiểm tra tính hợp lệ của chữ ký số và tự động đồng bộ dữ liệu vào hệ thống.
 
-**Mục đích**: admin proxy CSR cho máy cách ly. Agent trên máy cách ly sinh keypair +
-CSR, ghi file JSON; admin copy file lên máy có mạng và submit.
+---
 
-**Request**:
-```json
-{
-  "token": "t_Ab3xK9mQ2vR8nL4p...",
-  "hostname": "PC-ANPHU-01",
-  "fingerprint": {
-    "smbios_uuid": "4C4C4544-...",
-    "machine_guid": "hash-sha256-hex",
-    "mainboard_serial": "hash-sha256-hex"
-  },
-  "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMIIB...\n-----END CERTIFICATE REQUEST-----\n"
-}
+### 5.1. Luồng vận hành 1-Click khép kín
+
+```
+[BƯỚC 1: TẠI MÁY CÓ MẠNG (ADMIN)]
+  Admin vào Portal → Nhấn "Tải bộ cài máy cách ly" (hoặc tải từ /download/offline-package.zip)
+  Giải nén vào thư mục gốc của USB. Trên USB gồm có:
+    ├── install-offline.cmd          (Launcher nháy đúp chuột)
+    ├── install-offline.ps1          (Script tự động hóa)
+    ├── OrgInventoryAgent.msi        (Bộ cài Agent đã ký Authenticode)
+    ├── OrgInventoryAgent.msi.sha256 (Mã băm SHA-256)
+    ├── server_public_key.pem        (Khóa công khai của Server để mã hóa file xuất ra)
+    └── offline_config.json          (File chứa org_id do Portal sinh sẵn, không cần gõ tay)
+         │
+         ▼ (Cắm USB vào máy cách ly)
+[BƯỚC 2: TẠI MÁY CÁCH LY (NGƯỜI DÙNG CUỐI / KTV)]
+  Người dùng chỉ cần: NHÁY ĐÚP CHUỘT VÀO `install-offline.cmd`
+  Hệ thống tự động thực hiện hoàn toàn ngầm:
+    1. Tự xin quyền Administrator (UAC).
+    2. Cài đặt Agent vào máy (nếu chưa cài).
+    3. Thu thập toàn bộ thông số phần cứng, phần mềm, bảo mật, fingerprint.
+    4. Ký số ECDSA P-256 bằng khóa riêng của máy (lưu trong Windows Cert Store, KHÔNG BAO GIỜ rời máy).
+    5. Đóng gói và MÃ HÓA toàn bộ dữ liệu bằng Server Public Key (Hybrid Encryption AES-256-GCM).
+    6. Tạo ra 1 file ZIP duy nhất ngay trên USB:
+       E:\INVENTORY_<HOSTNAME>_<YYYYMMDD_HHMMSS>.zip
+    7. Hiện thông báo: "✔ THU THẬP VÀ ĐÓNG GÓI THÀNH CÔNG! Vui lòng chuyển file ZIP cho Quản trị viên."
+         │
+         ▼ (Rút USB mang về máy quản trị có mạng)
+[BƯỚC 3: NẠP LÊN HỆ THỐNG (PORTAL / BACKEND)]
+  Admin vào Portal (trang /offline-import) → Kéo thả file ZIP vừa xuất từ USB lên hệ thống
+  Endpoint Backend: POST /api/offline/import (hoặc POST /api/offline/import-bundle)
+  Backend tự động:
+    1. Dùng Server Private Key GIẢI MÃ gói ZIP (AES-256-GCM).
+    2. KIỂM TRA CHỮ KÝ SỐ ECDSA: Đối chiếu signature với payload bằng public key của máy trạm.
+       → Nếu chữ ký sai hoặc file bị can thiệp trên USB: TỪ CHỐI NGAY (400 Bad Request).
+    3. NẾU CHỮ KÝ HỢP LỆ: Parse dữ liệu inventory, chuẩn hóa OS, tự động cập nhật Machine,
+       MachineSpec, machine_current, machine_software.
+    4. Trả về kết quả xác nhận cho Admin trên giao diện Web.
 ```
 
-**Response 200**:
+---
+
+### 5.2. Cấu trúc File ZIP Mã hóa trên USB
+
+File xuất ra có định dạng ZIP bảo mật (ví dụ `INVENTORY_PC-PHONG102_20260827_083000.zip`), bên trong chứa các thành phần đã được mã hóa an toàn:
+
+| Thành phần bên trong ZIP | Ý nghĩa & Chuẩn bảo mật |
+|---|---|
+| `manifest.json` | Chứa metadata: `machine_uuid`, `hostname`, `fingerprint`, `exported_at`, `org_id` |
+| `inventory.json` | Toàn bộ payload cấu hình tài sản (schema v2/v3 chuẩn xác: CPU, RAM, Disk, Software, Security...) |
+| `signature.sig` | Chữ ký số **ECDSA-SHA256** (RFC 3279 DER Sequence base64) của máy trạm trên Canonical JSON của `inventory.json` |
+| `public_key.pem` | Khóa công khai của máy trạm (`-----BEGIN PUBLIC KEY-----` / SubjectPublicKeyInfo) |
+| `encrypted_key.bin` | Khóa đối xứng AES-256 được mã hóa bằng `server_public_key.pem` (Mã hóa lai RSA/ECDH) |
+
+> 🔒 **Cơ chế Mã hóa Lai (Hybrid Encryption):**
+> 1. Agent sinh ngẫu nhiên 1 khóa đối xứng dùng 1 lần `session_key` (AES-256-GCM, 256-bit).
+> 2. Toàn bộ nội dung dữ liệu tài sản được mã hóa bằng `session_key`.
+> 3. `session_key` được mã hóa bất đối xứng bằng `server_public_key.pem`.
+> 4. **Chỉ duy nhất Server (sở hữu Server Private Key) mới có thể giải mã gói dữ liệu này**. Ngay cả khi USB bị đánh rơi, người ngoài cũng không thể đọc được thông tin cấu hình máy tính.
+
+---
+
+### 5.3. POST /api/offline/import — Tiếp nhận và Parse file ZIP mã hóa
+
+**Xác thực:** `Authorization: Bearer <admin JWT>` (Admin hoặc Org Admin nạp dữ liệu).  
+**Content-Type:** `multipart/form-data`
+
+**Request Parameters:**
+- `file`: File nhị phân `.zip` mã hóa do script offline trên USB xuất ra.
+- `org_id` *(optional)*: Mã đơn vị tiếp nhận (nếu không truyền, server lấy từ `manifest.json` trong file zip hoặc gán theo `admin.org_id`).
+
+**Luồng xử lý Backend:**
+1. **Giải mã (Decryption):**
+   - Đọc `encrypted_key.bin`, dùng Server Private Key giải mã ra `session_key`.
+   - Dùng `session_key` giải mã gói dữ liệu AES-256-GCM.
+   - Nếu giải mã thất bại $\rightarrow$ trả về `400 Bad Request`: `"Gói dữ liệu mã hóa không hợp lệ hoặc không thuộc hệ thống này"`.
+2. **Kiểm tra Chữ ký số (Signature Verification):**
+   - Trích xuất `inventory.json`, `signature.sig`, và `public_key.pem`.
+   - Chuẩn hóa `inventory.json` theo Canonical JSON:
+     `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`
+   - Tính digest SHA-256 và verify chữ ký ECDSA (secp256r1) bằng `public_key.pem`.
+   - Nếu chữ ký không khớp $\rightarrow$ trả về `400 Bad Request`: `"Chữ ký số không hợp lệ — phát hiện dấu hiệu can thiệp dữ liệu trên USB"`.
+3. **Parse dữ liệu & Cập nhật cơ sở dữ liệu:**
+   - Tìm máy theo `machine_uuid` hoặc fuzzy-match hardware fingerprint (trọng số SMBIOS UUID, MachineGuid, Mainboard Serial).
+   - Nếu máy chưa có trong hệ thống $\rightarrow$ tự động tạo máy mới với trạng thái ban đầu `offline` (hoặc `pending` chờ duyệt nếu tổ chức bật chế độ duyệt máy mới).
+   - Cập nhật `last_seen_at = exported_at`.
+   - Lưu snapshot mới vào bảng `MachineSpec`.
+   - Phân loại chuẩn hóa OS (`os_product`, `os_release`, `os_family`) và cập nhật tức thì vào bảng `machine_current` và `machine_software` phục vụ báo cáo thống kê.
+4. **Audit Log:** Ghi log hệ thống `action=offline.import_zip`, `actor=admin:<id>`, `machine_id=<uuid>`.
+
+**Response 200:**
 ```json
 {
   "machine_id": "fd0d8278-314e-434b-a884-d858624ca7ca",
-  "client_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
-  "ca_cert_pem": null,
-  "renew_after": "2027-05-08T23:40:04Z",
-  "is_new_machine": true,
-  "status": "pending",
-  "agent_server_url": "http://10.10.0.241:8000",
-  "heartbeat_interval_seconds": 30,
-  "heartbeat_jitter_seconds": 8,
-  "inventory_interval_hours": 24
-}
-```
-
-- **Auth**: `Authorization: Bearer <admin JWT>` (`require_admin()`).
-- **CSR**: ECDSA P-256. CN ban đầu là placeholder (`machine-pending`) — **server ghi đè**
-  CN thành `machine-<machine_id>` (xem `app/services/ca.py::LocalCaService.sign_csr`).
-- **Audit**: `action=offline.enroll`, `actor=admin:<id>`.
-- Token đã dùng → 401. Token không tồn tại → 401. Token hết hạn → 401.
-- Org gắn với token được dùng làm `target_org_id` (giống `/api/enroll`).
-- Fuzzy-match fingerprint trong org đó — máy cũ (ghost Win / thay mainboard) sẽ trả về
-  cùng `machine_id` với `is_new_machine=false`. Drift → ghi `FingerprintDrift` pending.
-
-### 5.2. POST /api/offline/import (auth: admin)
-
-**Mục đích**: nhập file inventory đã ký ECDSA từ máy cách ly.
-
-**Request**:
-```json
-{
-  "payload": {
-    "machine_uuid": "fd0d8278-...",
-    "hostname": "PC-ANPHU-01",
-    "fingerprint": {"smbios_uuid": "..."},
-    "spec": { "os_name": "...", "cpu": {...}, "ram_gb": 16, ... },
-    "exported_at": "2026-08-26T14:00:00Z"
-  },
-  "signature_b64": "MEUCIQCx...",
-  "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
-}
-```
-
-**Response 200**:
-```json
-{
-  "machine_id": "fd0d8278-...",
-  "hostname": "PC-ANPHU-01",
+  "hostname": "PC-PHONG102",
   "is_new": false,
-  "verified": true
+  "verified": true,
+  "decrypted": true,
+  "apps_count": 42,
+  "collected_at": "2026-08-27T08:30:00Z"
 }
 ```
 
-- **Auth**: `Authorization: Bearer <admin JWT>` (`require_admin()`).
-- **Verify**: server canonicalize `payload` theo
-  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`
-  → SHA-256 → verify ECDSA(P-256) bằng `public_key_pem`. Sai → **400** "Chữ ký không hợp lệ".
-- **Org**: nếu `payload.org_id` thuộc `visible_org_ids` của admin → dùng; không thì
-  fallback về `admin.org_id`.
-- **Idempotent**: tìm máy theo `machine_uuid` (weighted fingerprint) hoặc fuzzy-match
-  với `is_same_machine` → update `Machine` + `MachineSpec` + `machine_current` +
-  `machine_software`.
-- **Audit**: `action=offline.import`, `actor=admin:<id>`, `target=machine_id`.
+---
+
+### 5.4. Hỗ trợ dự phòng: POST /api/offline/enroll & JSON Import
+
+Để tương thích ngược với các công cụ tự động hóa hoặc script kiểm thử của kỹ sư hệ thống:
+- `POST /api/offline/enroll`: Admin proxy CSR qua JSON body (như đặc tả v1.4/v1.5).
+- `POST /api/offline/import` (JSON Body): Vẫn tiếp nhận payload JSON phẳng `{ payload, signature_b64, public_key_pem }` đối với các trường hợp không nén file ZIP.
+
+---
 
 ## 6. Trạng thái máy & token
 
-- Máy: `online` | `offline` | `lost` | `decommissioned` | `pending` (chờ duyệt).
-- Token: `pending` | `used` | `revoked` | `expired`. TTL mặc định 72h, `max_uses=1`, entropy ≥ 128 bit, dạng `t_` + base62.
+- **Trạng thái máy:** `online` | `offline` | `lost` | `decommissioned` | `pending` (chờ duyệt).
+  - Máy Chế độ 1 (Online): Trạng thái `online` khi có heartbeat trong vòng `online_ttl_seconds` (mặc định 76s). Quá hạn tự chuyển `offline`.
+  - Máy Chế độ 2 (Offline): Trạng thái mặc định là `offline` (hoặc `pending` lúc mới nhập chờ duyệt), trường `last_seen_at` được gán theo thời gian `exported_at` của lần nạp file gần nhất.
+- **Trạng thái token:** `pending` | `used` | `revoked` | `expired`. TTL mặc định 72h, `max_uses=1`, dạng `t_` + base62.
 - Online lưu Redis `machine:online:{id}` TTL = `online_ttl_seconds` (mặc định 2×(interval+jitter) = 76s).
 
-## 7. Nguyên tắc agent (bắt buộc — mục 7 API_CONTRACT cũ, giữ nguyên)
+---
 
-- **Read-only**: chỉ đọc WMI/Registry; không hook/inject/đọc process khác; không ghi ngoài ProgramData + cert store.
-- **Zero-GUI**: không window/notification. Config `%ProgramData%\OrgInventory\config.json`; log xoay vòng `%ProgramData%\OrgInventory\logs\`.
-- **Fingerprint**: SMBIOS UUID (WMI Win32_ComputerSystemProduct / fallback registry), MachineGuid (HKLM\SOFTWARE\Microsoft\Cryptography), serial mainboard — gửi 3 nguồn riêng, server tính hash trọng số.
-- **Heartbeat**: chu kỳ `[interval-jitter, interval+jitter]` (mặc định 30±8s), ngẫu nhiên mỗi lần — tránh pattern C2.
-- **Failover endpoint**: `endpoints[]` (server_url + backup); primary lỗi 5 lần liên tiếp → chuyển backup; thử lại primary định kỳ.
-- **Idempotent install**: có cert + machine_id trong config → bỏ qua enroll, chỉ repair/update.
-- **Offline cache**: SQLite `%ProgramData%\OrgInventory\cache.db`; gửi bù khi có mạng (giữ nguyên dữ liệu).
-- **Private key client cert**: sinh local (ECDSA P-256), lưu Windows Certificate Store, KHÔNG gửi lên server.
-- User-Agent: `OrgInventoryAgent/x.y.z`.
+## 7. Nguyên tắc thiết kế Agent (Áp dụng thống nhất cho cả 2 chế độ)
+
+1. **Vận hành 1-Click cho máy cách ly**: Người dùng tại máy cách ly không phải nhớ lệnh, không gõ tham số. Nháy đúp chuột là tự động thực thi và xuất file kết quả.
+2. **An toàn 2 lớp (Ký số máy trạm + Mã hóa máy chủ)**:
+   - **Ký số**: Private key ECDSA P-256 nằm an toàn trong Windows Certificate Store của máy trạm, không bao giờ gửi ra ngoài. Chữ ký số đảm bảo chống can thiệp hoặc làm giả dữ liệu tài sản.
+   - **Mã hóa**: File kết quả trên USB được mã hóa bằng Server Public Key (AES-256 + RSA/ECDH). Chỉ máy chủ trung tâm mới có khả năng giải mã.
+3. **Thống nhất logic thu thập**: Cùng sử dụng chung module thu thập dữ liệu (Fingerprint, Inventory, Software, Security) và schema JSON v2/v3 cho cả 2 chế độ.
+4. **Read-only & Zero-GUI**: Không hook process, không đọc dữ liệu người dùng cá nhân, không hiển thị pop-up gây phiền hà.
+5. **Khả năng tự phục hồi & Lưu cache cục bộ**: SQLite `%ProgramData%\OrgInventory\cache.db` bảo toàn lịch sử cấu hình máy kể cả khi máy chưa kịp nạp dữ liệu lên server.

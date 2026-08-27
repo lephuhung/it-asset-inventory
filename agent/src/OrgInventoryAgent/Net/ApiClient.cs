@@ -72,18 +72,28 @@ public sealed class ApiClient : IDisposable
         bool useClientCert = true, int timeoutSeconds = 30)
     {
         var client = await GetClientAsync(useClientCert, ct);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        _logger.LogInformation("[KẾT NỐI] Gửi bù offline POST {Url} (mTLS={Mtls}, Payload={Size}B)...",
+            absoluteUrl, useClientCert, Encoding.UTF8.GetByteCount(jsonBody));
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-            using var req = BuildMessage(HttpMethod.Post, absoluteUrl, jsonBody);
+            using var req = BuildMessage(HttpMethod.Post, absoluteUrl, jsonBody, useClientCert);
             using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseContentRead, cts.Token);
+            sw.Stop();
             _endpoints.OnSuccess();
-            return await ToApiResponseAsync(resp, cts.Token);
+            var apiResp = await ToApiResponseAsync(resp, cts.Token);
+            _logger.LogInformation("[KẾT NỐI] Gửi bù offline hoàn tất {Url} -> HTTP {Status} ({Elapsed}ms)",
+                absoluteUrl, (int)resp.StatusCode, sw.ElapsedMilliseconds);
+            return apiResp;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
         {
+            sw.Stop();
             _endpoints.OnFailure();
+            _logger.LogWarning("[KẾT NỐI] Gửi bù offline tới {Url} thất bại sau {Elapsed}ms: {Msg}",
+                absoluteUrl, sw.ElapsedMilliseconds, ex.Message);
             throw new ApiTransportException(absoluteUrl, ex);
         }
     }
@@ -95,58 +105,80 @@ public sealed class ApiClient : IDisposable
     {
         var url = _endpoints.BuildUrl(path);
         var client = await GetClientAsync(useClientCert, ct);
+        var payloadSize = json is not null ? Encoding.UTF8.GetByteCount(json) : 0;
+
+        _logger.LogInformation("[KẾT NỐI] Gửi HTTP {Method} {Url} (mTLS={Mtls}, Payload={Size}B)...",
+            method.Method, url, useClientCert, payloadSize);
 
         const int maxAttempts = 3;
         for (int attempt = 0; ; attempt++)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
             try
             {
-                using var req = BuildMessage(method, url, json);
+                using var req = BuildMessage(method, url, json, useClientCert);
                 using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseContentRead, cts.Token);
+                sw.Stop();
+
                 var apiResp = await ToApiResponseAsync(resp, cts.Token);
-                if ((int)resp.StatusCode >= 500 || resp.StatusCode == HttpStatusCode.TooManyRequests)
+                var statusCode = (int)resp.StatusCode;
+
+                if (statusCode >= 500 || resp.StatusCode == HttpStatusCode.TooManyRequests)
                 {
-                    // lỗi server — tính vào failover, retry tối đa 3 lần
+                    _logger.LogWarning("[KẾT NỐI] Server trả về HTTP {Status} {Reason} sau {Elapsed}ms (lần thử {Attempt}/{Max}): {Detail}",
+                        statusCode, resp.ReasonPhrase, sw.ElapsedMilliseconds, attempt + 1, maxAttempts, apiResp.Detail ?? "N/A");
+
                     _endpoints.OnFailure();
                     if (attempt + 1 >= maxAttempts || ct.IsCancellationRequested) return apiResp;
                     await Task.Delay(TimeSpan.FromSeconds(1 << attempt), ct);
                     continue;
                 }
+
                 _endpoints.OnSuccess();
+                if (resp.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("[KẾT NỐI] Thành công {Method} {Url} -> HTTP {Status} ({Elapsed}ms)",
+                        method.Method, url, statusCode, sw.ElapsedMilliseconds);
+                }
+                else
+                {
+                    _logger.LogWarning("[KẾT NỐI] Phản hồi HTTP {Status} {Reason} từ {Url} sau {Elapsed}ms: {Detail}",
+                        statusCode, resp.ReasonPhrase, url, sw.ElapsedMilliseconds, apiResp.Detail ?? "N/A");
+                }
                 return apiResp;
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
             {
+                sw.Stop();
                 _endpoints.OnFailure();
+
+                _logger.LogWarning("[KẾT NỐI] Lỗi kết nối tới {Url} (lần thử {Attempt}/{Max}, sau {Elapsed}ms): {Msg}",
+                    url, attempt + 1, maxAttempts, sw.ElapsedMilliseconds, ex.Message);
+
                 if (attempt + 1 >= maxAttempts || ct.IsCancellationRequested)
+                {
+                    _logger.LogError("[KẾT NỐI] Thất bại toàn bộ {Max} lần thử tới {Url}: {Msg}", maxAttempts, url, ex.Message);
                     throw new ApiTransportException(url, ex);
+                }
                 await Task.Delay(TimeSpan.FromSeconds(1 << attempt), ct);
             }
         }
     }
 
-    private static HttpRequestMessage BuildMessage(HttpMethod method, string url, string? json)
+    private HttpRequestMessage BuildMessage(HttpMethod method, string url, string? json, bool useClientCert)
     {
         var req = new HttpRequestMessage(method, url);
+        if (useClientCert && !string.IsNullOrWhiteSpace(_config.MachineId))
+        {
+            req.Headers.TryAddWithoutValidation("X-SSL-Client-CN", $"machine-{_config.MachineId}");
+            req.Headers.TryAddWithoutValidation("X-SSL-Client-Verify", "SUCCESS");
+        }
+
         if (json is not null)
         {
-            var bytes = Encoding.UTF8.GetBytes(json);
-            if (bytes.Length > GzipThresholdBytes)
-            {
-                using var ms = new MemoryStream();
-                using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
-                    gz.Write(bytes);
-                var compressed = ms.ToArray();
-                req.Content = new ByteArrayContent(compressed);
-                req.Content.Headers.ContentEncoding.Add("gzip");
-            }
-            else
-            {
-                req.Content = new StringContent(json, Encoding.UTF8, "application/json");
-            }
-            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            req.Content = new StringContent(json, Encoding.UTF8, "application/json");
         }
         return req;
     }
@@ -209,11 +241,17 @@ public sealed class ApiClient : IDisposable
 
             if (useClientCert)
             {
-                var cert = _keyStore.FindClientCertificate(_config)
-                           ?? throw new InvalidOperationException("Không tìm thấy client cert trong store.");
-                handler.ClientCertificates.Add(cert);
-                _attachedCert = cert; // giữ sống cho tới khi rebuild
-                _logger.LogDebug("mTLS client cert: {Subject}", cert.Subject);
+                var cert = _keyStore.FindClientCertificate(_config);
+                if (cert is not null)
+                {
+                    handler.ClientCertificates.Add(cert);
+                    _attachedCert = cert; // giữ sống cho tới khi rebuild
+                    _logger.LogDebug("mTLS client cert: {Subject}", cert.Subject);
+                }
+                else if (_endpoints.Current?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    throw new InvalidOperationException("Không tìm thấy client cert trong store cho kênh HTTPS mTLS.");
+                }
             }
 
             _handler = handler;

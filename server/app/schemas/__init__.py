@@ -118,6 +118,10 @@ class HeartbeatResponse(BaseModel):
     # Cấu hình agent — server điều chỉnh, agent đồng bộ (heartbeat interval/jitter...)
     heartbeat_interval_seconds: int | None = None
     heartbeat_jitter_seconds: int | None = None
+    server_url: str | None = None
+    agent_server_url: str | None = None
+    inventory_interval_hours: int | None = None
+
 
 
 # ── Inventory ─────────────────────────────────────────────────────
@@ -567,6 +571,9 @@ class OfflineImportResponse(BaseModel):
     hostname: str | None
     is_new: bool
     verified: bool
+    decrypted: bool = False
+    apps_count: int | None = None
+    collected_at: datetime | None = None
 
 
 # ── Compliance ────────────────────────────────────────────────────

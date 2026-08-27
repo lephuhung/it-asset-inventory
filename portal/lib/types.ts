@@ -265,6 +265,9 @@ export interface OfflineImportResponse {
   hostname: string | null;
   is_new: boolean;
   verified: boolean;
+  decrypted?: boolean;
+  apps_count?: number | null;
+  collected_at?: string | null;
 }
 
 /** Máy cách ly — admin proxy CSR ký ECDSA cho máy không gọi được server.

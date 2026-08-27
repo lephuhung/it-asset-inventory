@@ -18,6 +18,8 @@ public sealed class DiskInfo
 {
     [JsonPropertyName("model")] public string? Model { get; set; }
     [JsonPropertyName("serial")] public string? Serial { get; set; }
+    [JsonPropertyName("size_bytes")] public long? SizeBytes { get; set; }
+    [JsonPropertyName("size")] public long? Size => SizeBytes;
     [JsonPropertyName("size_gb")] public double? SizeGb { get; set; }
     [JsonPropertyName("type")] public string? Type { get; set; } // SSD | HDD | NVMe
 }
@@ -48,20 +50,54 @@ public sealed class NetworkInterfaceInfo
 
 public sealed class SoftwareInfo
 {
+    [JsonPropertyName("display_name")] public string? DisplayName { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("version")] public string? Version { get; set; }
+    [JsonPropertyName("publisher")] public string? Publisher { get; set; }
+    [JsonPropertyName("install_date")] public string? InstallDate { get; set; }
+    [JsonPropertyName("uninstall_string")] public string? UninstallString { get; set; }
+    [JsonPropertyName("is_per_user")] public bool IsPerUser { get; set; }
 }
 
 public sealed class AntivirusInfo
 {
+    [JsonPropertyName("displayName")] public string? DisplayName { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("status")] public string? Status { get; set; } // enabled | disabled
+    [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+    [JsonPropertyName("upToDate")] public bool UpToDate { get; set; }
 }
 
 public sealed class LocalAccountInfo
 {
+    [JsonPropertyName("username")] public string? Username { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("full_name")] public string? FullName { get; set; }
+    [JsonPropertyName("disabled")] public bool Disabled { get; set; }
     [JsonPropertyName("has_password")] public bool? HasPassword { get; set; }
+    [JsonPropertyName("is_admin")] public bool IsAdmin { get; set; }
+}
+
+public sealed class ListeningPortInfo
+{
+    [JsonPropertyName("port")] public int Port { get; set; }
+    [JsonPropertyName("protocol")] public string Protocol { get; set; } = "TCP";
+    [JsonPropertyName("address")] public string? Address { get; set; }
+}
+
+public sealed class StartupProgramInfo
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("command")] public string? Command { get; set; }
+    [JsonPropertyName("location")] public string? Location { get; set; }
+}
+
+public sealed class WeakProtocolsInfo
+{
+    [JsonPropertyName("smbv1_disabled")] public bool Smbv1Disabled { get; set; } = true;
+    [JsonPropertyName("tls10_disabled")] public bool Tls10Disabled { get; set; } = true;
+    [JsonPropertyName("tls11_disabled")] public bool Tls11Disabled { get; set; } = true;
+    [JsonPropertyName("ssl3_disabled")] public bool Ssl3Disabled { get; set; } = true;
 }
 
 public sealed class SecurityPosture
@@ -70,6 +106,13 @@ public sealed class SecurityPosture
     [JsonPropertyName("windows_update_status")] public string? WindowsUpdateStatus { get; set; }
     [JsonPropertyName("bitlocker")] public string? Bitlocker { get; set; }
     [JsonPropertyName("rdp_enabled")] public bool? RdpEnabled { get; set; }
+    [JsonPropertyName("firewall_enabled")] public bool? FirewallEnabled { get; set; }
+    [JsonPropertyName("uac_enabled")] public bool? UacEnabled { get; set; }
+    [JsonPropertyName("secure_boot_enabled")] public bool? SecureBootEnabled { get; set; }
+    [JsonPropertyName("usb_storage_blocked")] public bool? UsbStorageBlocked { get; set; }
+    [JsonPropertyName("weak_protocols")] public WeakProtocolsInfo? WeakProtocols { get; set; }
+    [JsonPropertyName("listening_ports")] public List<ListeningPortInfo>? ListeningPorts { get; set; }
+    [JsonPropertyName("startup_programs")] public List<StartupProgramInfo>? StartupPrograms { get; set; }
     [JsonPropertyName("local_accounts")] public List<LocalAccountInfo>? LocalAccounts { get; set; }
     [JsonPropertyName("smarts")] public List<object>? Smarts { get; set; }
 }
@@ -160,11 +203,52 @@ public sealed class InventoryCollector
         {
             try
             {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-                var product = key?.GetValue("ProductName")?.ToString();
-                var display = key?.GetValue("DisplayVersion")?.ToString();
-                return string.IsNullOrWhiteSpace(display) ? product : $"{product} {display}";
+                // 1. Thử WMI Win32_OperatingSystem.Caption (trả về chính xác "Microsoft Windows 11 Pro")
+                string? caption = null;
+                try
+                {
+                    using var searcher = new System.Management.ManagementObjectSearcher("SELECT Caption FROM Win32_OperatingSystem");
+                    foreach (System.Management.ManagementObject o in searcher.Get())
+                    {
+                        using (o)
+                        {
+                            caption = o["Caption"]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(caption)) break;
+                        }
+                    }
+                }
+                catch { }
+
+                // 2. Đọc DisplayVersion và build từ registry
+                string? display = null;
+                string? buildStr = null;
+                string? product = null;
+                try
+                {
+                    using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                        @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                    display = key?.GetValue("DisplayVersion")?.ToString();
+                    buildStr = key?.GetValue("CurrentBuildNumber")?.ToString();
+                    product = key?.GetValue("ProductName")?.ToString();
+                }
+                catch { }
+
+                // Nếu lấy được Caption từ WMI, chuẩn hóa và gắn DisplayVersion
+                if (!string.IsNullOrWhiteSpace(caption))
+                {
+                    var cleanCaption = caption.Replace("Microsoft ", "", StringComparison.OrdinalIgnoreCase).Trim();
+                    return string.IsNullOrWhiteSpace(display) ? cleanCaption : $"{cleanCaption} {display}";
+                }
+
+                // Fallback registry: Windows 11 giữ ProductName="Windows 10 ..." vì lý do tương thích ngược (build >= 22000 là Windows 11)
+                if (!string.IsNullOrWhiteSpace(product))
+                {
+                    if (int.TryParse(buildStr, out var b) && b >= 22000 && product.Contains("Windows 10", StringComparison.OrdinalIgnoreCase))
+                    {
+                        product = product.Replace("Windows 10", "Windows 11", StringComparison.OrdinalIgnoreCase);
+                    }
+                    return string.IsNullOrWhiteSpace(display) ? product : $"{product} {display}";
+                }
             }
             catch { }
         }
@@ -362,6 +446,7 @@ public sealed class InventoryCollector
                         {
                             Model = model,
                             Serial = o["SerialNumber"]?.ToString()?.Trim(),
+                            SizeBytes = (long)size,
                             SizeGb = Math.Round(size / (1024.0 * 1024.0 * 1024.0), 0),
                             Type = type,
                         });
@@ -385,12 +470,14 @@ public sealed class InventoryCollector
                     var model = ReadSys($"{dir}/device/model") ?? name;
                     var sectors = ReadSys($"{dir}/size");
                     if (sectors is null || !long.TryParse(sectors, out var secs) || secs == 0) continue;
+                    var bytes = secs * 512L;
                     var type = model.ToLowerInvariant().Contains("nvme") || model.ToLowerInvariant().Contains("ssd") ? "SSD" : "HDD";
                     disks.Add(new DiskInfo
                     {
                         Model = model,
                         Serial = ReadSys($"{dir}/device/serial"),
-                        SizeGb = Math.Round(secs * 512 / (1024.0 * 1024.0 * 1024.0), 0),
+                        SizeBytes = bytes,
+                        SizeGb = Math.Round(bytes / (1024.0 * 1024.0 * 1024.0), 0),
                         Type = type,
                     });
                 }
@@ -506,8 +593,8 @@ public sealed class InventoryCollector
         try
         {
             var result = new List<NetworkInterfaceInfo>();
-            // Dual-homed: >= 2 interface active khác dải mạng (/16) → flag (Phase 3 dùng)
-            var groups = new List<string>(); // danh sách network id (prefix /16) theo thứ tự gặp
+            var entries = new List<(NetworkInterface Ni, string? Ip, string? Mac, string? NetGroup)>();
+            var distinctSubnets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
@@ -516,16 +603,33 @@ public sealed class InventoryCollector
 
                 string? ip = null;
                 string? netGroup = null;
+
                 foreach (var addr in ni.GetIPProperties().UnicastAddresses)
                 {
                     if (addr.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
                     {
                         ip = addr.Address.ToString();
-                        var octets = addr.Address.GetAddressBytes();
-                        netGroup = $"{octets[0]}.{octets[1]}"; // /16
+                        var ipBytes = addr.Address.GetAddressBytes();
+                        try
+                        {
+                            var mask = addr.IPv4Mask;
+                            if (mask is not null && mask.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                            {
+                                var maskBytes = mask.GetAddressBytes();
+                                var netBytes = new byte[4];
+                                for (int i = 0; i < 4; i++)
+                                    netBytes[i] = (byte)(ipBytes[i] & maskBytes[i]);
+                                int prefix = CountPrefixBits(maskBytes);
+                                netGroup = $"{netBytes[0]}.{netBytes[1]}.{netBytes[2]}.{netBytes[3]}/{prefix}";
+                            }
+                        }
+                        catch { }
+
+                        netGroup ??= $"{ipBytes[0]}.{ipBytes[1]}.0.0/16";
                         break;
                     }
                 }
+
                 if (ip is null)
                 {
                     foreach (var addr in ni.GetIPProperties().UnicastAddresses)
@@ -540,11 +644,23 @@ public sealed class InventoryCollector
 
                 var macBytes = ni.GetPhysicalAddress().GetAddressBytes();
                 var mac = macBytes.Length == 0 ? null : string.Join("-", macBytes.Select(b => b.ToString("X2")));
-                var idx = netGroup is null ? -1 : groups.IndexOf(netGroup);
-                if (netGroup is not null && idx < 0)
+
+                if (!string.IsNullOrEmpty(netGroup))
+                    distinctSubnets.Add(netGroup);
+
+                entries.Add((ni, ip, mac, netGroup));
+            }
+
+            bool hasDualHomed = distinctSubnets.Count >= 2;
+            string? firstSubnet = null;
+
+            foreach (var (ni, ip, mac, netGroup) in entries)
+            {
+                bool isSecondary = false;
+                if (hasDualHomed && netGroup is not null)
                 {
-                    groups.Add(netGroup);
-                    idx = groups.Count - 1;
+                    firstSubnet ??= netGroup;
+                    isSecondary = !string.Equals(firstSubnet, netGroup, StringComparison.OrdinalIgnoreCase);
                 }
 
                 result.Add(new NetworkInterfaceInfo
@@ -552,9 +668,10 @@ public sealed class InventoryCollector
                     Name = ni.Name,
                     Ip = ip,
                     Mac = mac,
-                    IsDualHomed = groups.Count >= 2 && idx > 0,
+                    IsDualHomed = hasDualHomed && isSecondary,
                 });
             }
+
             return result.Count > 0 ? result : null;
         }
         catch (Exception ex)
@@ -562,6 +679,21 @@ public sealed class InventoryCollector
             _logger.LogDebug("Đọc network lỗi: {Msg}", ex.Message);
             return null;
         }
+    }
+
+    private static int CountPrefixBits(byte[] maskBytes)
+    {
+        int count = 0;
+        foreach (var b in maskBytes)
+        {
+            var v = b;
+            while (v != 0)
+            {
+                count += v & 1;
+                v >>= 1;
+            }
+        }
+        return count;
     }
 
     // ── User ───────────────────────────────────────────────────────
@@ -595,79 +727,10 @@ public sealed class InventoryCollector
         return Environment.UserName;
     }
 
-    // ── Security posture (Phase 1 cơ bản; mở rộng Phase 2) ────────
+    // ── Security posture (Phase 1 — antivirus + RDP + local accounts + WU + BitLocker) ─
     private SecurityPosture? GetSecurity()
     {
-        if (!OperatingSystem.IsWindows()) return null;
-        var sec = new SecurityPosture
-        {
-            Antivirus = GetAntivirus(),
-            RdpEnabled = GetRdpEnabled(),
-            LocalAccounts = GetLocalAccounts(),
-        };
-        return (sec.Antivirus is null && sec.RdpEnabled is null && sec.LocalAccounts is null) ? null : sec;
-    }
-
-    private List<AntivirusInfo>? GetAntivirus()
-    {
-        try
-        {
-            var list = new List<AntivirusInfo>();
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                @"root\SecurityCenter2", "SELECT displayName, productState FROM AntiVirusProduct");
-            foreach (System.Management.ManagementObject o in searcher.Get())
-            {
-                using (o)
-                {
-                    var name = o["displayName"]?.ToString()?.Trim();
-                    if (string.IsNullOrWhiteSpace(name)) continue;
-                    var state = o["productState"] is not null ? Convert.ToInt32(o["productState"]) : 0;
-                    var enabled = (state & 0x1000) != 0; // bit 12: product enabled
-                    list.Add(new AntivirusInfo { Name = name, Status = enabled ? "enabled" : "disabled" });
-                }
-            }
-            return list.Count > 0 ? list : null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug("SecurityCenter2 không đọc được: {Msg}", ex.Message);
-            return null;
-        }
-    }
-
-    private bool? GetRdpEnabled()
-    {
-        try
-        {
-            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                @"SYSTEM\CurrentControlSet\Control\Terminal Server");
-            var deny = key?.GetValue("fDenyTSConnections");
-            if (deny is int d) return d == 0;
-        }
-        catch { }
-        return null;
-    }
-
-    private List<LocalAccountInfo>? GetLocalAccounts()
-    {
-        try
-        {
-            var list = new List<LocalAccountInfo>();
-            using var searcher = new System.Management.ManagementObjectSearcher(
-                "SELECT Name, LocalAccount FROM Win32_UserAccount WHERE LocalAccount = TRUE");
-            foreach (System.Management.ManagementObject o in searcher.Get())
-            {
-                using (o)
-                {
-                    var name = o["Name"]?.ToString();
-                    if (string.IsNullOrWhiteSpace(name)) continue;
-                    list.Add(new LocalAccountInfo { Name = name, HasPassword = null });
-                }
-            }
-            return list.Count > 0 ? list : null;
-        }
-        catch { }
-        return null;
+        return SecurityCollector.Collect(_logger);
     }
 
     // ── VM detection ───────────────────────────────────────────────

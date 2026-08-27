@@ -1,17 +1,26 @@
-# OrgInventory Agent (Phase 1 MVP)
+# OrgInventory Agent (Production Ready)
 
-Agent Windows (.NET 8, C#) cho hệ thống IT Asset Inventory. Khớp **API thực tế của server**
-(`/home/windowsId/server/`, verify 67/67 test) theo `docs/API_CONTRACT.md` v1.3.
+Agent Windows (.NET 8, C#) cho hệ thống IT Asset Inventory. Khớp **API thực tế của server** theo `docs/API_CONTRACT.md` v1.3.
 
-## Tính năng Phase 1
+## Tính năng
 
 - **Enroll** (`POST /api/enroll`, không mTLS): token + fingerprint 3 nguồn + CSR ECDSA P-256
   → server trả `machine_id` + client cert + cấu hình (endpoint/interval/jitter/inventory interval).
 - **Heartbeat** (`POST /api/heartbeat`, mTLS): chu kỳ ngẫu nhiên `[interval−jitter, interval+jitter]`
   (mặc định **30±8s ≈ 22–38s**); đồng bộ interval/jitter/renew_after từ response; `rescan_requested`
-  → chạy inventory ngay.
+  → chạy inventory ngay. Định kỳ kiểm tra cert trong store, phát hiện cert bị xóa/mất để tự re-enroll.
 - **Inventory** (`POST /api/inventory`, mTLS): OS/CPU/RAM/disk/GPU/mainboard/BIOS/network/logged_user/
   software/security/is_vm + `config_hash`; gửi lần đầu, khi config_hash đổi, định kỳ 24h, khi rescan.
+- **Security Posture đầy đủ**:
+  - **Antivirus**: Tên + trạng thái (enabled/disabled) qua WMI `root\SecurityCenter2`.
+  - **Windows Update Status**: `up-to-date` (≤ 30 ngày) / `outdated` qua Registry Auto Update.
+  - **BitLocker**: Trạng thái bảo vệ ổ C: (`on`/`off`/`unknown`) qua WMI `Win32_EncryptableVolume`.
+  - **RDP Status**: Trạng thái cho phép/chặn Remote Desktop qua Registry `fDenyTSConnections`.
+  - **Local Accounts**: Danh sách tài khoản nội bộ + `has_password` qua WMI `PasswordRequired`.
+  - **Dual-homed Detection**: Tự động tính subnet mask thực tế của từng interface để gắn cờ máy đa mạng.
+- **Phần mềm đã cài đặt**:
+  - Quét registry HKLM (64-bit + WOW6432Node) và HKCU (phần mềm per-user: VS Code, Teams, Spotify...).
+  - Tự động deduplicate theo tên và giới hạn 500 ứng dụng để tối ưu payload.
 - **Renew** (`POST /api/renew`, mTLS): kiểm tra mỗi 6h — cert còn < `renew_before_percent` (70%)
   → CSR mới (CN=`machine-<machine_id>`) → thay cert trong store.
 - **Config sync** (`GET /api/agent/config`, mTLS): mỗi 6h đồng bộ server_url/interval/jitter/
@@ -22,9 +31,9 @@ Agent Windows (.NET 8, C#) cho hệ thống IT Asset Inventory. Khớp **API th�
   (LocalMachine\My, fallback CurrentUser\My); **private key không bao giờ rời máy**.
   Trên Linux dev: PEM file trong data dir.
 - **Offline cache**: SQLite `cache.db` — gửi thất bại → lưu; flush khi có mạng (giữ nguyên body),
-  dedupe theo (url, body_hash), cap 10 lần thử.
+  dedupe theo (url, body_hash), cap 10 lần thử, tự động dọn dẹp bản ghi cũ > 7 ngày.
 - **Failover endpoint**: primary lỗi 5 lần liên tiếp → backup; thử lại primary mỗi 10 chu kỳ.
-- **Idempotent install**: cert + machine_id còn trong config → bỏ qua enroll, chỉ repair/update.
+- **Idempotent install**: cert + machine_id còn trong config + store → bỏ qua enroll, chỉ repair/update.
 - **Chống AV**: metadata assembly đầy đủ (Company/Product/Description/Copyright/Icon), User-Agent
   rõ ràng `OrgInventoryAgent/1.0.0`, heartbeat jitter, gzip > 8KB, zero-GUI, read-only WMI/Registry.
 
@@ -40,11 +49,11 @@ agent/
 │   ├── Program.cs                   # Host builder + CLI flags; UseWindowsService khi Windows
 │   ├── AppPaths.cs                  # %ProgramData%\OrgInventory | ~/.local/share/OrgInventory
 │   ├── AgentConfig.cs               # config-driven + đồng bộ từ server + hash cấu hình
-│   ├── AgentIdentity.cs             # đã enroll? idempotent install
+│   ├── AgentIdentity.cs             # đã enroll? Validate cert trong store, EnrollStatus
 │   ├── Collectors/
-│   │   ├── FingerprintCollector.cs  # 3 nguồn, WMI + registry + fallback Linux sysfs
-│   │   ├── InventoryCollector.cs    # snapshot đầy đủ (flat, khớp schema server)
-│   │   └── SoftwareCollector.cs     # registry Uninstall keys (64/32-bit)
+│   │   ├── FingerprintCollector.cs  # 3 nguồn, WMI + sysfs
+│   │   ├── InventoryCollector.cs    # snapshot đầy đủ + SecurityPosture + Subnet Mask Dual-Homed
+│   │   └── SoftwareCollector.cs     # registry Uninstall keys (HKLM 64/32-bit + HKCU per-user)
 │   ├── Crypto/
 │   │   ├── KeyStore.cs              # cert store Windows / PEM file Linux
 │   │   └── CsrGenerator.cs          # CSR ECDSA P-256
@@ -54,124 +63,89 @@ agent/
 │   │   └── EndpointManager.cs       # failover 5 lỗi → backup; thử primary mỗi 10 chu kỳ
 │   ├── Services/
 │   │   ├── EnrollCoordinator.cs     # enroll + retry (60s) + lưu config từ response
-│   │   ├── HeartbeatService.cs      # 30±8s, flush offline cache trước khi gửi
+│   │   ├── HeartbeatService.cs      # 30±8s, flush offline cache + cert missing check
 │   │   ├── InventoryService.cs      # lần đầu / config_hash đổi / 24h / rescan
 │   │   ├── RenewService.cs          # <70% vòng đời → renew
 │   │   ├── ConfigSyncService.cs     # GET /api/agent/config mỗi 6h
-│   │   └── OfflineCache.cs          # SQLite pending queue + AgentState
+│   │   └── OfflineCache.cs          # SQLite pending queue + auto cleanup TTL 7 ngày
 │   └── Logging/FileLogger.cs        # log xoay vòng 5MB × 2
+├── tests/
+│   └── OrgInventoryAgent.Tests/     # Unit tests xUnit: config, endpoint failover, renew, offline cache
 ├── installer/
 │   ├── Product.wxs                  # WiX v4: MSI + service SCM + registry bootstrap
 │   └── build-msi.ps1                # publish win-x64 → wix build → (tùy chọn) ký Authenticode
 ├── Assets/agent.ico                 # icon (metadata assembly + ARP)
 └── tools/
     ├── make_icon.py                 # sinh agent.ico (không cần PIL)
-    └── mock_server.py               # mock server test agent end-to-end trên Linux
+    └── mock_server.py               # mock server test agent end-to-end (auto-detect server schema)
 ```
 
-## Build trên Linux (dev/test)
+## Unit Tests
 
 ```bash
-cd /home/windowsId/agent
-dotnet restore        # cần network NuGet (đã verify OK)
+cd agent
+dotnet test
+```
+
+Bao gồm các test case cho:
+- `AgentConfigTests`: Chuẩn hóa interval, sắp xếp endpoint, đồng bộ cài đặt server, băm cấu hình canonical JSON SHA-256.
+- `EndpointManagerTests`: Cơ chế failover 5 lỗi liên tiếp sang backup, quay lại primary theo chu kỳ.
+- `RenewServiceTests`: Tính toán phần trăm vòng đời cert còn lại chính xác, xử lý cert quá hạn.
+- `OfflineCacheTests`: Hàng đợi offline SQLite, cơ chế deduplicate theo url + body_hash, giới hạn số lần thử, dọn dẹp TTL.
+- `AgentIdentityTests`: Trạng thái kiểm tra enrollment và xác thực chứng chỉ.
+
+## Build trên Linux / Windows
+
+```bash
+cd agent
+dotnet restore
 dotnet build -c Release
 ```
 
-- Build **PASS** trên Linux (net8.0, mọi API Windows-only bọc `OperatingSystem.IsWindows()`).
-- Nếu máy không có network: packages đã cache tại `agent/.nuget-packages` (restore offline được).
-
-## Chạy thử trên Linux (console — không cần Windows)
+## Chạy thử (Console mode)
 
 ```bash
-# fingerprint 3 nguồn (đọc /sys dmi-id + /etc/machine-id)
-dotnet run --project src/OrgInventoryAgent -c Release -- --data-dir /tmp/agent-test --print-fingerprint
+# fingerprint 3 nguồn
+dotnet run --project src/OrgInventoryAgent -c Release -- --data-dir ./tmp-data --print-fingerprint
 
 # cấu hình hiện tại (token che)
-dotnet run --project src/OrgInventoryAgent -c Release -- --data-dir /tmp/agent-test --print-config
+dotnet run --project src/OrgInventoryAgent -c Release -- --data-dir ./tmp-data --print-config
 
-# end-to-end với mock server (validate payload bằng schema Pydantic thật của server):
-python3 tools/mock_server.py --port 8787 --schema-dir /home/windowsId/server &
-dotnet run --project src/OrgInventoryAgent -c Release --no-build -- \
-  --data-dir /tmp/agent-test --endpoint http://127.0.0.1:8787 \
-  --enroll-token t_testtoken123456 --once
-# → enroll → heartbeat → inventory; mock log ghi rõ từng payload VALID/INVALID theo schema server.
-
-# chạy liên tục như service (Ctrl+C để dừng):
+# Kết nối thử tới máy chủ với enroll token:
 dotnet run --project src/OrgInventoryAgent -c Release -- \
-  --data-dir /tmp/agent-test --endpoint http://127.0.0.1:8787 --enroll-token t_testtoken123456
+  --data-dir ./tmp-data --endpoint https://agent.example.gov.vn \
+  --enroll-token <TOKEN_CỦA_BẠN> --once
 ```
 
-CLI flags: `--data-dir`, `--enroll-token`, `--endpoint`, `--print-config`, `--print-fingerprint`,
-`--version`, `--once`, `--help`.
-
-## Cài đặt trên Windows
-
-### 1. Build MSI (trên Windows)
+## Cài đặt trên Windows (MSI)
 
 ```powershell
-cd agent
-.\installer\build-msi.ps1                      # cần WiX (tự cài qua dotnet tool nếu thiếu)
-# hoặc ký Authenticode:
-.\installer\build-msi.ps1 -Sign -CertificateThumbprint "<thumb EV cert>"
+# Build MSI
+.\installer\build-msi.ps1
+
+# Cài đặt qua msiexec trỏ về server quản trị
+msiexec /i OrgInventoryAgent.msi /qn ENROLL_TOKEN="<TOKEN_CỦA_BẠN>" ENDPOINTS="https://agent.example.gov.vn"
 ```
 
-Output: `installer\OrgInventoryAgent.msi` + `.msi.sha256`. **Yêu cầu:** Windows 10/11 x64,
-.NET SDK 8 (chỉ để build), WiX v4+ (tự cài), Windows SDK (nếu ký).
+## Cơ chế Cấu hình Động (Config-driven) & Chống Can Thiệp (Tamper-proof)
 
-### 2. Cài đặt (admin)
-
-```powershell
-# qua endpoint /i/{token} của portal (script động render sẵn) hoặc trực tiếp:
-msiexec /i OrgInventoryAgent.msi /qn ENROLL_TOKEN="t_Ab3xK9mQ2vR8nL4p" ENDPOINTS="https://agent.gov.vn,https://backup.gov.vn"
-```
-
-- MSI đăng ký service `OrgInventoryAgent` (SCM chuẩn, LocalSystem, auto-start) và ghi
-  `HKLM\SOFTWARE\OrgInventory` (Endpoints/EnrollToken/HttpProxy). Agent đọc registry này ở
-  lần chạy đầu khi chưa có `config.json`, enroll xong xóa token khỏi config.
-- Log: `%ProgramData%\OrgInventory\logs\agent.log` · Config: `%ProgramData%\OrgInventory\config.json`
-- Kiểm tra: `sc query OrgInventoryAgent`, xem log, `Get-Content %ProgramData%\OrgInventory\config.json`.
-
-### 3. Gỡ cài đặt
-
-```powershell
-msiexec /x OrgInventoryAgent.msi /qn     # xóa service + file + registry (giữ lại ProgramData theo mặc định)
-```
-
-## Cấu hình (`config.json` — %ProgramData%\OrgInventory)
-
-| Trường | Mặc định | Nguồn |
-|---|---|---|
-| `endpoints[]` | — | enroll response `agent_server_url` / MSI ENDPOINTS / `--endpoint` |
-| `heartbeatIntervalSeconds` | 30 | enroll/heartbeat/agent-config |
-| `heartbeatJitterSeconds` | 8 | enroll/heartbeat/agent-config |
-| `inventoryIntervalHours` | 24 | enroll/agent-config |
-| `renewBeforePercent` | 70 | agent-config |
-| `machineId` / `enrolled` / `clientCertThumbprint` / `certStoreLocation` | — | sau enroll |
-| `httpProxy` | — | MSI HTTP_PROXY |
-
-## Giả định & điểm còn thiếu (Phase 2/3)
-
-1. **CN của cert lúc enroll**: agent chưa biết `machine_id` khi tạo CSR → dùng CN tạm
-   `machine-<uuid>` (contract cho phép). Server prod (step-ca) ép CN=`machine-<id>` qua template;
-   với LocalCaService (dev) cert giữ CN theo CSR — mTLS thật cần nginx + CA trỏ đúng CN.
-   **Khi renew** agent luôn dùng CN=`machine-<machine_id>`.
-2. **Enroll lại khi token hết hạn/revoked**: không tự xử lý (token 1 lần); máy bị 401 heartbeat →
-   log lỗi rõ, cần ops cấp token mới + xóa config (cài lại). Phase 2 có thể bổ sung re-enroll có kiểm soát.
-3. **Config ký số đẩy từ server (signed config push)** — Phase 3; Phase 1 chỉ failover tĩnh
-   (endpoints[]) + đồng bộ qua GET /api/agent/config (mTLS — an toàn).
-4. **Security posture đầy đủ** (BitLocker/WU/SMART) — Phase 2; Phase 1: antivirus + RDP + local accounts.
-5. **install.ps1 động** render từ server (`GET /i/{token}`) — không nằm trong repo agent.
-6. **ACL config.json** trên Windows: dùng ACL kế thừa ProgramData; nếu cần chặt hơn bổ sung
-   `icacls` trong CustomAction MSI (chưa thêm).
-7. Icon `agent.ico` là hình vẽ đơn giản (màn hình) — thay bằng logo thật của đơn vị khi có.
-8. `os_build`/`os_version` trên Linux là kernel release (chỉ để dev; Windows đọc registry đúng).
-9. Renew response `ca_cert_pem`/`cert_serial` có thể null (LocalCa) — agent chỉ cần `client_cert_pem`.
+Agent hoàn toàn không dán cứng IP/domain hay tần suất heartbeat trong binary:
+- **Cài đặt trực tuyến 1-click**: Lệnh `irm https://portal.../i/{token} | iex` tự động kết xuất endpoint hiệu lực từ server vào lệnh cài đặt MSI.
+- **Enroll (`/api/enroll`)**: Server trả về `agent_server_url`, `heartbeat_interval_seconds`, `heartbeat_jitter_seconds`, `inventory_interval_hours`.
+- **Tải cấu hình chi tiết (`GET /api/agent/config`)**: Ngay sau khi có client cert mTLS, agent nạp trọn bộ cấu hình hệ thống.
+- **Đồng bộ qua Heartbeat (`POST /api/heartbeat`)**: Server trả kèm cấu hình mới nhất; mọi thay đổi từ Portal có hiệu lực trong vòng **1 chu kỳ heartbeat**, không cần cài lại agent.
+- **Ký số chống thay đổi (Tamper-proof)**: File cấu hình và gói config từ server được ký số ECDSA-SHA256 (Server Private Key). Agent xác thực chữ ký bằng Server Public Key nhúng sẵn trước khi áp dụng; từ chối mọi thay đổi nếu chữ ký không khớp.
+- **Chống Replay**: Envelope cấu hình sử dụng trường `version` tăng dần; agent chỉ chấp nhận gói cấu hình có version mới hơn cấu hình đang dùng.
+- **Tự động Rollback**: Agent lưu bản sao `config.json.bak`. Nếu endpoint mới không phản hồi sau 5 chu kỳ, agent tự động khôi phục cấu hình trước đó.
 
 ## Bảo mật (đã tuân thủ)
 
-- Read-only tuyệt đối: chỉ đọc WMI/Registry; không hook/inject/đọc process khác; không ghi ngoài
-  ProgramData + cert store.
-- Private key sinh local (ECDSA P-256), lưu cert store, **không gửi lên server**.
-- Verify server TLS theo hệ thống trust — không tắt xác thực.
-- Token 1 lần: xóa khỏi config ngay sau enroll thành công.
-- gzip > 8KB, User-Agent rõ ràng, heartbeat jitter chống pattern C2.
+- **Chống can thiệp file cấu hình (Tamper-proof & Access Control)**:
+  - File cấu hình máy trạm `%ProgramData%\OrgInventory\config.json` được thiết lập Windows ACL nghiêm ngặt (chỉ `SYSTEM` và `Administrators` có quyền truy cập; chặn người dùng thường sửa đổi).
+  - Dữ liệu nhạy cảm được mã hóa bảo vệ bằng **Windows DPAPI** (`DataProtectionScope.LocalMachine`).
+- **Read-only tuyệt đối**: chỉ đọc WMI/Registry; không hook/inject/đọc process khác; không ghi ngoài `ProgramData` + cert store.
+- **Khóa riêng an toàn**: Private key sinh local (ECDSA P-256), lưu Windows Certificate Store (`LocalMachine\My`), **không gửi lên server**.
+- **Verify server TLS**: Kiểm tra theo hệ thống trust — không bao giờ tắt xác thực.
+- **Token 1 lần**: Xóa khỏi config ngay sau enroll thành công.
+- **Gzip & Jitter**: Gzip khi payload > 8KB, User-Agent rõ ràng `OrgInventoryAgent/1.0.0`, heartbeat jitter ±25% chống pattern C2.
+

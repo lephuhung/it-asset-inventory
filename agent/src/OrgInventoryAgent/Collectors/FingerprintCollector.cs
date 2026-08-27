@@ -65,18 +65,10 @@ public sealed class FingerprintCollector
             {
                 _logger.LogDebug("WMI Win32_ComputerSystemProduct không đọc được UUID: {Msg}", ex.Message);
             }
-            // Fallback registry (một số máy expose UUID ở đây)
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                    @"SYSTEM\CurrentControlSet\Control\SystemInformation");
-                var v = key?.GetValue("SystemProductName")?.ToString();
-                return string.IsNullOrWhiteSpace(v) ? null : null; // không có UUID ở key này — trả null
-            }
-            catch
-            {
-                return null;
-            }
+            // Ghi chú: registry SYSTEM\CurrentControlSet\Control\SystemInformation\SystemProductName
+            // chứa product name (ví dụ "ThinkPad X1"), không phải UUID — không dùng làm fallback UUID.
+            // UUID chỉ có trong WMI Win32_ComputerSystemProduct; nếu WMI lỗi thì nguồn này = null.
+            return null;
         }
 
         // Linux dev: /sys/class/dmi/id/product_uuid

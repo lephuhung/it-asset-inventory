@@ -58,20 +58,20 @@ public sealed class ConfigSyncService : BackgroundService
         }
     }
 
-    private async Task SyncAsync(CancellationToken ct)
+    public async Task<bool> SyncAsync(CancellationToken ct)
     {
         try
         {
             var resp = await _api.GetJsonAsync("/api/agent/config", ct, useClientCert: true, timeoutSeconds: 30);
             if (!resp.Ok)
             {
-                _logger.LogWarning("GET /api/agent/config thất bại HTTP {(int)Status}: {Detail}",
-                    resp.Status, resp.Detail);
-                return;
+                _logger.LogWarning("GET /api/agent/config thất bại HTTP {Status}: {Detail}",
+                    (int)resp.Status, resp.Detail);
+                return false;
             }
 
             var body = resp.Body;
-            if (body is null) return;
+            if (body is null) return false;
 
             var serverUrl = body["server_url"]?.GetValue<string>();
             int? interval = TryGetInt(body["heartbeat_interval_seconds"]);
@@ -83,14 +83,16 @@ public sealed class ConfigSyncService : BackgroundService
             if (changed)
             {
                 _config.Save();
-                _logger.LogInformation("Đã đồng bộ cấu hình từ server: interval={I}s jitter={J}s inventory={H}h renew={P}%",
-                    _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds,
+                _logger.LogInformation("Đã đồng bộ cấu hình từ server: server={Server}, interval={I}s, jitter={J}s, inventory={H}h, renew={P}%",
+                    _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds,
                     _config.InventoryIntervalHours, _config.RenewBeforePercent);
             }
+            return true;
         }
         catch (ApiTransportException ex)
         {
             _logger.LogWarning("Không lấy được cấu hình từ server: {Msg}", ex.Message);
+            return false;
         }
     }
 

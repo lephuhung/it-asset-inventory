@@ -37,12 +37,13 @@ async function parseError(res: Response): Promise<ApiError> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const res = await fetch(`/api/proxy${path}`, {
     credentials: "same-origin",
     cache: "no-store",
     ...init,
     headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
@@ -57,6 +58,9 @@ export const api = {
   },
   post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+  },
+  postForm<T>(path: string, formData: FormData): Promise<T> {
+    return request<T>(path, { method: "POST", body: formData });
   },
   put<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, { method: "PUT", body: body === undefined ? undefined : JSON.stringify(body) });

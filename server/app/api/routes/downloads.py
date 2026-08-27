@@ -22,10 +22,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, PlainTextResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.db.session import get_db
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/download", tags=["download"])
 
@@ -86,3 +89,74 @@ async def download_install_offline_script():
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.ps1")
     return PlainTextResponse(content=template_path.read_text(encoding="utf-8"))
+
+
+@router.get("/install-offline.cmd", response_class=PlainTextResponse)
+async def download_install_offline_launcher():
+    """Trả về `install-offline.cmd` — launcher nháy đúp chuột 1-click cho máy cách ly."""
+    template_path = Path(__file__).resolve().parents[2] / "templates" / "install-offline.cmd"
+    if not template_path.exists():
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.cmd")
+    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"))
+
+
+@router.get("/server_public_key.pem", response_class=PlainTextResponse)
+async def download_server_public_key():
+    """Trả về khóa công khai của Server để máy cách ly mã hóa gói ZIP trước khi lưu vào USB."""
+    from app.services.server_crypto import get_server_public_key_pem
+    return PlainTextResponse(content=get_server_public_key_pem(), media_type="text/plain")
+
+
+@router.get("/offline-package.zip")
+async def download_offline_package(db: AsyncSession = Depends(get_db)):
+    """Tạo và tải về gói bundle ZIP trọn gói cho máy cách ly (Admin copy vào USB).
+
+    Bao gồm:
+    - install-offline.cmd (launcher nháy đúp chuột)
+    - install-offline.ps1 (script thu thập & đóng gói)
+    - server_public_key.pem (khóa công khai của Server)
+    - OrgInventoryAgent.msi & .sha256 (nếu có sẵn trên server)
+    - offline_config.json (cấu hình mẫu)
+    """
+    import io
+    import json
+    import zipfile
+    from fastapi.responses import Response
+    from app.services.server_crypto import get_server_public_key_pem
+
+    agent_cfg = await effective_agent_config(db)
+    template_dir = Path(__file__).resolve().parents[2] / "templates"
+    zip_buf = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        cmd_path = template_dir / "install-offline.cmd"
+        if cmd_path.exists():
+            zf.writestr("install-offline.cmd", cmd_path.read_text(encoding="utf-8"))
+
+        ps1_path = template_dir / "install-offline.ps1"
+        if ps1_path.exists():
+            zf.writestr("install-offline.ps1", ps1_path.read_text(encoding="utf-8"))
+
+        zf.writestr("server_public_key.pem", get_server_public_key_pem())
+
+        sample_cfg = {
+            "token": "",
+            "endpoints": agent_cfg["agent_server_url"],
+            "note": "Cấu hình offline tạo bởi IT Asset Inventory Portal",
+        }
+        zf.writestr("offline_config.json", json.dumps(sample_cfg, indent=2, ensure_ascii=False))
+
+        # Đính kèm MSI và SHA256 nếu có sẵn trong thư mục agent_msi_dir
+        base = Path(settings.agent_msi_dir).resolve()
+        msi_p = base / MSI_FILENAME
+        if msi_p.exists():
+            zf.write(msi_p, arcname=MSI_FILENAME)
+        sha_p = base / SHA256_FILENAME
+        if sha_p.exists():
+            zf.write(sha_p, arcname=SHA256_FILENAME)
+
+    return Response(
+        content=zip_buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="offline-package.zip"'},
+    )

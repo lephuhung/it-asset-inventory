@@ -83,6 +83,9 @@ HEARTBEAT_RESPONSE = {
     "notice_version": None,
     "heartbeat_interval_seconds": 30,
     "heartbeat_jitter_seconds": 8,
+    "server_url": f"http://{HOST}:{PORT_PLACEHOLDER}",
+    "agent_server_url": f"http://{HOST}:{PORT_PLACEHOLDER}",
+    "inventory_interval_hours": 24,
 }
 
 INVENTORY_RESPONSE = {"ok": True, "config_changed": False}
@@ -218,10 +221,13 @@ def make_handler(models, log_file, server_url):
                 except Exception as e:  # noqa: BLE001
                     entry["schema"] = f"INVALID: {e}"
 
+            status_code = 200 if resp is not None else 404
+            schema_status = entry.get("schema", "N/A")
+            print(f"[mock] {datetime.now(UTC).strftime('%H:%M:%S')} {self.command} {path} -> {status_code} [{schema_status}]")
+
             with open(log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False, indent=2) + "\n---\n")
 
-            resp = responses.get(path)
             if resp is None:
                 self.send_response(404)
                 self.send_header("Content-Type", "application/json")
@@ -258,10 +264,18 @@ def make_handler(models, log_file, server_url):
 
 
 def main():
+    import tempfile
+
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent
+    server_dir = repo_root / "server"
+    default_schema_dir = str(server_dir) if server_dir.exists() else ""
+    default_log = str(Path(tempfile.gettempdir()) / "mock_agent_requests.jsonl")
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8787)
-    ap.add_argument("--schema-dir", default="/home/windowsId/server")
-    ap.add_argument("--log", default="/tmp/mock_agent_requests.jsonl")
+    ap.add_argument("--schema-dir", default=default_schema_dir)
+    ap.add_argument("--log", default=default_log)
     args = ap.parse_args()
 
     models = load_schemas(args.schema_dir)

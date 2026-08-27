@@ -13,7 +13,9 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
-  <?define AgentExe = "OrgInventoryAgent.exe" ?>
+  <?ifndef AgentExe ?>
+    <?define AgentExe = "OrgInventoryAgent.exe" ?>
+  <?endif?>
   <?define UpgradeCode = "A3E2F1B0-9C8D-4E5F-8A7B-6C5D4E3F2A1B" ?>
 
   <Package Name="OrgInventory Agent"
@@ -32,13 +34,16 @@
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Icon cho Add/Remove Programs -->
-    <Icon Id="app.ico" SourceFile="..\Assets\agent.ico" />
+    <Icon Id="app.ico" SourceFile="$(sys.SOURCEFILEDIR)\..\Assets\agent.ico" />
     <Property Id="ARPPRODUCTICON" Value="app.ico" />
 
     <!-- Properties truyền từ msiexec (Secure: giữ được qua custom action / service) -->
     <Property Id="ENROLL_TOKEN" Secure="yes" />
+    <Property Id="TOKEN" Secure="yes" />
     <Property Id="ENDPOINTS" Secure="yes" />
     <Property Id="HTTP_PROXY" Secure="yes" />
+
+    <SetProperty Id="ENROLL_TOKEN" Value="[TOKEN]" Before="CostInitialize" Sequence="first">TOKEN AND NOT ENROLL_TOKEN</SetProperty>
 
     <!-- Thư mục cài: Program Files (x64) -->
     <StandardDirectory Id="ProgramFiles64Folder">

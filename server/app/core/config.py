@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # Có thể trỏ tới `agent/publish/win-x64/` sau khi build MSI trên Windows.
     agent_msi_dir: str = "./agent_dist"
 
+    # Server RSA Keypair cho giải mã gói offline (mã hóa lai AES-256-GCM + RSA-OAEP)
+    server_private_key_path: str = "./data/server_private_key.pem"
+    server_public_key_path: str = "./data/server_public_key.pem"
+
     # Ký số: agent mode (chặn nếu không phải mTLS header hợp lệ)
     require_agent_mtls_header: bool = False  # True khi chạy sau nginx ở prod
 

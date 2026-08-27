@@ -136,9 +136,13 @@ public sealed class KeyStore
                 if (found is not null && found.HasPrivateKey)
                 {
                     _logger.LogDebug("Tìm thấy client cert {Thumb} trong store {Loc}", found.Thumbprint, loc);
+                    foreach (var c in all)
+                    {
+                        if (!ReferenceEquals(c, found)) c.Dispose();
+                    }
                     return found; // caller dispose
                 }
-                found?.Dispose();
+
                 foreach (var c in all) c.Dispose();
             }
             catch (Exception ex)
@@ -157,13 +161,17 @@ public sealed class KeyStore
             (StoreLocation.CurrentUser, "CurrentUser"),
         };
         Exception? last = null;
+        var pfxBytes = certWithKey.Export(X509ContentType.Pfx);
+
         foreach (var (loc, name) in attempts)
         {
             try
             {
                 using var store = new X509Store(StoreName.My, loc);
                 store.Open(OpenFlags.ReadWrite);
-                store.Add(certWithKey);
+                var flags = X509KeyStorageFlags.PersistKeySet | (loc == StoreLocation.LocalMachine ? X509KeyStorageFlags.MachineKeySet : X509KeyStorageFlags.UserKeySet);
+                using var persistentCert = new X509Certificate2(pfxBytes, (string?)null, flags);
+                store.Add(persistentCert);
                 _logger.LogInformation("Cert đã thêm vào store {Name}", name);
                 return (certWithKey.Thumbprint, name);
             }

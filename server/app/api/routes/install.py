@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.security import hash_token
 from app.db.models import EnrollToken, TokenStatus
 from app.db.session import get_db
+from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(tags=["install"])
 
@@ -46,6 +47,11 @@ async def _validate_token(token: str, db: AsyncSession) -> EnrollToken:
 async def render_install_script(token: str, db: AsyncSession = Depends(get_db)):
     """Render install.ps1 đầy đủ với token nhúng — gọi bởi `irm ... | iex`."""
     await _validate_token(token, db)
+    agent_cfg = await effective_agent_config(db)
     template = jinja_env.get_template("install.ps1.j2")
-    script = template.render(token=token, portal_url=settings.portal_url)
+    script = template.render(
+        token=token,
+        portal_url=settings.portal_url,
+        agent_server_url=agent_cfg["agent_server_url"],
+    )
     return PlainTextResponse(content=script, media_type="text/plain")

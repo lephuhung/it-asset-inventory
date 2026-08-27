@@ -1,4 +1,4 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -6,6 +6,10 @@ MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{53F9E0B0-481E-4583-A38E-FC1EDACBC5D5}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent", "src\OrgInventoryAgent\OrgInventoryAgent.csproj", "{03EFA96D-FA50-4F00-B2AD-6EE950F40360}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{83B7E9F1-23A4-4458-9A7B-3DFB5F0E5D61}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.Tests", "tests\OrgInventoryAgent.Tests\OrgInventoryAgent.Tests.csproj", "{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -20,8 +24,13 @@ Global
 		{03EFA96D-FA50-4F00-B2AD-6EE950F40360}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{03EFA96D-FA50-4F00-B2AD-6EE950F40360}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{03EFA96D-FA50-4F00-B2AD-6EE950F40360}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{03EFA96D-FA50-4F00-B2AD-6EE950F40360} = {53F9E0B0-481E-4583-A38E-FC1EDACBC5D5}
+		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D} = {83B7E9F1-23A4-4458-9A7B-3DFB5F0E5D61}
 	EndGlobalSection
 EndGlobal

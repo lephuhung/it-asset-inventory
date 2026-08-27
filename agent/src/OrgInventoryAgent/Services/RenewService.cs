@@ -137,7 +137,7 @@ public sealed class RenewService : BackgroundService
                 useClientCert: true, timeoutSeconds: 45);
             if (!resp.Ok)
             {
-                _logger.LogError("Renew thất bại HTTP {(int)Status}: {Detail}", resp.Status, resp.Detail);
+                _logger.LogError("Renew thất bại HTTP {StatusCode}: {Detail}", (int)resp.Status, resp.Detail);
                 return;
             }
 

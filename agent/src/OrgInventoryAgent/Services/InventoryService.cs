@@ -23,6 +23,7 @@ public sealed class InventoryService : BackgroundService
     private readonly AgentState _state;
     private readonly object _sendLock = new();
     private volatile bool _rescanRequested;
+    private bool _sending; // guard chống gửi inventory song song (rescan + định kỳ)
 
     public InventoryService(AgentConfig config, ApiClient api, EndpointManager endpoints,
         EnrollCoordinator enroll, OfflineCache cache, InventoryCollector collector,
@@ -50,7 +51,10 @@ public sealed class InventoryService : BackgroundService
             catch (OperationCanceledException) { return; }
         }
 
-        _logger.LogInformation("InventoryService khởi động (interval={H}h).", _config.InventoryIntervalHours);
+        var intervalDesc = _config.InventoryIntervalSeconds.HasValue && _config.InventoryIntervalSeconds.Value > 0
+            ? $"{_config.InventoryIntervalSeconds.Value}s"
+            : $"{_config.InventoryIntervalHours}h";
+        _logger.LogInformation("InventoryService khởi động (interval={Interval}).", intervalDesc);
 
         while (!ct.IsCancellationRequested)
         {
@@ -71,7 +75,11 @@ public sealed class InventoryService : BackgroundService
                 _logger.LogError(ex, "Chu kỳ inventory lỗi.");
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+            var delaySec = _config.InventoryIntervalSeconds.HasValue && _config.InventoryIntervalSeconds.Value > 0
+                ? Math.Clamp(_config.InventoryIntervalSeconds.Value, 5, 30)
+                : 30;
+
+            try { await Task.Delay(TimeSpan.FromSeconds(delaySec), ct); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -87,7 +95,11 @@ public sealed class InventoryService : BackgroundService
 
         if (DateTimeOffset.TryParse(_state.LastInventoryAt, out var last))
         {
-            return DateTimeOffset.UtcNow - last >= TimeSpan.FromHours(Math.Max(1, _config.InventoryIntervalHours));
+            var interval = _config.InventoryIntervalSeconds.HasValue && _config.InventoryIntervalSeconds.Value > 0
+                ? TimeSpan.FromSeconds(_config.InventoryIntervalSeconds.Value)
+                : TimeSpan.FromHours(Math.Max(1, _config.InventoryIntervalHours));
+
+            return DateTimeOffset.UtcNow - last >= interval;
         }
         return true;
     }
@@ -127,8 +139,8 @@ public sealed class InventoryService : BackgroundService
                     return true;
                 }
 
-                _logger.LogWarning("Inventory thất bại HTTP {(int)Status}: {Detail} → lưu offline cache.",
-                    resp.Status, resp.Detail);
+                _logger.LogWarning("Inventory thất bại HTTP {StatusCode}: {Detail} → lưu offline cache.",
+                    (int)resp.Status, resp.Detail);
                 EnqueueOffline(url, snapshot);
                 return false;
             }
@@ -144,8 +156,6 @@ public sealed class InventoryService : BackgroundService
             lock (_sendLock) _sending = false;
         }
     }
-
-    private bool _sending;
 
     private void EnqueueOffline(string url, InventorySnapshot snapshot)
     {

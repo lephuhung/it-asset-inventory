@@ -5,6 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $token = '{{ token }}'
 $baseUrl = '{{ portal_url }}'
+$agentServerUrl = '{{ agent_server_url }}'
 $msiUrl = "$baseUrl/download/agent.msi"
 $msiPath = Join-Path $env:TEMP "agent-$token.msi"
 $logPath = Join-Path $env:TEMP 'agent-install.log'
@@ -53,11 +54,13 @@ if ($sig.Status -ne 'Valid') {
 }
 Write-Host "      ✓ Chữ ký hợp lệ: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
 
-# 5. Cài đặt silent — MSI nhận TOKEN qua property (agent tự enroll sau khi cài)
+# 5. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
 Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
 $install = Start-Process msiexec.exe -ArgumentList @(
     '/i', "`"$msiPath`"", '/qn', '/norestart',
-    "TOKEN=$token", "/L*V", "`"$logPath`""
+    "ENROLL_TOKEN=$token", "TOKEN=$token",
+    "ENDPOINTS=$agentServerUrl",
+    "/L*V", "`"$logPath`""
 ) -Wait -PassThru
 
 if ($install.ExitCode -ne 0) {

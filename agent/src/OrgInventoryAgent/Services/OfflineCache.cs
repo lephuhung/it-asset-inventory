@@ -46,6 +46,7 @@ public sealed class OfflineCache : IDisposable
                 CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_body ON pending(url, body_hash);
                 """;
             cmd.ExecuteNonQuery();
+            CleanupOld(7);
         }
         catch (Exception ex)
         {
@@ -56,6 +57,33 @@ public sealed class OfflineCache : IDisposable
     }
 
     public bool Available => _conn is not null;
+
+    /// <summary>Xóa các bản ghi cũ hơn maxDays ngày (mặc định 7 ngày).</summary>
+    public int CleanupOld(int maxDays = 7)
+    {
+        lock (_lock)
+        {
+            if (_conn is null) return 0;
+            try
+            {
+                var cutoff = DateTimeOffset.UtcNow.AddDays(-maxDays).ToString("o");
+                using var cmd = _conn.CreateCommand();
+                cmd.CommandText = "DELETE FROM pending WHERE created_at < $cutoff";
+                cmd.Parameters.AddWithValue("$cutoff", cutoff);
+                var deleted = cmd.ExecuteNonQuery();
+                if (deleted > 0)
+                {
+                    _logger.LogInformation("Đã dọn dẹp {Count} bản ghi offline cache cũ (> {Days} ngày).", deleted, maxDays);
+                }
+                return deleted;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Dọn dẹp offline cache cũ lỗi: {Msg}", ex.Message);
+                return 0;
+            }
+        }
+    }
 
     /// <summary>Thêm bản ghi chờ gửi (dedupe theo url+body hash).</summary>
     public void Enqueue(string url, string body)

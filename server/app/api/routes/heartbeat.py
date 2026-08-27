@@ -85,5 +85,8 @@ async def heartbeat(
         renew_after=now + timedelta(days=int(settings.client_cert_valid_days * 0.7)),
         heartbeat_interval_seconds=agent_cfg["heartbeat_interval_seconds"],
         heartbeat_jitter_seconds=agent_cfg["heartbeat_jitter_seconds"],
+        server_url=agent_cfg["agent_server_url"],
+        agent_server_url=agent_cfg["agent_server_url"],
+        inventory_interval_hours=agent_cfg["inventory_interval_hours"],
         rescan_requested=rescan_requested,
     )

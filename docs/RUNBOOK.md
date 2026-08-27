@@ -17,7 +17,10 @@
 ## 2. ĐỔI IP/DOMAIN SERVER (mục 3.5 tài liệu gốc)
 
 1. Dựng server mới chạy **song song**; giảm DNS TTL ≥ 1 ngày trước.
-2. Đẩy config endpoint mới cho agent (Phase 3: signed config push; trước đó: thay config tay qua MSI repair hoặc cập nhật file config trong ProgramData theo kênh nội bộ).
+2. Đẩy config endpoint mới cho agent qua kênh **Signed Config Push**:
+   - Gói cấu hình mới bắt buộc được ký số ECDSA (khóa Server) và tăng trường `version`.
+   - Khi Agent tải về qua `GET /api/agent/config` hoặc nhận qua `POST /api/heartbeat`, Agent đối chiếu chữ ký với Server Public Key nhúng sẵn trước khi ghi đè `config.json`. Chống kẻ gian giả mạo DNS chuyển hướng Agent.
+   - Cơ chế tự phục hồi (Rollback): Nếu endpoint mới không kết nối được sau 5 lần thử liên tiếp, Agent tự động rollback về endpoint cũ và báo cáo sự cố khi kết nối lại được.
 3. Theo dõi tỉ lệ agent đã chuyển trên dashboard.
 4. Khi ≥ 99% agent chuyển → tắt server cũ; giữ DNS cũ redirect thêm thời gian cho máy offline lâu ngày.
 
