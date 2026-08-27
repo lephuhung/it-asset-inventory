@@ -68,6 +68,38 @@ class EnrollResponse(BaseModel):
     inventory_interval_hours: int | None = None
 
 
+# ── Offline enroll (Phase 3 — máy cách ly) ──────────────────────
+# Admin proxy enrollment cho máy không thể gọi trực tiếp server. Agent trên máy
+# cách ly sinh CSR ECDSA P-256 + fingerprint → ghi ra file JSON trên USB. Admin
+# copy file lên máy có mạng → POST /api/offline/enroll → nhận client cert đã ký
+# → copy về máy cách ly cài vào Windows Cert Store. Từ đó agent ký được các file
+# export inventory và gửi qua /api/offline/import.
+
+
+class OfflineEnrollRequest(BaseModel):
+    """Payload do agent trên máy cách ly sinh (CLI --enroll-offline) — file JSON trên USB."""
+
+    token: str = Field(..., min_length=8, max_length=64, description="Enroll token (do admin cấp qua /api/tokens)")
+    hostname: str | None = Field(default=None, max_length=255)
+    fingerprint: FingerprintPayload
+    csr_pem: str = Field(..., description="Client cert CSR (PEM) — ECDSA P-256")
+
+
+class OfflineEnrollResponse(BaseModel):
+    """Response trả về cho admin — copy file JSON trên USB để agent cài cert."""
+
+    machine_id: uuid.UUID
+    client_cert_pem: str = Field(..., description="Client cert đã được CA ký — PEM")
+    ca_cert_pem: str | None = None
+    renew_after: datetime
+    is_new_machine: bool
+    status: MachineStatus
+    agent_server_url: str | None = None
+    heartbeat_interval_seconds: int | None = None
+    heartbeat_jitter_seconds: int | None = None
+    inventory_interval_hours: int | None = None
+
+
 # ── Heartbeat ─────────────────────────────────────────────────────
 
 

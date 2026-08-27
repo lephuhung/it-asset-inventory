@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     portal_url: str = "http://localhost:5173"
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Agent installer artifacts (phục vụ /download/agent.msi + /download/agent.msi.sha256).
+    # Đặt OrgInventoryAgent.msi + OrgInventoryAgent.msi.sha256 vào thư mục này (cùng cấp).
+    # Có thể trỏ tới `agent/publish/win-x64/` sau khi build MSI trên Windows.
+    agent_msi_dir: str = "./agent_dist"
+
     # Ký số: agent mode (chặn nếu không phải mTLS header hợp lệ)
     require_agent_mtls_header: bool = False  # True khi chạy sau nginx ở prod
 
