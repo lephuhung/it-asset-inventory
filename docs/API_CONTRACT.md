@@ -251,6 +251,29 @@ Response 200:
 - Trả `text/plain` PowerShell: kiểm tra Admin → tải MSI → verify SHA256 + chữ ký Authenticode → `msiexec /qn ENROLL_TOKEN=...` → in "✔ Cài đặt thành công".
 - Token hết hạn/đã dùng/revoked → 401/404.
 
+### 3.7. GET /download/* — phục vụ MSI installer (không auth, public)
+
+Phục vụ **2 phương pháp cài đặt agent** (xem `docs/OFFLINE_AGENT_SPEC.md` mục 1):
+
+| Method | Path | Trả về | Dùng cho |
+|---|---|---|---|
+| GET | `/download/agent.msi` | `application/x-msi` — file MSI đã ký Authenticode | Phương pháp A (script `install.ps1`) + Phương pháp B (admin tải tay qua USB) |
+| GET | `/download/agent.msi.sha256` | `text/plain` — chuỗi SHA-256 hex của MSI | Phương pháp B (verify trước khi cài) |
+| GET | `/download/install-offline.ps1` | `text/plain` — wrapper cài cho máy cách ly | Phương pháp B |
+
+**Yêu cầu server**: file `OrgInventoryAgent.msi` + `OrgInventoryAgent.msi.sha256` phải
+được build và copy vào thư mục `AGENT_MSI_DIR` (mặc định `./agent_dist/`,
+config được trong `app/core/config.py`). Endpoint trả **404** với hướng dẫn nếu
+chưa có file.
+
+**Build (chỉ chạy trên Windows)**:
+```powershell
+cd agent
+dotnet publish src/OrgInventoryAgent -c Release -r win-x64
+powershell installer/build-msi.ps1 -CertificateThumbprint "<EV code signing thumbprint>"
+# → copy OrgInventoryAgent.msi + .sha256 vào server:$AGENT_MSI_DIR/
+```
+
 ## 4. Portal API (JWT Bearer, RBAC)
 
 Roles: `super_admin` (toàn quyền), `org_admin` (cây org của mình + cấp dưới), `viewer` (read-only).
@@ -284,13 +307,103 @@ Roles: `super_admin` (toàn quyền), `org_admin` (cây org của mình + cấp 
 | GET | /api/audit/verify | kiểm tra hash chain |
 | GET | /api/ws?token= | WebSocket: `{type:"machine_status", machine_id, status, ts}` + `{type:"stats", ...}` |
 
-## 5. Trạng thái máy & token
+## 5. Máy cách ly (offline USB) — Phase 3
+
+> Máy không thể gọi trực tiếp server. Mọi trao đổi là **file JSON trên USB**, được
+> ký ECDSA bằng private key của agent (private key **không bao giờ rời máy cách ly**).
+> Chi tiết vận hành + đặc tả ký số: `docs/OFFLINE_AGENT_SPEC.md`.
+
+### 5.1. POST /api/offline/enroll (auth: admin)
+
+**Mục đích**: admin proxy CSR cho máy cách ly. Agent trên máy cách ly sinh keypair +
+CSR, ghi file JSON; admin copy file lên máy có mạng và submit.
+
+**Request**:
+```json
+{
+  "token": "t_Ab3xK9mQ2vR8nL4p...",
+  "hostname": "PC-ANPHU-01",
+  "fingerprint": {
+    "smbios_uuid": "4C4C4544-...",
+    "machine_guid": "hash-sha256-hex",
+    "mainboard_serial": "hash-sha256-hex"
+  },
+  "csr_pem": "-----BEGIN CERTIFICATE REQUEST-----\nMIIB...\n-----END CERTIFICATE REQUEST-----\n"
+}
+```
+
+**Response 200**:
+```json
+{
+  "machine_id": "fd0d8278-314e-434b-a884-d858624ca7ca",
+  "client_cert_pem": "-----BEGIN CERTIFICATE-----\n...",
+  "ca_cert_pem": null,
+  "renew_after": "2027-05-08T23:40:04Z",
+  "is_new_machine": true,
+  "status": "pending",
+  "agent_server_url": "http://10.10.0.241:8000",
+  "heartbeat_interval_seconds": 30,
+  "heartbeat_jitter_seconds": 8,
+  "inventory_interval_hours": 24
+}
+```
+
+- **Auth**: `Authorization: Bearer <admin JWT>` (`require_admin()`).
+- **CSR**: ECDSA P-256. CN ban đầu là placeholder (`machine-pending`) — **server ghi đè**
+  CN thành `machine-<machine_id>` (xem `app/services/ca.py::LocalCaService.sign_csr`).
+- **Audit**: `action=offline.enroll`, `actor=admin:<id>`.
+- Token đã dùng → 401. Token không tồn tại → 401. Token hết hạn → 401.
+- Org gắn với token được dùng làm `target_org_id` (giống `/api/enroll`).
+- Fuzzy-match fingerprint trong org đó — máy cũ (ghost Win / thay mainboard) sẽ trả về
+  cùng `machine_id` với `is_new_machine=false`. Drift → ghi `FingerprintDrift` pending.
+
+### 5.2. POST /api/offline/import (auth: admin)
+
+**Mục đích**: nhập file inventory đã ký ECDSA từ máy cách ly.
+
+**Request**:
+```json
+{
+  "payload": {
+    "machine_uuid": "fd0d8278-...",
+    "hostname": "PC-ANPHU-01",
+    "fingerprint": {"smbios_uuid": "..."},
+    "spec": { "os_name": "...", "cpu": {...}, "ram_gb": 16, ... },
+    "exported_at": "2026-08-26T14:00:00Z"
+  },
+  "signature_b64": "MEUCIQCx...",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+}
+```
+
+**Response 200**:
+```json
+{
+  "machine_id": "fd0d8278-...",
+  "hostname": "PC-ANPHU-01",
+  "is_new": false,
+  "verified": true
+}
+```
+
+- **Auth**: `Authorization: Bearer <admin JWT>` (`require_admin()`).
+- **Verify**: server canonicalize `payload` theo
+  `json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`
+  → SHA-256 → verify ECDSA(P-256) bằng `public_key_pem`. Sai → **400** "Chữ ký không hợp lệ".
+- **Org**: nếu `payload.org_id` thuộc `visible_org_ids` của admin → dùng; không thì
+  fallback về `admin.org_id`.
+- **Idempotent**: tìm máy theo `machine_uuid` (weighted fingerprint) hoặc fuzzy-match
+  với `is_same_machine` → update `Machine` + `MachineSpec` + `machine_current` +
+  `machine_software`.
+- **Audit**: `action=offline.import`, `actor=admin:<id>`, `target=machine_id`.
+
+## 6. Trạng thái máy & token
 
 - Máy: `online` | `offline` | `lost` | `decommissioned` | `pending` (chờ duyệt).
 - Token: `pending` | `used` | `revoked` | `expired`. TTL mặc định 72h, `max_uses=1`, entropy ≥ 128 bit, dạng `t_` + base62.
 - Online lưu Redis `machine:online:{id}` TTL = `online_ttl_seconds` (mặc định 2×(interval+jitter) = 76s).
 
-## 6. Nguyên tắc agent (bắt buộc — mục 7 API_CONTRACT cũ, giữ nguyên)
+## 7. Nguyên tắc agent (bắt buộc — mục 7 API_CONTRACT cũ, giữ nguyên)
 
 - **Read-only**: chỉ đọc WMI/Registry; không hook/inject/đọc process khác; không ghi ngoài ProgramData + cert store.
 - **Zero-GUI**: không window/notification. Config `%ProgramData%\OrgInventory\config.json`; log xoay vòng `%ProgramData%\OrgInventory\logs\`.
