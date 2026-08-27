@@ -1,7 +1,23 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Check, Clock, KeyRound, Link2, Plus, RefreshCw, Ticket, Trash2, Upload, XCircle } from "lucide-react";
+import {
+  Check,
+  Clock,
+  Download,
+  HardDriveDownload,
+  KeyRound,
+  Link2,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Terminal,
+  Ticket,
+  Trash2,
+  Upload,
+  XCircle,
+} from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type {
   BulkTokenItem,
@@ -23,6 +39,7 @@ import {
   IconButton,
   Input,
   Modal,
+  Badge,
   PageHeader,
   Select,
   Spinner,
@@ -569,25 +586,81 @@ export default function TokensPage() {
         {created && (
           <div className="space-y-4">
             <div>
-              <p className="mb-1 text-sm font-medium text-slate-700">Câu lệnh cài đặt (1 dòng)</p>
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
-                <code className="block break-all font-mono text-xs leading-relaxed text-emerald-900">
-                  {created.install_command}
-                </code>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Gửi lệnh này cho người dùng — họ mở <b>PowerShell (Run as Administrator)</b> và paste.
-                Server render <code className="rounded bg-slate-100 px-1">install.ps1</code> động kèm token,
-                verify chữ ký, cài MSI và tự enroll.
-              </p>
-            </div>
-            <div>
               <p className="mb-1 text-sm font-medium text-slate-700">Token (dạng base62, dùng 1 lần)</p>
               <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <code className="break-all font-mono text-xs text-slate-700">{created.token}</code>
                 <CopyButton text={created.token} label="Copy" />
               </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Gửi token này cho người cài — KHÔNG gửi qua email/kênh không mã hóa. Token tương đương quyền
+                enroll máy mới vào tổ chức.
+              </p>
             </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="mb-3 text-sm font-medium text-slate-700">Chọn phương pháp cài đặt</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                {/* Phương pháp A: cài bằng lệnh */}
+                <div className="rounded-lg border border-blue-200 bg-white p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Terminal className="size-4 text-blue-600" />
+                    <span className="text-sm font-semibold text-slate-800">Phương pháp A — Cài bằng lệnh</span>
+                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">Online</Badge>
+                  </div>
+                  <p className="mb-2 text-xs text-slate-500">
+                    Dùng cho máy có mạng ra server. Một dòng PowerShell.
+                  </p>
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                    <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
+                      {created.install_command}
+                    </code>
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <CopyButton text={created.install_command} label="Copy lệnh" />
+                  </div>
+                </div>
+
+                {/* Phương pháp B: cài bằng tải file */}
+                <div className="rounded-lg border border-amber-200 bg-white p-3">
+                  <div className="mb-2 flex items-center gap-2">
+                    <HardDriveDownload className="size-4 text-amber-600" />
+                    <span className="text-sm font-semibold text-slate-800">Phương pháp B — Cài bằng tải file</span>
+                    <Badge className="border-amber-200 bg-amber-50 text-amber-700">Offline USB</Badge>
+                  </div>
+                  <p className="mb-2 text-xs text-slate-500">
+                    Dùng cho máy cách ly (air-gapped). Tải file về USB → chạy <code>install-offline.ps1</code>.
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <a
+                      href="/api/downloads/agent.msi"
+                      className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <HardDriveDownload className="size-3" /> MSI
+                    </a>
+                    <a
+                      href="/api/downloads/agent.msi.sha256"
+                      className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <ShieldCheck className="size-3" /> SHA256
+                    </a>
+                    <a
+                      href="/api/downloads/install-offline.ps1"
+                      className="col-span-2 inline-flex items-center justify-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                    >
+                      <Download className="size-3" /> install-offline.ps1 (PowerShell wrapper)
+                    </a>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-slate-400">
+                Phương pháp B dùng cho máy cách ly: copy cả 3 file + token sang USB, chạy <code>install-offline.ps1 -Token &quot;...&quot; -Endpoints &quot;...&quot;</code>.
+                Sau khi cài, hoàn tất enroll qua{" "}
+                <Link href="/offline-enroll" className="font-medium text-blue-600 hover:underline">
+                  Máy cách ly — Ký CSR
+                </Link>.
+              </p>
+            </div>
+
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
               <span className="inline-flex items-center gap-1.5">
                 <Clock className="size-3.5" />

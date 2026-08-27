@@ -122,11 +122,12 @@ export default function DashboardPage() {
               sub="Mất liên lạc > N ngày"
             />
             <KpiCard
-              label="Token chờ cài"
+              label="Token đã phát, chờ máy cài"
               value={stats?.pending_tokens ?? 0}
               icon={<Ticket className="size-4 text-amber-600" />}
               accent="bg-amber-50"
-              sub="Đã phát, chưa enroll"
+              sub="Đã cấp lệnh, máy chưa chạy"
+              hint="Đếm token đã phát cho người dùng (qua form self-service, bulk CSV hoặc admin tạo) nhưng máy chưa chạy lệnh cài agent. KHÁC với 'Máy ch� duyệt' ở trang Approvals — đó là máy đã enroll thành công và cần admin duyệt."
             />
             <KpiCard
               label="Token hết hạn"
@@ -134,6 +135,7 @@ export default function DashboardPage() {
               icon={<XCircle className="size-4 text-zinc-500" />}
               accent="bg-zinc-100"
               sub="Cần gửi lại lệnh"
+              hint="Token đã quá 72h mà máy chưa cài agent — cần phát lại lệnh mới cho người dùng."
             />
           </div>
 
@@ -251,7 +253,7 @@ export default function DashboardPage() {
               <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
                 <Hourglass className="size-5 text-amber-500" />
                 <span>
-                  Có {stats?.pending_tokens} token đã phát nhưng máy chưa cài — đôn đốc người dùng
+                  Có {stats?.pending_tokens} token đã phát nhưng máy chưa cài agent — đôn đốc người dùng
                   chạy lệnh cài đặt để máy xuất hiện online.
                 </span>
                 <Link href="/tokens" className="font-medium text-brand-600 hover:underline">

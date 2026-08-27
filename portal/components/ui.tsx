@@ -96,17 +96,49 @@ export function KpiCard({
   icon,
   accent,
   sub,
+  hint,
 }: {
   label: string;
   value: number | string;
   icon: ReactNode;
   accent: string;
   sub?: string;
+  /** Tooltip giải thích ý nghĩa số liệu (hiển thị khi hover icon ⓘ). */
+  hint?: string;
 }) {
+  const [showHint, setShowHint] = useState(false);
   return (
     <div className="kpi-card flex h-24 flex-col justify-between p-4">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-slate-400">{label}</p>
+        <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-400">
+          {label}
+          {hint && (
+            <span
+              className="relative inline-flex"
+              onMouseEnter={() => setShowHint(true)}
+              onMouseLeave={() => setShowHint(false)}
+              onFocus={() => setShowHint(true)}
+              onBlur={() => setShowHint(false)}
+              tabIndex={0}
+            >
+              <span
+                role="img"
+                aria-label="Thông tin"
+                className="inline-flex size-3.5 cursor-help items-center justify-center rounded-full text-[10px] font-bold text-slate-400 ring-1 ring-inset ring-slate-300 hover:bg-slate-100"
+              >
+                i
+              </span>
+              {showHint && (
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute left-0 top-full z-10 mt-1 w-56 rounded-lg bg-slate-900 px-2.5 py-1.5 text-left text-[11px] font-normal normal-case tracking-normal text-white shadow-lg"
+                >
+                  {hint}
+                </span>
+              )}
+            </span>
+          )}
+        </p>
         <span className={`flex size-7 items-center justify-center rounded-lg ${accent}`}>{icon}</span>
       </div>
       <div>

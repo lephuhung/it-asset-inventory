@@ -92,49 +92,49 @@ export default function EnrollPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-10">
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10">
       <div className="w-full max-w-xl">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-blue-600 shadow-lg shadow-blue-600/30">
+          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl bg-brand-600 shadow-lg shadow-brand-600/25">
             <LogoMark size={28} className="text-white" />
           </div>
-          <h1 className="text-xl font-bold text-white">Đăng ký máy tính</h1>
-          <p className="mt-1 text-sm text-slate-400">
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">Đăng ký máy tính</h1>
+          <p className="mt-1 text-sm text-slate-500">
             {loading ? "Đang kiểm tra link…" : info ? `Đơn vị: ${info.org_name}` : "Link tự khai báo"}
           </p>
         </div>
 
         {loading ? (
-          <Card className="border-slate-800 bg-slate-900">
+          <Card>
             <Spinner label="Đang kiểm tra link…" />
           </Card>
         ) : error ? (
-          <Card className="border-slate-800 bg-slate-900">
-            <p className="text-sm text-rose-400">{error}</p>
-            <p className="mt-2 text-xs text-slate-400">
+          <Card>
+            <p className="text-sm text-rose-600">{error}</p>
+            <p className="mt-2 text-xs text-slate-500">
               Liên hệ quản trị viên tổ chức để nhận link đăng ký hợp lệ.
             </p>
           </Card>
         ) : result ? (
-          <Card className="border-slate-800 bg-slate-900">
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-              <Check className="mt-0.5 size-5 shrink-0 text-emerald-400" />
-              <div className="text-sm text-emerald-200">
+          <Card>
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <Check className="mt-0.5 size-5 shrink-0 text-emerald-600" />
+              <div className="text-sm text-emerald-800">
                 <p className="font-semibold">Đăng ký thành công!</p>
                 <p className="mt-0.5 text-xs">
                   Chạy lệnh dưới đây trong <b>PowerShell (Run as Administrator)</b> để cài agent:
                 </p>
               </div>
             </div>
-            <div className="rounded-xl border border-slate-700 bg-slate-950 p-3">
-              <code className="block break-all font-mono text-xs leading-relaxed text-emerald-300">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <code className="block break-all font-mono text-xs leading-relaxed text-slate-800">
                 {result.install_command}
               </code>
             </div>
             <div className="mt-3 flex justify-end">
               <CopyButton text={result.install_command} label="Copy lệnh cài đặt" />
             </div>
-            <div className="mt-4 rounded-lg bg-slate-800/60 px-3 py-2.5 text-xs leading-relaxed text-slate-400">
+            <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
               <p className="flex items-center gap-1.5">
                 <KeyRound className="size-3.5 shrink-0" />
                 Lệnh có hiệu lực 72 giờ, dùng 1 lần. Agent sau khi cài sẽ tự đăng ký (enroll) và
@@ -148,8 +148,8 @@ export default function EnrollPage() {
             </div>
           </Card>
         ) : (
-          <Card className="border-slate-800 bg-slate-900">
-            <p className="mb-4 text-sm text-slate-300">
+          <Card>
+            <p className="mb-4 text-sm text-slate-600">
               Nhập thông tin người dùng máy — sau khi đăng ký bạn nhận được lệnh cài đặt 1 dòng.
             </p>
             <form onSubmit={claim} className="space-y-3">
@@ -173,7 +173,7 @@ export default function EnrollPage() {
               <Field label="Ghi chú">
                 <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Vị trí đặt máy…" />
               </Field>
-              {formError && <p className="text-sm text-rose-400">{formError}</p>}
+              {formError && <p className="text-sm text-rose-600">{formError}</p>}
               <Button type="submit" className="w-full" loading={submitting} disabled={!fullName}>
                 Nhận lệnh cài đặt
               </Button>
@@ -181,7 +181,7 @@ export default function EnrollPage() {
           </Card>
         )}
 
-        <p className="mt-6 text-center text-xs text-slate-500">
+        <p className="mt-6 text-center text-xs text-slate-400">
           Hệ thống quản lý tài sản máy tính — đăng ký này chỉ phục vụ quản lý tài sản của đơn vị.
         </p>
       </div>

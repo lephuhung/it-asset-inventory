@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, FileUp, HardDriveDownload } from "lucide-react";
+import { CheckCircle2, FileUp, HardDriveDownload, Info } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { OfflineImportResponse } from "@/lib/types";
 import { Button, Card, ErrorBanner, Field, PageHeader, Textarea } from "@/components/ui";
@@ -62,6 +62,18 @@ export default function OfflineImportPage() {
         title="Import máy cách ly (Offline USB)"
         description="Mạng nội bộ không ra internet → agent ghi inventory ra file ký số, cán bộ copy USB import vào đây (#12)"
       />
+
+      <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+        <Info className="mt-0.5 size-4 shrink-0" />
+        <div>
+          <strong>Lưu ý:</strong> trước khi import inventory, máy cách ly phải được <b>enroll</b> (ký
+          CSR) trước — xem{" "}
+          <Link href="/offline-enroll" className="font-semibold underline">
+            Máy cách ly — Ký CSR (Bước 1)
+          </Link>
+          . Trang này dùng cho <b>bước 3</b> trong quy trình (nhập các đợt inventory định kỳ).
+        </div>
+      </div>
 
       {error && <ErrorBanner message={error} />}
       {result && (

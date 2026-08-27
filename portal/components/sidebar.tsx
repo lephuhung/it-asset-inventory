@@ -87,7 +87,18 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
       { href: "/eol", label: "Windows EOL", icon: CalendarClock },
       { href: "/diff", label: "So sánh máy (Diff)", icon: GitCompareArrows },
-      { href: "/offline-import", label: "Máy cách ly", icon: HardDriveDownload, roles: ADMIN_ROLES },
+      {
+        href: "/offline-enroll",
+        label: "Máy cách ly — Ký CSR",
+        icon: KeyRound,
+        roles: ADMIN_ROLES,
+      },
+      {
+        href: "/offline-import",
+        label: "Máy cách ly — Import",
+        icon: HardDriveDownload,
+        roles: ADMIN_ROLES,
+      },
     ],
   },
   {

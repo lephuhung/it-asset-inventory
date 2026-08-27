@@ -61,7 +61,16 @@ export default function ApprovalsPage() {
     <div>
       <PageHeader
         title="Máy chờ duyệt"
-        description="Máy mới enroll có trạng thái 'Chờ duyệt' — duyệt để tính chính thức (kèm audit log)"
+        description={
+          <>
+            Máy mới enroll có trạng thái <b>'Chờ duyệt'</b> — duyệt để tính chính thức (kèm audit log).
+            <br />
+            <span className="text-xs text-slate-500">
+              Đây là máy đã agent enroll thành công (qua API enroll hoặc offline enroll), <b>không phải</b> token đã phát cho người dùng.
+              Xem token đã phát ở Dashboard → <i>Token đã phát, chờ máy cài</i>.
+            </span>
+          </>
+        }
       />
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}

@@ -267,6 +267,34 @@ export interface OfflineImportResponse {
   verified: boolean;
 }
 
+/** Máy cách ly — admin proxy CSR ký ECDSA cho máy không gọi được server.
+ *  Khớp với `OfflineEnrollRequest` / `OfflineEnrollResponse` backend. */
+export interface OfflineEnrollFingerprint {
+  smbios_uuid?: string;
+  machine_guid?: string;
+  mainboard_serial?: string;
+}
+
+export interface OfflineEnrollRequest {
+  token: string;
+  hostname?: string;
+  fingerprint: OfflineEnrollFingerprint;
+  csr_pem: string;
+}
+
+export interface OfflineEnrollResponse {
+  machine_id: string;
+  client_cert_pem: string;
+  ca_cert_pem?: string | null;
+  renew_after: string;
+  is_new_machine: boolean;
+  status: MachineStatus;
+  agent_server_url?: string | null;
+  heartbeat_interval_seconds?: number | null;
+  heartbeat_jitter_seconds?: number | null;
+  inventory_interval_hours?: number | null;
+}
+
 /** Sự kiện realtime từ WebSocket (machine:events). */
 export interface MachineEvent {
   type: "machine_event";
