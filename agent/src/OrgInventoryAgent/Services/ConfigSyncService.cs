@@ -16,14 +16,16 @@ public sealed class ConfigSyncService : BackgroundService
     private readonly AgentConfig _config;
     private readonly ApiClient _api;
     private readonly EnrollCoordinator _enroll;
+    private readonly AgentState _state;
     private readonly ILogger<ConfigSyncService> _logger;
 
     public ConfigSyncService(AgentConfig config, ApiClient api, EnrollCoordinator enroll,
-        ILogger<ConfigSyncService> logger)
+        AgentState state, ILogger<ConfigSyncService> logger)
     {
         _config = config;
         _api = api;
         _enroll = enroll;
+        _state = state;
         _logger = logger;
     }
 
@@ -133,9 +135,8 @@ public sealed class ConfigSyncService : BackgroundService
             var serverHash = body["agent_config_hash"]?.GetValue<string>();
             if (!string.IsNullOrWhiteSpace(serverHash))
             {
-                var state = AgentState.Load();
-                state.LastAgentConfigHash = serverHash;
-                state.Save();
+                _state.LastAgentConfigHash = serverHash;
+                _state.Save();
                 _logger.LogInformation("Đã cập nhật LastAgentConfigHash={Hash}", serverHash);
             }
             return true;

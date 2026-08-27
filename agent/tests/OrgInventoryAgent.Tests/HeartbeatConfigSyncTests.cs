@@ -3,6 +3,8 @@ using OrgInventoryAgent;
 using OrgInventoryAgent.Services;
 using Xunit;
 
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace OrgInventoryAgent.Tests;
 
 /// <summary>
@@ -94,5 +96,26 @@ public class AgentStateConfigHashTests : IDisposable
         Assert.Null(loaded.LastInventoryAt);
         Assert.Null(loaded.LastInventoryConfigHash);
         Assert.Null(loaded.LastAgentConfigHash);
+    }
+}
+
+/// <summary>
+/// Test tính nhất quán của CanonicalJson.Hash với Unicode tiếng Việt và ký tự đặc biệt.
+/// </summary>
+public class CanonicalJsonHashConsistencyTests
+{
+    [Fact]
+    public void CanonicalJson_Hash_HandlesUnicodeAndSymbols_MatchesPythonStandard()
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["name"] = "Nguyễn Văn A",
+            ["tool"] = "C++"
+        };
+        var hash = CanonicalJson.Hash(payload);
+        // Khớp chính xác với Python:
+        // json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        // -> {"name":"Nguyễn Văn A","tool":"C++"} -> SHA-256
+        Assert.Equal("d9ebfe161361a4a8c49d31ee0642ed7f5baca46cd622560a671465eeeee15e6e", hash);
     }
 }

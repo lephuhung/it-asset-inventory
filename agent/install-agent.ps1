@@ -32,11 +32,14 @@ if (-not $Token -and -not $TestOnce) {
 if ($Token) { $Token = $Token.Trim() }
 
 Write-Host ""
-Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "       IT ASSET INVENTORY - CAI DAT AGENT WINDOWS         " -ForegroundColor Cyan
-Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "==========================================================================" -ForegroundColor Cyan
+Write-Host "         HỆ THỐNG QUẢN LÝ TÀI SẢN CNTT & AN TOÀN THÔNG TIN                " -ForegroundColor Cyan
+Write-Host "   Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao       " -ForegroundColor Yellow
+Write-Host "                          Công an tỉnh Hà Tĩnh                            " -ForegroundColor Yellow
+Write-Host "==========================================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  May chu dich : " -NoNewline; Write-Host "$Endpoint" -ForegroundColor Yellow
+Write-Host "  Mục đích     : Kiểm kê tài sản CNTT & Đánh giá An toàn Thông tin (Read-only)" -ForegroundColor Gray
+Write-Host "  Máy chủ đích : " -NoNewline; Write-Host "$Endpoint" -ForegroundColor Yellow
 Write-Host "  Enroll Token : " -NoNewline; Write-Host "$($Token.Substring(0, [Math]::Min(8, $Token.Length)))..." -ForegroundColor Yellow
 Write-Host ""
 

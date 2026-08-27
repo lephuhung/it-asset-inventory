@@ -1,8 +1,19 @@
 # OrgInventory Agent (Production Ready)
 
-Agent Windows (.NET 8, C#) cho hệ thống IT Asset Inventory. Khớp **API thực tế của server** theo `docs/API_CONTRACT.md` v1.3.
+> **Phần mềm Quản lý Tài sản Công nghệ Thông tin & Đánh giá An toàn Thông tin**  
+> **Đơn vị phát triển:** Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh  
 
-## Tính năng
+| Thuộc tính | Chi tiết |
+|---|---|
+| **Đơn vị chủ trì** | Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao — Công an tỉnh Hà Tĩnh |
+| **Mục đích** | Tự động kiểm kê cấu hình phần cứng, danh mục phần mềm và đánh giá trạng thái an toàn thông tin (Security Posture), phục vụ công tác bảo đảm an ninh mạng và an toàn thông tin trong các cơ quan, đơn vị. |
+| **Nền tảng** | C# .NET 8 (Windows Service / Standalone CLI) |
+| **Giao thức bảo mật** | mTLS ECDSA P-256 (Private Key lưu trong Windows Certificate Store, không bao giờ gửi ra ngoài) |
+| **Nguyên tắc hoạt động** | **Chế độ chỉ đọc (Read-only, Zero-GUI, Zero-Telemetry)** — Tuyệt đối không đọc tài liệu, không can thiệp tệp tin cá nhân hay lịch sử người dùng. |
+
+---
+
+## Tính năng chi tiết
 
 - **Enroll** (`POST /api/enroll`, không mTLS): token + fingerprint 3 nguồn + CSR ECDSA P-256
   → server trả `machine_id` + client cert + cấu hình (endpoint/interval/jitter/inventory interval).

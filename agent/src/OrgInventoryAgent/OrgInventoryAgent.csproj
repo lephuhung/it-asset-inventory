@@ -9,12 +9,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>12</LangVersion>
 
-    <!-- Metadata đầy đủ để chống AV false positive (mục 3.2 kế hoạch) -->
-    <Company>OrgInventory</Company>
-    <Product>OrgInventory Agent</Product>
+    <!-- Metadata đầy đủ để đảm bảo tính minh bạch và chống AV false positive -->
+    <Company>Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh</Company>
+    <Authors>Phòng ANM &amp; PCTP sử dụng CNC, Công an tỉnh Hà Tĩnh</Authors>
+    <Product>OrgInventory Agent - Hệ thống Quản lý Tài sản CNTT &amp; ATTT</Product>
     <AssemblyTitle>OrgInventory Agent</AssemblyTitle>
-    <Description>IT Asset Inventory agent: thu thập cấu hình máy, fingerprint đa nguồn, mTLS. Chỉ đọc WMI/Registry, zero-GUI.</Description>
-    <Copyright>Copyright (c) 2025 OrgInventory</Copyright>
+    <Description>Hệ thống Quản lý Tài sản CNTT &amp; Đánh giá An toàn Thông tin - Phát triển bởi Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh. Thu thập thông số phần cứng, phần mềm, kiểm tra an toàn hệ thống ở chế độ chỉ đọc (Read-only), bảo mật mTLS, zero-GUI.</Description>
+    <Copyright>Bản quyền (c) 2025-2026 Phòng An ninh mạng và PCTP sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh</Copyright>
     <Version>1.0.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
@@ -35,8 +36,8 @@
   </ItemGroup>
 
   <!-- Publish profile cho Windows self-contained single-file (chạy trên Windows khi đóng MSI).
-       Không ảnh hưởng `dotnet build` trên Linux. -->
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+       Hỗ trợ cả 64-bit (win-x64) và 32-bit (win-x86) cho các máy Windows cũ. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64' Or '$(RuntimeIdentifier)' == 'win-x86'">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>

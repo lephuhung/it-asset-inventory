@@ -174,6 +174,7 @@ public sealed class ApiClient : IDisposable
         {
             req.Headers.TryAddWithoutValidation("X-SSL-Client-CN", $"machine-{_config.MachineId}");
             req.Headers.TryAddWithoutValidation("X-SSL-Client-Verify", "SUCCESS");
+            req.Headers.TryAddWithoutValidation("X-Machine-Id", _config.MachineId);
         }
 
         if (json is not null)
@@ -273,11 +274,4 @@ public sealed class ApiClient : IDisposable
         _attachedCert?.Dispose();
         _clientLock.Dispose();
     }
-}
-
-/// <summary>Thông tin phiên bản agent.</summary>
-public static class AppInfo
-{
-    public static readonly string Version =
-        typeof(AppInfo).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
 }

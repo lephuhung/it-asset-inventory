@@ -200,8 +200,7 @@ public sealed class AgentConfig
             ["inventory_interval_hours"] = InventoryIntervalHours,
             ["renew_before_percent"] = RenewBeforePercent,
         };
-        var canonical = CanonicalJson.Sort(node)?.ToJsonString() ?? "{}";
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        return CanonicalJson.Hash(node);
     }
 }
 
@@ -244,8 +243,14 @@ public static class CanonicalJson
             System.Text.Json.JsonSerializer.Serialize(payload, Json.Options));
         if (excludeProperty != null && node is System.Text.Json.Nodes.JsonObject obj)
             obj.Remove(excludeProperty);
-        var canonical = Sort(node)?.ToJsonString() ?? "null";
-        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        var sorted = Sort(node);
+        var opt = new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = false,
+        };
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(sorted, opt));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
     /// <summary>Trả về bytes UTF-8 của canonical JSON (khớp python json.dumps sort_keys=True separators=(',', ':') ensure_ascii=False).</summary>

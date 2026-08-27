@@ -27,7 +27,7 @@ public sealed class InventoryService : BackgroundService
 
     public InventoryService(AgentConfig config, ApiClient api, EndpointManager endpoints,
         EnrollCoordinator enroll, OfflineCache cache, InventoryCollector collector,
-        ILogger<InventoryService> logger)
+        AgentState state, ILogger<InventoryService> logger)
     {
         _config = config;
         _api = api;
@@ -35,8 +35,8 @@ public sealed class InventoryService : BackgroundService
         _enroll = enroll;
         _cache = cache;
         _collector = collector;
+        _state = state;
         _logger = logger;
-        _state = AgentState.Load();
     }
 
     public void TriggerRescan() => _rescanRequested = true;
@@ -121,6 +121,7 @@ public sealed class InventoryService : BackgroundService
         }
         try
         {
+            var configHash = _config.ComputeConfigHash();
             var snapshot = _collector.Collect();
             // config_hash: canonical hash của payload (trừ chính nó) — server dùng để dedupe
             snapshot.ConfigHash = CanonicalJson.Hash(snapshot, excludeProperty: "config_hash");
@@ -132,7 +133,7 @@ public sealed class InventoryService : BackgroundService
                 if (resp.Ok)
                 {
                     _state.LastInventoryAt = DateTimeOffset.UtcNow.ToString("o");
-                    _state.LastInventoryConfigHash = snapshot.ConfigHash;
+                    _state.LastInventoryConfigHash = configHash;
                     _state.Save();
                     _logger.LogInformation("Đã gửi inventory (config_changed={C}).",
                         resp.Body?["config_changed"]?.GetValue<bool>());

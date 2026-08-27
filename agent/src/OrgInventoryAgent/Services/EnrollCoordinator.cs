@@ -21,6 +21,7 @@ public sealed class EnrollCoordinator
     private readonly KeyStore _keyStore;
     private readonly FingerprintCollector _fingerprint;
     private readonly InventoryCollector _inventory;
+    private readonly AgentState _state;
     private readonly ILogger<EnrollCoordinator> _logger;
 
     private readonly object _lock = new();
@@ -29,7 +30,7 @@ public sealed class EnrollCoordinator
 
     public EnrollCoordinator(AgentConfig config, ApiClient api, EnrollClient enrollClient,
         EndpointManager endpoints, KeyStore keyStore, FingerprintCollector fingerprint,
-        InventoryCollector inventory, ILogger<EnrollCoordinator> logger)
+        InventoryCollector inventory, AgentState state, ILogger<EnrollCoordinator> logger)
     {
         _config = config;
         _api = api;
@@ -38,6 +39,7 @@ public sealed class EnrollCoordinator
         _keyStore = keyStore;
         _fingerprint = fingerprint;
         _inventory = inventory;
+        _state = state;
         _logger = logger;
     }
 
@@ -162,6 +164,13 @@ public sealed class EnrollCoordinator
                     _logger.LogInformation("Đã tải cấu hình agent hoàn chỉnh từ /api/agent/config: server={Server}, interval={I}s, jitter={J}s, inv={H}h, renew={R}%",
                         _config.PrimaryEndpoint, _config.HeartbeatIntervalSeconds, _config.HeartbeatJitterSeconds,
                         _config.InventoryIntervalHours, _config.RenewBeforePercent);
+                }
+
+                var serverHash = cfgResp.Body["agent_config_hash"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(serverHash))
+                {
+                    _state.LastAgentConfigHash = serverHash;
+                    _state.Save();
                 }
             }
         }

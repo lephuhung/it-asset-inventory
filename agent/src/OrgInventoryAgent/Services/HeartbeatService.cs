@@ -38,7 +38,7 @@ public sealed class HeartbeatService : BackgroundService
     public HeartbeatService(AgentConfig config, ApiClient api, EndpointManager endpoints,
         EnrollCoordinator enroll, OfflineCache cache, InventoryCollector inventory,
         InventoryService inventoryService, KeyStore keyStore, ConfigSyncService configSync,
-        ILogger<HeartbeatService> logger)
+        AgentState state, ILogger<HeartbeatService> logger)
     {
         _config = config;
         _api = api;
@@ -49,8 +49,8 @@ public sealed class HeartbeatService : BackgroundService
         _inventoryService = inventoryService;
         _keyStore = keyStore;
         _configSync = configSync;
+        _state = state;
         _logger = logger;
-        _state = AgentState.Load();
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -185,6 +185,7 @@ public sealed class HeartbeatService : BackgroundService
                 var refreshed = await _configSync.SyncAndSaveHashAsync(ct);
                 if (refreshed)
                 {
+                    _state.LastAgentConfigHash = serverCfgHash;
                     _logger.LogInformation("Đã refresh cấu hình từ server và cập nhật LastAgentConfigHash={Hash}", serverCfgHash);
                 }
             }

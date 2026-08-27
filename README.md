@@ -1,5 +1,8 @@
 # IT Asset Inventory — Hệ thống quản lý tài sản máy tính (Agent – Server)
 
+> **Đơn vị phát triển:** Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh  
+> **Mục đích:** Quản lý tài sản CNTT, kiểm kê cấu hình phần cứng, danh mục phần mềm và đánh giá an toàn thông tin (Security Posture) phục vụ công tác bảo đảm an ninh mạng và an toàn thông tin trong các cơ quan, đơn vị.  
+
 Mô hình Agent – Server, dữ liệu sống realtime, định danh đa nguồn, bảo mật mTLS, agent Windows read-only zero-GUI.
 Căn cứ thiết kế: [`KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md`](KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md) v1.2 · [`PLAN_THUC_HIEN.md`](PLAN_THUC_HIEN.md) v1.3 · hợp đồng API: [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) · vận hành: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 

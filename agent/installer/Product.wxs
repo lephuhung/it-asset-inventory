@@ -19,14 +19,14 @@
   <?define UpgradeCode = "A3E2F1B0-9C8D-4E5F-8A7B-6C5D4E3F2A1B" ?>
 
   <Package Name="OrgInventory Agent"
-           Manufacturer="OrgInventory"
+           Manufacturer="Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh"
            Version="1.0.0"
            UpgradeCode="$(var.UpgradeCode)"
            Language="1033"
            Scope="perMachine"
            Compressed="yes">
 
-    <SummaryInformation Description="IT Asset Inventory agent (Phase 1): thu thập cấu hình máy, fingerprint đa nguồn, mTLS." />
+    <SummaryInformation Description="Hệ thống Quản lý Tài sản CNTT &amp; Đánh giá An toàn Thông tin - Phát triển bởi Phòng ANM &amp; PCTP sử dụng CNC, Công an tỉnh Hà Tĩnh. Chế độ chỉ đọc (Read-only), bảo mật mTLS." />
 
     <!-- Upgrade sạch bản cũ -->
     <MajorUpgrade DowngradeErrorMessage="Phiên bản mới hơn của OrgInventory Agent đã được cài đặt." />
@@ -58,8 +58,8 @@
         <!-- Đăng ký Windows Service qua SCM chuẩn (LocalSystem → đọc được WMI + cert store LocalMachine) -->
         <ServiceInstall Id="ServiceInstall"
                         Name="OrgInventoryAgent"
-                        DisplayName="OrgInventory Agent"
-                        Description="IT Asset Inventory agent: thu thập cấu hình máy, fingerprint đa nguồn, mTLS. Read-only WMI/Registry, zero-GUI."
+                        DisplayName="OrgInventory Agent - Công an tỉnh Hà Tĩnh"
+                        Description="Dịch vụ kiểm kê tài sản CNTT và giám sát trạng thái an toàn thông tin máy tính. Phát triển bởi Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh. Chế độ chỉ đọc (Read-only), bảo mật mTLS."
                         Type="ownProcess"
                         Start="auto"
                         ErrorControl="normal"

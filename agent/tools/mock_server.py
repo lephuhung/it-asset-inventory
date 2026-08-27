@@ -86,6 +86,7 @@ HEARTBEAT_RESPONSE = {
     "server_url": f"http://{HOST}:{PORT_PLACEHOLDER}",
     "agent_server_url": f"http://{HOST}:{PORT_PLACEHOLDER}",
     "inventory_interval_hours": 24,
+    "agent_config_hash": "mock_cfg_hash_v1",
 }
 
 INVENTORY_RESPONSE = {"ok": True, "config_changed": False}
@@ -102,6 +103,7 @@ AGENT_CONFIG_RESPONSE = {
     "online_ttl_seconds": 76,
     "inventory_interval_hours": 24,
     "renew_before_percent": 70,
+    "agent_config_hash": "mock_cfg_hash_v1",
     "server_time": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
 }
 
@@ -221,6 +223,7 @@ def make_handler(models, log_file, server_url):
                 except Exception as e:  # noqa: BLE001
                     entry["schema"] = f"INVALID: {e}"
 
+            resp = responses.get(path)
             status_code = 200 if resp is not None else 404
             schema_status = entry.get("schema", "N/A")
             print(f"[mock] {datetime.now(UTC).strftime('%H:%M:%S')} {self.command} {path} -> {status_code} [{schema_status}]")

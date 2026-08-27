@@ -20,6 +20,8 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+
         var cli = CliArgs.Parse(args);
         if (cli.ShowHelp)
         {
@@ -36,7 +38,15 @@ internal static class Program
 
         if (cli.PrintVersion)
         {
-            Console.WriteLine($"OrgInventoryAgent {AppInfo.Version}");
+            Console.WriteLine($"{AppInfo.Name} v{AppInfo.Version}");
+            Console.WriteLine($"Đơn vị phát triển: {AppInfo.Developer}");
+            Console.WriteLine($"Mục đích: {AppInfo.Purpose}");
+            return 0;
+        }
+
+        if (cli.PrintAbout)
+        {
+            PrintAbout();
             return 0;
         }
 
@@ -142,6 +152,14 @@ internal static class Program
 
         using var host = builder.Build();
 
+        var startupLogger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
+        startupLogger.LogInformation("================================================================================");
+        startupLogger.LogInformation("{Name} v{Version} — {FullTitle}", AppInfo.Name, AppInfo.Version, AppInfo.FullTitle);
+        startupLogger.LogInformation("Đơn vị phát triển: {Dev}", AppInfo.Developer);
+        startupLogger.LogInformation("Mục đích: {Purpose}", AppInfo.Purpose);
+        startupLogger.LogInformation("Cam kết: Chế độ chỉ đọc (Read-only), không thu thập dữ liệu cá nhân, mTLS bảo mật.");
+        startupLogger.LogInformation("================================================================================");
+
         // Enroll sớm ngay khi khởi động (fire-and-forget; HeartbeatService retry nếu lỗi)
         var coordinator = host.Services.GetRequiredService<EnrollCoordinator>();
         _ = Task.Run(() => coordinator.EnsureEnrolledAsync(CancellationToken.None));
@@ -162,6 +180,7 @@ internal static class Program
         var logger = loggerFactory.CreateLogger("once");
 
         // Dựng DI thủ công (không chạy BackgroundService)
+        var state = AgentState.Load();
         var keyStore = new KeyStore(loggerFactory.CreateLogger<KeyStore>());
         var endpoints = new EndpointManager(config, loggerFactory.CreateLogger<EndpointManager>());
         var cache = new OfflineCache(loggerFactory.CreateLogger<OfflineCache>());
@@ -170,7 +189,7 @@ internal static class Program
         var api = new ApiClient(config, endpoints, keyStore, loggerFactory.CreateLogger<ApiClient>());
         var enrollClient = new EnrollClient(api, loggerFactory.CreateLogger<EnrollClient>());
         var coordinator = new EnrollCoordinator(config, api, enrollClient, endpoints, keyStore,
-            fingerprint, inventoryCollector, loggerFactory.CreateLogger<EnrollCoordinator>());
+            fingerprint, inventoryCollector, state, loggerFactory.CreateLogger<EnrollCoordinator>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
@@ -182,14 +201,14 @@ internal static class Program
                 return 1;
             }
 
-            var configSync = new ConfigSyncService(config, api, coordinator, loggerFactory.CreateLogger<ConfigSyncService>());
+            var configSync = new ConfigSyncService(config, api, coordinator, state, loggerFactory.CreateLogger<ConfigSyncService>());
             var cfgOk = await configSync.SyncAsync(cts.Token);
             logger.LogInformation("--once config sync: {Ok}", cfgOk ? "OK" : "FAIL");
 
             var inv = new InventoryService(config, api, endpoints, coordinator, cache, inventoryCollector,
-                loggerFactory.CreateLogger<InventoryService>());
+                state, loggerFactory.CreateLogger<InventoryService>());
             var hb = new HeartbeatService(config, api, endpoints, coordinator, cache, inventoryCollector, inv, keyStore,
-                configSync, loggerFactory.CreateLogger<HeartbeatService>());
+                configSync, state, loggerFactory.CreateLogger<HeartbeatService>());
 
             var hbOk = await hb.SendOnceAsync(cts.Token);
             logger.LogInformation("--once heartbeat: {Ok}", hbOk ? "OK" : "FAIL");
@@ -213,6 +232,7 @@ internal static class Program
     private static void RegisterServices(HostApplicationBuilder builder, AgentConfig config, bool hosted)
     {
         builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton(AgentState.Load());
         builder.Services.AddSingleton<KeyStore>();
         builder.Services.AddSingleton<EndpointManager>();
         builder.Services.AddSingleton<OfflineCache>();
@@ -237,13 +257,23 @@ internal static class Program
 
     private static void PrintHelp()
     {
-        Console.WriteLine("""
-            OrgInventoryAgent — IT Asset Inventory agent (Phase 1)
+        Console.WriteLine($"""
+            ================================================================================
+              {AppInfo.Name} v{AppInfo.Version}
+              {AppInfo.FullTitle}
+              Đơn vị phát triển: {AppInfo.Developer}
+            ================================================================================
 
-            Usage:
-              OrgInventoryAgent [options]
+            Mục đích:
+              {AppInfo.Purpose}
 
-            Options:
+            Cam kết an toàn & Minh bạch thông tin:
+              {AppInfo.TransparencyAndSafetyCommitment.Replace("\n", "\n  ")}
+
+            Sử dụng:
+              OrgInventoryAgent [tùy chọn]
+
+            Tùy chọn:
               --data-dir <path>       Thư mục dữ liệu (config/cache/log). Mặc định:
                                       Windows: %ProgramData%\OrgInventory
                                       Linux:   ~/.local/share/OrgInventory
@@ -257,13 +287,46 @@ internal static class Program
               --export-bundle <path>  Thu thập, ký số ECDSA và mã hóa lai ra gói ZIP offline rồi thoát.
               --server-key <path>     Đường dẫn file server_public_key.pem (dùng khi export-bundle).
               --org-id <guid>         Mã tổ chức gán cho máy cách ly khi export-bundle.
-              --version               In phiên bản.
+              --about / --info        In thông tin chi tiết về đơn vị phát triển, mục đích và tính năng.
+              --version / -v          In phiên bản và đơn vị phát triển.
               --once                  Chạy 1 lần: enroll → heartbeat → inventory rồi thoát (test/CI).
-              --help                  Hướng dẫn này.
+              --help / -h             Hướng dẫn này.
 
-            Config: %ProgramData%\OrgInventory\config.json (Windows)
-            Log:    %ProgramData%\OrgInventory\logs\agent.log
-            Cache:  %ProgramData%\OrgInventory\cache.db (SQLite — offline cache)
+            Đường dẫn hệ thống:
+              Config: %ProgramData%\OrgInventory\config.json (Windows)
+              Log:    %ProgramData%\OrgInventory\logs\agent.log
+              Cache:  %ProgramData%\OrgInventory\cache.db (SQLite — offline cache)
+            """);
+    }
+
+    private static void PrintAbout()
+    {
+        Console.WriteLine($"""
+            ================================================================================
+              {AppInfo.Name} — Phiên bản {AppInfo.Version}
+              {AppInfo.FullTitle}
+            ================================================================================
+
+            1. ĐƠN VỊ PHÁT TRIỂN:
+               {AppInfo.Developer}
+               ({AppInfo.DeveloperShort})
+
+            2. MỤC ĐÍCH SỬ DỤNG:
+               {AppInfo.Purpose}
+
+            3. CÁC TÍNH NĂNG CHÍNH:
+            """);
+
+        for (int i = 0; i < AppInfo.Features.Length; i++)
+        {
+            Console.WriteLine($"   {i + 1}. {AppInfo.Features[i]}");
+        }
+
+        Console.WriteLine($"""
+
+            4. NGUYÊN TẮC AN TOÀN & MINH BẠCH:
+            {AppInfo.TransparencyAndSafetyCommitment}
+            ================================================================================
             """);
     }
 }
@@ -282,6 +345,7 @@ internal sealed class CliArgs
     public string? ExportBundlePath { get; private set; }
     public string? ServerKeyPath { get; private set; }
     public string? OrgId { get; private set; }
+    public bool PrintAbout { get; private set; }
     public bool PrintVersion { get; private set; }
     public bool Once { get; private set; }
     public bool ShowHelp { get; private set; }
@@ -310,7 +374,14 @@ internal sealed class CliArgs
                 case "--export-bundle": cli.ExportBundlePath = Next(); break;
                 case "--server-key": cli.ServerKeyPath = Next(); break;
                 case "--org-id": cli.OrgId = Next(); break;
-                case "--version": cli.PrintVersion = true; break;
+                case "--about":
+                case "--info":
+                    cli.PrintAbout = true;
+                    break;
+                case "--version":
+                case "-v":
+                    cli.PrintVersion = true;
+                    break;
                 case "--once": cli.Once = true; break;
                 case "--help":
                 case "-h":
