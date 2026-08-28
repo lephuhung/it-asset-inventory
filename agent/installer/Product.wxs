@@ -43,7 +43,7 @@
     <Property Id="ENDPOINTS" Secure="yes" />
     <Property Id="HTTP_PROXY" Secure="yes" />
 
-    <SetProperty Id="ENROLL_TOKEN" Value="[TOKEN]" Before="CostInitialize" Sequence="first">TOKEN AND NOT ENROLL_TOKEN</SetProperty>
+    <SetProperty Id="ENROLL_TOKEN" Value="[TOKEN]" Before="CostInitialize" Sequence="first" Condition="TOKEN AND NOT ENROLL_TOKEN" />
 
     <!-- Thư mục cài: Program Files (x64) -->
     <StandardDirectory Id="ProgramFiles64Folder">

@@ -1,12 +1,12 @@
-﻿<#
+<#
 .SYNOPSIS
-  Build MSI cho OrgInventory Agent (WiX Toolset v4+). CHỈ CHẠY ĐƯỢC TRÊN WINDOWS.
+  Build MSI cho OrgInventory Agent (WiX Toolset v4+). CHI CHAY DUOC TREN WINDOWS.
 
 .DESCRIPTION
-  1. Kiểm tra dotnet + WiX (wix). Nếu thiếu WiX → cài qua `dotnet tool install --global wix`.
+  1. Kiem tra dotnet + WiX (wix). Neu thieu WiX -> cai qua `dotnet tool install --global wix`.
   2. Publish agent self-contained single-file cho win-x64.
-  3. `wix build` → OrgInventoryAgent.msi + file .sha256 (server publish dùng để verify tải về).
-  4. Tùy chọn: ký Authenticode (signtool) nếu truyền -Sign -CertificateThumbprint.
+  3. `wix build` -> OrgInventoryAgent.msi + file .sha256.
+  4. Tuy chon: ky Authenticode (signtool) neu truyen -Sign -CertificateThumbprint.
 
 .EXAMPLE
   .\build-msi.ps1
@@ -30,52 +30,59 @@ $Sha = "$Msi.sha256"
 
 Write-Host "== OrgInventory Agent MSI build ==" -ForegroundColor Cyan
 
-# 1. dotnet
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-    throw "Thiếu dotnet SDK 8 — cài từ https://dotnet.microsoft.com/download"
+# Setup DOTNET_ROOT & PATH if user-local dotnet install
+if ([string]::IsNullOrWhiteSpace($env:DOTNET_ROOT) -and (Test-Path "$env:USERPROFILE\.dotnet")) {
+    $env:DOTNET_ROOT = "$env:USERPROFILE\.dotnet"
+}
+if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) {
+    $env:PATH = "$env:DOTNET_ROOT;$env:DOTNET_ROOT\tools;$env:PATH"
 }
 
-# 2. WiX v4 (dotnet global tool `wix`)
+# 1. dotnet
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    throw "Thieu dotnet SDK 8 - cai tu https://dotnet.microsoft.com/download"
+}
+
+# 2. WiX v4+ (dotnet global tool `wix`)
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-    Write-Host "Chưa có WiX → cài: dotnet tool install --global wix" -ForegroundColor Yellow
+    Write-Host "Chua co WiX -> cai: dotnet tool install --global wix" -ForegroundColor Yellow
     dotnet tool install --global wix
-    if ($LASTEXITCODE -ne 0) { throw "Cài WiX thất bại" }
-    # refresh PATH
+    if ($LASTEXITCODE -ne 0) { throw "Cai WiX that bai" }
     $env:Path = "$env:USERPROFILE\.dotnet\tools;" + $env:Path
 }
 $wixVersion = & wix --version
 Write-Host "WiX: $wixVersion"
 
-# 3. Publish agent (self-contained single-file, có icon/metadata)
+# 3. Publish agent (self-contained single-file, co icon/metadata)
 Write-Host "Publish agent ($Runtime, self-contained single-file)..."
 dotnet publish $Project -c $Configuration -r $Runtime --self-contained true -o $PublishDir
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish thất bại" }
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish that bai" }
 $AgentExe = Join-Path $PublishDir "OrgInventoryAgent.exe"
-if (-not (Test-Path $AgentExe)) { throw "Không thấy $AgentExe sau khi publish" }
+if (-not (Test-Path $AgentExe)) { throw "Khong thay $AgentExe sau khi publish" }
 
 # 4. Build MSI
 Write-Host "Build MSI..."
 & wix build $Wxs -d AgentExe=$AgentExe -o $Msi -arch x64
-if ($LASTEXITCODE -ne 0) { throw "wix build thất bại" }
+if ($LASTEXITCODE -ne 0) { throw "wix build that bai" }
 
-# 5. Ký Authenticode (bắt buộc cho production — tránh AV false positive + SmartScreen)
+# 5. Ky Authenticode (neu co)
 if ($Sign) {
     if (-not (Get-Command signtool -ErrorAction SilentlyContinue)) {
-        throw "Thiếu signtool (Windows SDK). Cài Windows SDK hoặc truyền đường dẫn."
+        throw "Thieu signtool (Windows SDK)."
     }
-    $args = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256")
-    if ($CertificateThumbprint) { $args += @("/sha1", $CertificateThumbprint) }
-    $args += $Msi
-    & signtool @args
-    if ($LASTEXITCODE -ne 0) { throw "Ký MSI thất bại" }
-    Write-Host "Đã ký Authenticode: $Msi" -ForegroundColor Green
+    $signArgs = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256")
+    if ($CertificateThumbprint) { $signArgs += @("/sha1", $CertificateThumbprint) }
+    $signArgs += $Msi
+    & signtool @signArgs
+    if ($LASTEXITCODE -ne 0) { throw "Ky MSI that bai" }
+    Write-Host "Da ky Authenticode: $Msi" -ForegroundColor Green
 } else {
-    Write-Host "Chưa ký MSI (dùng -Sign -CertificateThumbprint ... để ký)." -ForegroundColor Yellow
+    Write-Host "Chua ky MSI (dung -Sign -CertificateThumbprint de ky)." -ForegroundColor Yellow
 }
 
-# 6. SHA256 (server publish dùng cho verify tải về trong install.ps1)
+# 6. SHA256
 $hash = (Get-FileHash $Msi -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -Path $Sha -Value $hash -NoNewline
 Write-Host "SHA256: $hash"
 Write-Host "MSI : $Msi" -ForegroundColor Green
-Write-Host "Done."
+Write-Host "Build MSI thanh cong." -ForegroundColor Green
