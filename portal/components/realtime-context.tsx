@@ -25,7 +25,9 @@ const MAX_EVENTS = 50;
 function wsBase(): string {
   const configured = (process.env.NEXT_PUBLIC_WS_BASE ?? "").trim();
   if (configured) {
-    return configured.replace(/^http/, "ws");
+    // Tự động append `/api/ws` nếu user quên — backend WS route chỉ ở path này.
+    const ws = configured.replace(/^http/, "ws");
+    return ws.endsWith("/api/ws") ? ws : `${ws.replace(/\/$/, "")}/api/ws`;
   }
   return `${window.location.origin}/api/ws`.replace(/^http/, "ws");
 }
