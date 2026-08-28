@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { KeyRound, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import type { LoginResponse } from "@/lib/types";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { LogoMark } from "@/components/logo";
@@ -115,14 +115,6 @@ function LoginForm() {
             </>
           ) : (
             <form onSubmit={submit}>
-              <div className="mb-5 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <KeyRound className="mt-0.5 size-5 shrink-0 text-slate-400" />
-                <p className="text-xs leading-relaxed text-slate-500">
-                  Quản trị viên sử dụng tài khoản do server cấu hình (xem{" "}
-                  <code className="rounded bg-slate-200 px-1 py-0.5 text-slate-600">SEED_ADMIN_EMAIL</code> trong file{" "}
-                  <code className="rounded bg-slate-200 px-1 py-0.5 text-slate-600">.env</code> của backend).
-                </p>
-              </div>
               <Field label="Email" required>
                 <Input
                   type="email"
