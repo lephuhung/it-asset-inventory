@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { Check, ChevronLeft, ChevronRight, Copy, Loader2, X } from "lucide-react";
 
 /* ── Badge ─────────────────────────────────────────────────── */
@@ -62,6 +62,8 @@ export function Card({
   bodyClass = "",
   padded = true,
   headerClass = "",
+  sectionRef,
+  style,
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
@@ -73,9 +75,15 @@ export function Card({
   bodyClass?: string;
   padded?: boolean;
   headerClass?: string;
+  /** Ref tới <section> của card — dùng khi cần đo/khóa chiều cao card theo card bên cạnh. */
+  sectionRef?: Ref<HTMLElement>;
+  /** Style inline cho <section> — vd `{ height }` để khóa chiều cao card. */
+  style?: CSSProperties;
 }) {
   return (
     <section
+      ref={sectionRef}
+      style={style}
       className={`flex flex-col rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}
     >
       {(title || actions) && (

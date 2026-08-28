@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -214,15 +214,13 @@ function CompactStartupList({ programs }: { programs: Array<Record<string, unkno
   );
 }
 
-/** Phần mềm đã cài — gọn, có nút bung/thu khi danh sách dài.
- *  - Mặc định hiện 10 dòng phẳng, không scroll.
- *  - Khi bấm "Xem tất cả" → list `flex-1 min-h-0 overflow-y-auto` lấp đầy body Card
- *    (Card được truyền `bodyClass="flex flex-col min-h-0 flex-1"`), khớp chiều cao
- *    với card "Trạng thái bảo mật" bên trái trong cùng grid row → không khoảng trắng thừa.
- *    Nội dung dài hơn khung thì scroll trong list. */
+/** Phần mềm đã cài — LUÔN hiện toàn bộ danh sách, list cuộn trong khung card.
+ *  - Không còn nút "Xem tất cả / Thu gọn" — hiển thị hết mọi phần mềm.
+ *  - Card được cha khóa chiều cao bằng chiều cao card "Trạng thái bảo mật"
+ *    cùng hàng (xem `measureSoftwareCard`); list `flex-1 min-h-0 overflow-y-auto`
+ *    lấp đầy body Card → nội dung dài hơn khung thì scroll trong list,
+ *    card không kéo dài trang. */
 function CompactSoftwareList({ software }: { software: Array<Record<string, unknown>> }) {
-  const [expanded, setExpanded] = useState(false);
-  const PREVIEW = 10;
   const sorted = useMemo(
     () =>
       [...software].sort((a, b) =>
@@ -232,31 +230,14 @@ function CompactSoftwareList({ software }: { software: Array<Record<string, unkn
       ),
     [software],
   );
-  const visible = expanded ? sorted : sorted.slice(0, PREVIEW);
-  const remaining = sorted.length - PREVIEW;
 
   return (
     <>
       <p className="mb-2 text-xs text-slate-400">
         {sorted.length} phần mềm — phát hiện phần mềm không phép / không bản quyền.
-        {remaining > 0 && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="ml-2 text-[11px] font-medium text-brand-600 hover:underline"
-          >
-            {expanded ? "Thu gọn" : `Xem tất cả (${sorted.length})`}
-          </button>
-        )}
       </p>
-      <div
-        className={
-          expanded
-            ? "flex-1 min-h-0 overflow-y-auto divide-y divide-slate-50"
-            : "divide-y divide-slate-50"
-        }
-      >
-        {visible.map((s, i) => (
+      <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-50">
+        {sorted.map((s, i) => (
           <div key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
             <span className="flex min-w-0 items-center gap-1.5 text-slate-700">
               <Package className="size-3.5 shrink-0 text-slate-400" />
@@ -266,9 +247,6 @@ function CompactSoftwareList({ software }: { software: Array<Record<string, unkn
           </div>
         ))}
       </div>
-      {!expanded && remaining > 0 && (
-        <p className="mt-1 text-[11px] text-slate-400">+{remaining} phần mềm khác</p>
-      )}
     </>
   );
 }
@@ -328,6 +306,69 @@ export default function MachineDetailPage() {
   const [note, setNote] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
+
+  // ── Luôn khóa chiều cao card "Phần mềm đã cài" theo card "Trạng thái bảo mật" cùng hàng ──
+  const securityCardRef = useRef<HTMLElement | null>(null);
+  const softwareCardRef = useRef<HTMLElement | null>(null);
+  const [softwareCardStyle, setSoftwareCardStyle] = useState<React.CSSProperties | undefined>(
+    undefined,
+  );
+
+  /** Đo card "Trạng thái bảo mật" và khóa card phần mềm theo đúng chiều cao đó.
+   *  List phần mềm luôn hiện đầy đủ nên NẾU đo trực tiếp, row height của grid
+   *  sẽ bị list dài kéo giãn (card bảo mật cũng bị kéo theo) → đo sai. Vì vậy
+   *  tạm đưa card phần mềm ra khỏi luồng grid (position:absolute) trong lúc đo
+   *  để row height chỉ còn do card bảo mật quyết định → đo được chiều cao TỰ
+   *  NHIÊN của nó, rồi khóa card phần mềm đúng chiều cao đó.
+   *  Chỉ áp dụng khi 2 card nằm cùng hàng trong grid 2 cột (lg+); khi xếp chồng
+   *  (màn hình nhỏ / không có card bảo mật) chỉ chặn chiều cao tối đa hợp lý. */
+  const measureSoftwareCard = useCallback(() => {
+    const sec = securityCardRef.current;
+    const soft = softwareCardRef.current;
+    if (!sec || !soft) {
+      setSoftwareCardStyle({ maxHeight: "min(70vh, 640px)" });
+      return;
+    }
+    const softTop = soft.getBoundingClientRect().top;
+    const secTop = sec.getBoundingClientRect().top;
+    if (Math.abs(secTop - softTop) > 4) {
+      // Không cùng hàng (mobile xếp chồng) — chỉ chặn chiều cao tối đa
+      setSoftwareCardStyle({ maxHeight: "min(70vh, 640px)" });
+      return;
+    }
+    // Cùng hàng → đo chiều cao tự nhiên của card bảo mật (card phần mềm ngoài luồng)
+    const prevPosition = soft.style.position;
+    soft.style.position = "absolute";
+    const secHeight = sec.getBoundingClientRect().height;
+    soft.style.position = prevPosition;
+    setSoftwareCardStyle({ height: secHeight });
+  }, []);
+
+  // Đo/khóa sau khi dữ liệu máy có (và mỗi lần tải lại) — chạy TRƯỚC khi paint
+  // để không nháy layout phình to do list dài.
+  const useIsomorphicLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+  useIsomorphicLayoutEffect(() => {
+    if ((machine?.latest_spec?.installed_software ?? []).length === 0) {
+      setSoftwareCardStyle(undefined);
+      return;
+    }
+    measureSoftwareCard();
+  }, [measureSoftwareCard, machine]);
+
+  // Re-đo khi cửa sổ đổi kích thước (debounce nhẹ — tránh reflow liên tục)
+  useEffect(() => {
+    if ((machine?.latest_spec?.installed_software ?? []).length === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => measureSoftwareCard(), 120);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [measureSoftwareCard, machine]);
 
   const load = useCallback(async () => {
     try {
@@ -579,7 +620,11 @@ export default function MachineDetailPage() {
         </Card>
 
         {hasSecurity && (
-          <Card title="Trạng thái bảo mật" subtitle="Antivirus, Windows Update, cấu hình rủi ro (Phase 2)">
+          <Card
+            title="Trạng thái bảo mật"
+            subtitle="Antivirus, Windows Update, cấu hình rủi ro (Phase 2)"
+            sectionRef={securityCardRef}
+          >
             <div className="divide-y divide-slate-100">
               {avLabel && (
                 <SpecRow
@@ -687,6 +732,8 @@ export default function MachineDetailPage() {
           title="Phần mềm đã cài"
           subtitle="Software inventory (Phase 2)"
           bodyClass="flex flex-col min-h-0 flex-1"
+          sectionRef={softwareCardRef}
+          style={softwareCardStyle}
         >
           {software.length === 0 ? (
             <p className="text-sm text-slate-500">Chưa có dữ liệu phần mềm.</p>
