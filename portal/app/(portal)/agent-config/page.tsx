@@ -163,7 +163,7 @@ export default function AgentConfigPage() {
               </Field>
               <Field
                 label="IP / Domain Portal công khai (link copy cho user)"
-                hint="URL dùng khi sinh token + self-service để nhúng vào lệnh cài (`irm <URL>/i/<token> | iex`). User copy lệnh và chạy trên máy từ xa — phải là IP/domain server thật, KHÔNG phải 127.0.0.1. VD: http://10.10.0.241:3003"
+                hint="URL dùng khi sinh token + self-service để nhúng vào lệnh cài (tải MSI từ <URL>/download/agent.msi + verify SHA256 + msiexec — không dùng irm|iex để tránh Defender gắn cờ). User copy lệnh và chạy trên máy từ xa — phải là IP/domain server thật, KHÔNG phải 127.0.0.1. VD: http://10.10.0.241:3003"
               >
                 <Input value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} placeholder="http://10.10.0.241:3003" required />
               </Field>

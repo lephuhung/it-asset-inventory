@@ -2,8 +2,9 @@
 
 Hỗ trợ 2 phương pháp cài đặt agent (xem `docs/OFFLINE_AGENT_SPEC.md` mục 2):
 
-  1. Cài bằng lệnh (online):  `irm http://server/i/<token> | iex`
-     → install.ps1 tải MSI từ `GET /download/agent.msi` → verify SHA256 → msiexec.
+  1. Cài bằng lệnh (online):  lệnh do server sinh = tải MSI từ `GET /download/agent.msi`
+     → verify SHA256 (so với `/download/agent.msi.sha256`) → msiexec /qn.
+     (KHÔNG dùng `irm ... | iex` — Defender gắn cờ pattern download-and-execute.)
 
   2. Cài bằng tải file (offline / máy cách ly):
      → Admin tải MSI + SHA256 từ 2 endpoint này, copy qua USB, chạy

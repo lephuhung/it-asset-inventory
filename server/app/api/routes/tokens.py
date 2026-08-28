@@ -29,8 +29,25 @@ from app.services.agent_settings import effective_agent_config
 router = APIRouter(prefix="/api/tokens", tags=["tokens"])
 
 
-def _install_command(token: str, portal_url: str) -> str:
-    return f'powershell -EP Bypass -c "irm {portal_url}/i/{token} | iex"'
+def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
+    """Lệnh cài 1 dòng: tải MSI → verify SHA256 → msiexec silent.
+
+    KHÔNG dùng pattern `powershell -EP Bypass -c "irm ... | iex"` — Defender ML
+    gắn cờ pattern download-and-execute (Trojan:Win32/Commando.A!ml). Dạng này:
+    tải file xuống đĩa + verify SHA256 + msiexec (thao tác chuẩn của admin).
+    """
+    return (
+        "powershell -NoProfile -c '"
+        f'$t="{token}";'
+        f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
+        f'$m="$env:TEMP\\agent-$t.msi";'
+        f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
+        f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
+        f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
+        f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
+        f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
+        "'"
+    )
 
 
 @router.post("/bulk", response_model=BulkTokenResponse)
@@ -66,7 +83,11 @@ async def create_tokens_bulk(
         )
         db.add(row)
         tokens_out.append(
-            TokenCreateResponse(token=token, install_command=_install_command(token, portal_url), expires_at=expires)
+            TokenCreateResponse(
+                token=token,
+                install_command=_install_command(token, portal_url, agent_cfg["agent_server_url"]),
+                expires_at=expires,
+            )
         )
     await append_audit(
         db,
@@ -116,10 +137,10 @@ async def create_token(
     )
     await db.commit()
 
-    # install command — server render install.ps1 động tại /i/{token}
+    # install command — tải MSI + verify SHA256 + msiexec (không dùng /i/{token} | iex)
     agent_cfg = await effective_agent_config(db)
 
-    command = _install_command(token, agent_cfg["portal_url"])
+    command = _install_command(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"])
     return TokenCreateResponse(token=token, install_command=command, expires_at=expires)
 
 

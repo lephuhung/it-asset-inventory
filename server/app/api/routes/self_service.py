@@ -42,8 +42,24 @@ def _make_code() -> str:
     return secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
 
 
-def _install_command(token: str, portal_url: str) -> str:
-    return f'powershell -EP Bypass -c "irm {portal_url}/i/{token} | iex"'
+def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
+    """Lệnh cài 1 dòng: tải MSI → verify SHA256 → msiexec silent.
+
+    KHÔNG dùng pattern `-EP Bypass`/`irm ... | iex` — Defender ML gắn cờ
+    (Trojan:Win32/Commando.A!ml). Giữ logic giống tokens._install_command.
+    """
+    return (
+        "powershell -NoProfile -c '"
+        f'$t="{token}";'
+        f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
+        f'$m="$env:TEMP\\agent-$t.msi";'
+        f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
+        f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
+        f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
+        f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
+        f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
+        "'"
+    )
 
 
 # ── Admin: quản lý link ─────────────────────────────────────────
@@ -187,4 +203,8 @@ async def claim(
     )
     await db.commit()
     agent_cfg = await effective_agent_config(db)
-    return TokenCreateResponse(token=token, install_command=_install_command(token, agent_cfg["portal_url"]), expires_at=row.expires_at)
+    return TokenCreateResponse(
+        token=token,
+        install_command=_install_command(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"]),
+        expires_at=row.expires_at,
+    )
