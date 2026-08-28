@@ -11,6 +11,7 @@ import {
   ErrorBanner,
   Field,
   PageHeader,
+  PageResponse,
   Select,
   Spinner,
   TABLE,
@@ -56,8 +57,9 @@ export default function DiffPage() {
 
   useEffect(() => {
     api
-      .get<MachineListItem[]>("/machines")
-      .then((list) => {
+      .get<PageResponse<MachineListItem>>("/machines", { limit: 200 })
+      .then((data) => {
+        const list = data.items;
         setMachines(list);
         if (list.length > 0) setAId(list[0].id);
         if (list.length > 1) setBId(list[1].id);

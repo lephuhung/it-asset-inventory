@@ -1,0 +1,142 @@
+INFO:     Started server process [3283213]
+INFO:     Waiting for application startup.
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.schemas
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.tables
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.types
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.constraints
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.defaults
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.comments
+2026-08-28 02:27:20,789 INFO [alembic.runtime.plugins] setup plugin alembic.autogenerate.checkconstraint_byname
+2026-08-28 02:27:20,833 INFO [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-08-28 02:27:20,833 INFO [alembic.runtime.migration] Will assume transactional DDL.
+2026-08-28 02:27:20,842 INFO [app.core.migrations] ✓ DB schema at head (revision=h7i8j9k0l1m2)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:33556 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33572 - "GET /api/machines HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33588 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52892 - "POST /api/auth/login HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:33588 - "GET /api/machines HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52896 - "POST /api/auth/login HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:33588 - "GET /api/machines/stats HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:52900 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41932 - "GET /api/auth/me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41942 - "GET /api/auth/me HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41950 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41942 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41942 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "GET /api/machines/stats HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41942 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "GET /api/stats/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41950 - "GET /api/machines?limit=50 HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41964 - "GET /api/orgs HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41968 - "GET /api/compliance/pending HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41982 - "GET /api/machines/stats HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41942 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41992 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41942 - "GET /api/stats/overview HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41932 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41950 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41964 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41996 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41982 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41968 - "GET /api/stats/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41992 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41996 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41942 - "GET /api/machines?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41950 - "GET /api/stats/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "GET /api/machines?limit=50 HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41942 - "GET /api/orgs HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41950 - "GET /api/compliance/pending HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:41932 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41964 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41968 - "POST /api/auth/refresh HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41942 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41932 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:41950 - "GET /api/machines?limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57908 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57934 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57918 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57892 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57918 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57892 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57934 - "GET /api/machines?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57908 - "GET /api/machines?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57892 - "GET /api/machines/0093d642-7baa-4955-ae67-41253e57ada1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57908 - "GET /api/machines/0093d642-7baa-4955-ae67-41253e57ada1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57884 - "GET /api/machines/0093d642-7baa-4955-ae67-41253e57ada1/timeline?days=35 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57892 - "GET /api/machines/0093d642-7baa-4955-ae67-41253e57ada1/timeline?days=35 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55096 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55104 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55096 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55096 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55096 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55104 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55104 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f/timeline?days=35 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55096 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f/timeline?days=35 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57916 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57914 - "GET /api/machines?status=pending&limit=50 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/alert-rules?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57914 - "GET /api/alert-rules/events?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57920 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57926 - "GET /api/alert-rules?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/alert-rules/events?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57914 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57900 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57920 - "GET /api/audit/actions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57940 - "GET /api/audit/actions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57926 - "GET /api/audit?limit=100&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57914 - "GET /api/audit?limit=100&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48910 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48938 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48914 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48926 - "GET /api/users?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48912 - "GET /api/users?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48910 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48914 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48938 - "GET /api/orgs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48912 - "GET /api/keys?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48926 - "GET /api/keys?limit=50&offset=0 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38514 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38522 - "GET /api/agent-settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:38536 - "GET /api/agent-settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49268 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42406 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46846 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36594 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36602 - "GET /api/machines HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36608 - "GET /api/machines HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55608 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55620 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55608 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55620 - "GET /api/machines HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55636 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55656 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55644 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55608 - "GET /api/machines HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58784 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58790 - "GET /api/auth/me HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58784 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58790 - "GET /api/machines?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58794 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58806 - "GET /api/machines/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58784 - "GET /api/machines?limit=200 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58790 - "GET /api/compliance/pending HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58784 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58790 - "GET /api/machines/b0c8e989-4567-40d0-a8e7-92dcc9872a30 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51620 - "GET /api/machines/7067c657-bdaa-4484-8824-eb47edbd743f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51622 - "GET /api/machines/b0c8e989-4567-40d0-a8e7-92dcc9872a30 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36620 - "GET /api/machines/stats HTTP/1.1" 200 OK
