@@ -457,7 +457,7 @@ export default function OfflineImportPage() {
                             onChange={(e) => setSelectedUserId(e.target.value)}
                           >
                             <option value="">— Chọn user —</option>
-                            {existingUsers.map((u) => (
+                            {(existingUsers ?? []).map((u) => (
                               <option key={u.id} value={u.id}>
                                 {u.full_name} ({u.email})
                               </option>
@@ -778,7 +778,7 @@ function PhaseCard({
         {location}
       </div>
       <ol className="space-y-1.5 text-xs text-slate-700 list-decimal pl-5 marker:text-slate-400">
-        {steps.map((s, i) => (
+        {(steps ?? []).map((s, i) => (
           <li key={i}>{s}</li>
         ))}
       </ol>

@@ -285,7 +285,7 @@ export default function TokensPage() {
       setShowCreate(false);
       // Gắn lệnh cài cho token vừa tạo (server chỉ trả token 1 lần) — khớp qua expires_at
       const list = await loadTokens(true);
-      const match = list.find((t) => t.expires_at === res.expires_at);
+      const match = (list ?? []).find((t) => t.expires_at === res.expires_at);
       if (match) saveCommand(match.id, res.install_command);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.detail : "Không sinh được token");
@@ -389,7 +389,7 @@ export default function TokensPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tokens.map((t) => {
+                  {(tokens ?? []).map((t) => {
                     const meta = TOKEN_STATUS_META[t.status];
                     const expiry = tokenExpiry(t.expires_at);
                     const command = commands[t.id];
@@ -495,7 +495,7 @@ export default function TokensPage() {
 
           {(links?.length ?? 0) > 0 && (
             <ul className="mt-4 divide-y divide-slate-100">
-              {links.map((l) => (
+              {(links ?? []).map((l) => (
                 <li key={l.id} className="flex flex-wrap items-center gap-2 py-2.5">
                   <span className={`size-2 rounded-full ${l.enabled ? "bg-emerald-500" : "bg-slate-300"}`} />
                   <span className="text-sm text-slate-700">{l.org_name ?? "—"}</span>
@@ -562,7 +562,7 @@ export default function TokensPage() {
             )}
             <Field label="Thời hạn token">
               <Select value={csvTtl} onChange={(e) => setCsvTtl(Number(e.target.value))}>
-                {TTL_OPTIONS.map((o) => (
+                {(TTL_OPTIONS ?? []).map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
@@ -758,7 +758,7 @@ export default function TokensPage() {
             </Field>
             <Field label="Thời hạn token">
               <Select value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-                {TTL_OPTIONS.map((o) => (
+                {(TTL_OPTIONS ?? []).map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
@@ -842,7 +842,7 @@ export default function TokensPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {bulkResult.tokens.map((t, i) => (
+                  {(bulkResult.tokens ?? []).map((t, i) => (
                     <tr key={i} className={TR_HOVER}>
                       <td className={`${TD} whitespace-nowrap text-xs text-slate-600`}>
                         {t.token}

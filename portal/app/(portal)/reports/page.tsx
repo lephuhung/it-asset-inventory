@@ -101,7 +101,7 @@ export default function ReportsPage() {
           </Field>
           <Field label="Trạng thái">
             <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUS_OPTIONS.map((o) => (
+              {(STATUS_OPTIONS ?? []).map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>

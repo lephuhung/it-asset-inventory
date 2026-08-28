@@ -151,7 +151,7 @@ export default function SecurityPage() {
                   Backup codes (dùng 1 lần — lưu cẩn thận!)
                 </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {setup.backup_codes.map((c, i) => (
+                  {(setup.backup_codes ?? []).map((c, i) => (
                     <code key={i} className="rounded bg-white px-1.5 py-0.5 font-mono text-[11px] text-amber-900 ring-1 ring-inset ring-amber-200">
                       {c}
                     </code>

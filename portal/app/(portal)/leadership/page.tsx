@@ -77,7 +77,7 @@ export default function LeadershipPage() {
   const ghostBuckets = useMemo(() => {
     const now = Date.now();
     const count = (days: number) =>
-      machines.filter((m) => {
+      (machines ?? []).filter((m) => {
         if (m.status !== "lost") return false;
         const last = m.last_seen_at ? new Date(m.last_seen_at).getTime() : now;
         return now - last >= days * DAY_MS;
@@ -89,7 +89,7 @@ export default function LeadershipPage() {
   const statusCounts = useMemo(() => {
     const order: MachineStatus[] = ["online", "offline", "lost", "pending", "decommissioned"];
     return order
-      .map((s) => ({ status: s, count: machines.filter((m) => m.status === s).length }))
+      .map((s) => ({ status: s, count: (machines ?? []).filter((m) => m.status === s).length }))
       .filter((x) => x.count > 0 || x.status !== "decommissioned");
   }, [machines]);
 
@@ -160,7 +160,7 @@ export default function LeadershipPage() {
 
       {/* ── KPI lớn — card trắng, số ink to, điểm nhấn màu ở icon/chấm ── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {kpis.map((k) => (
+        {(kpis ?? []).map((k) => (
           <div key={k.label} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -195,7 +195,7 @@ export default function LeadershipPage() {
 
             {/* Legend với số liệu + tỉ lệ */}
             <ul className="min-w-0 flex-1 space-y-2">
-              {statusCounts.map(({ status, count }) => {
+              {(statusCounts ?? []).map(({ status, count }) => {
                 const meta = MACHINE_STATUS_META[status];
                 const pct = (machines?.length ?? 0) > 0 ? Math.round((count / machines.length) * 100) : 0;
                 return (
@@ -220,7 +220,7 @@ export default function LeadershipPage() {
         >
           <div className="space-y-3.5 p-5">
             {(perOrg?.length ?? 0) === 0 && <p className="text-sm text-slate-500">Chưa có dữ liệu máy.</p>}
-            {perOrg.map((p) => {
+            {(perOrg ?? []).map((p) => {
               // Mỗi bar luôn đầy 100% — segment chiếm đúng tỉ lệ trong tổng của org đó
               const seg = (n: number) => `${p.total > 0 ? (n / p.total) * 100 : 0}%`;
               return (

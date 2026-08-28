@@ -84,7 +84,7 @@ export default function DriftsPage() {
     }
   };
 
-  const visible = showAll ? drifts : drifts.filter((d) => d.status === "pending");
+  const visible = showAll ? drifts : (drifts ?? []).filter((d) => d.status === "pending");
 
   return (
     <div>
@@ -122,7 +122,7 @@ export default function DriftsPage() {
               </tr>
             </thead>
             <tbody>
-              {visible.map((d) => {
+              {(visible ?? []).map((d) => {
                 const reason = REASON_META[d.reason] ?? REASON_META.other;
                 const st = STATUS_META[d.status] ?? STATUS_META.pending;
                 return (

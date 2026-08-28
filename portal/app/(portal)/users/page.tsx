@@ -208,7 +208,7 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {(users ?? []).map((u) => (
                   <tr key={u.id} className={TR_HOVER}>
                     <td className={TD}>
                       <p className="font-medium text-slate-800">{u.full_name}</p>
@@ -313,7 +313,7 @@ export default function UsersPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Vai trò" required>
               <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}>
-                {ROLE_OPTIONS.map((o) => (
+                {(ROLE_OPTIONS ?? []).map((o) => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </Select>
@@ -325,7 +325,7 @@ export default function UsersPage() {
                 required
               >
                 <option value="">Chọn tổ chức…</option>
-                {orgs.map((o) => (
+                {(orgs ?? []).map((o) => (
                   <option key={o.id} value={o.id}>{o.name}</option>
                 ))}
               </Select>

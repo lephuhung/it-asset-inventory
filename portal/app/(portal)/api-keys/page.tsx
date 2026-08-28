@@ -156,7 +156,7 @@ export default function ApiKeysPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {keys.map((k) => (
+                  {(keys ?? []).map((k) => (
                     <tr key={k.id} className={TR_HOVER}>
                       <td className={`${TD} font-medium text-slate-800`}>{k.name}</td>
                       <td className={`${TD} font-mono text-xs text-slate-500`}>{k.scope}</td>

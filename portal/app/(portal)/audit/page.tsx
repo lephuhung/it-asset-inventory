@@ -161,7 +161,7 @@ export default function AuditPage() {
           <Field label="Hành động (action)">
             <Select value={action} onChange={(e) => setAction(e.target.value)}>
               <option value="">Tất cả</option>
-              {actions.map((a) => (
+              {(actions ?? []).map((a) => (
                 <option key={a} value={a}>
                   {a}
                 </option>

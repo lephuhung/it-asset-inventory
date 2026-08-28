@@ -50,7 +50,7 @@ export default function GhostMachinesPage() {
 
   const buckets = useMemo(() => {
     const now = Date.now();
-    const gone = (days: number) => machines.filter((m) => {
+    const gone = (days: number) => (machines ?? []).filter((m) => {
       const last = m.last_seen_at ? new Date(m.last_seen_at).getTime() : now;
       return now - last >= days * DAY_MS;
     });
@@ -111,7 +111,7 @@ export default function GhostMachinesPage() {
               </tr>
             </thead>
             <tbody>
-              {machines.map((m) => {
+              {(machines ?? []).map((m) => {
                 const last = m.last_seen_at ? new Date(m.last_seen_at).getTime() : Date.now();
                 const goneDays = Math.floor((Date.now() - last) / DAY_MS);
                 return (

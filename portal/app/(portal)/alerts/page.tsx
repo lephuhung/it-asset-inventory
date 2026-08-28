@@ -105,7 +105,7 @@ export default function AlertsPage() {
   }, [load]);
 
   const toggleChannel = (c: string) => {
-    setChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+    setChannels((prev) => (prev.includes(c) ? (prev ?? []).filter((x) => x !== c) : [...prev, c]));
   };
 
   const create = async (e: FormEvent) => {
@@ -189,7 +189,7 @@ export default function AlertsPage() {
             />
           ) : (
             <ul className="divide-y divide-slate-100">
-              {rules.map((r) => {
+              {(rules ?? []).map((r) => {
                 const meta = ALERT_RULE_TYPE_META[r.rule_type] ?? {
                   label: r.rule_type,
                   badge: "bg-slate-100 text-slate-600 ring-slate-500/20",
@@ -329,7 +329,7 @@ export default function AlertsPage() {
                 </tr>
               </thead>
               <tbody>
-                {events.map((ev) => {
+                {(events ?? []).map((ev) => {
                   const sev = ALERT_SEVERITY_META[ev.severity] ?? ALERT_SEVERITY_META.info;
                   return (
                     <tr key={ev.id} className={TR_HOVER}>

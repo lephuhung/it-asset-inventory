@@ -105,7 +105,7 @@ export default function MachinesPage() {
     return () => clearTimeout(t);
   }, [lastEvent, load]);
 
-  const countByStatus = machines.reduce<Record<string, number>>((acc, m) => {
+  const countByStatus = (machines ?? []).reduce<Record<string, number>>((acc, m) => {
     acc[m.status] = (acc[m.status] ?? 0) + 1;
     return acc;
   }, {});
@@ -137,7 +137,7 @@ export default function MachinesPage() {
           </Field>
           <Field label="Trạng thái">
             <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUS_OPTIONS.map((o) => (
+              {(STATUS_OPTIONS ?? []).map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -207,7 +207,7 @@ export default function MachinesPage() {
               </tr>
             </thead>
             <tbody>
-              {machines.map((m) => {
+              {(machines ?? []).map((m) => {
                 const meta = MACHINE_STATUS_META[m.status];
                 const life = LIFECYCLE_META[m.lifecycle] ?? { label: m.lifecycle, badge: "bg-slate-100 text-slate-500 ring-slate-500/20" };
                 return (

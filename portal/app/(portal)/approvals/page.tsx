@@ -99,7 +99,7 @@ export default function ApprovalsPage() {
               </tr>
             </thead>
             <tbody>
-              {machines.map((m) => (
+              {(machines ?? []).map((m) => (
                 <tr key={m.id} className={TR_HOVER}>
                   <td className={`${TD} font-medium text-slate-800`}>
                     <Link href={`/machines/${m.id}`} className="text-blue-600 hover:underline">

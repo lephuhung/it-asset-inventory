@@ -81,7 +81,7 @@ export default function EolPage() {
       const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: undefined, limit: 50 });
       const list = data.items;
       const details = await fetchDetailsSequential(list);
-      const mapped = details.map((d) => ({
+      const mapped = (details ?? []).map((d) => ({
         machine: d as MachineListItem,
         eol: getWindowsEol(d.latest_spec?.os_name, d.latest_spec?.os_build),
       }));
@@ -101,7 +101,7 @@ export default function EolPage() {
   }, [load]);
 
   const summary = useMemo(() => {
-    return rows.reduce(
+    return (rows ?? []).reduce(
       (acc, r) => {
         acc[r.eol.status] += 1;
         return acc;
@@ -153,7 +153,7 @@ export default function EolPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(({ machine, eol }) => (
+                  {(rows ?? []).map(({ machine, eol }) => (
                     <tr key={machine.id} className={TR_HOVER}>
                       <td className={`${TD} font-medium text-slate-800`}>
                         {machine.hostname ?? "(chưa đặt tên)"}

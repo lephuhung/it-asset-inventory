@@ -174,7 +174,7 @@ export default function DashboardPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {recent.map((m) => {
+                        {(recent ?? []).map((m) => {
                           const meta = MACHINE_STATUS_META[m.status];
                           return (
                             <tr key={m.id} className={TR_HOVER}>
