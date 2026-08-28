@@ -47,12 +47,19 @@ try {
 # 4. Verify SHA256 + chữ ký Authenticode
 Write-Host '[2/4] Xác thực chữ ký số ...' -ForegroundColor Cyan
 $sig = Get-AuthenticodeSignature -FilePath $msiPath
-if ($sig.Status -ne 'Valid') {
+# MSI chưa ký chỉ được phép cài khi admin chủ động set ORGINV_ALLOW_UNSIGNED=1 (test).
+# Mặc định (không set) vẫn BẮT BUỘC chữ ký Authenticode hợp lệ.
+$allowUnsigned = ($env:ORGINV_ALLOW_UNSIGNED -eq '1')
+if ($sig.Status -ne 'Valid' -and -not $allowUnsigned) {
     Write-Host "[LỖI] Chữ ký số không hợp lệ (Status: $($sig.Status)). Đã dừng cài đặt." -ForegroundColor Red
     Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
     exit 1
 }
-Write-Host "      ✓ Chữ ký hợp lệ: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+if ($sig.Status -eq 'Valid') {
+    Write-Host "      ✓ Chữ ký hợp lệ: $($sig.SignerCertificate.Subject)" -ForegroundColor Green
+} else {
+    Write-Host "      ⚠ MSI KHÔNG ký Authenticode (Status: $($sig.Status)) — bỏ qua vì ORGINV_ALLOW_UNSIGNED=1 (CHỈ DÙNG TEST)" -ForegroundColor Yellow
+}
 
 # 5. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
 Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
