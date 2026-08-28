@@ -33,6 +33,11 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     // không phải JSON
   }
+  // 401 từ proxy nghĩa là proxy đã thử refresh + thất bại (cookie đã bị clear).
+  // Phát sự kiện để AuthContext set user=null → layout redirect về /login.
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("auth:expired"));
+  }
   return new ApiError(res.status, detail);
 }
 

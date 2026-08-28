@@ -47,19 +47,10 @@ export default function CompliancePage() {
     setAckBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/proxy/compliance/acknowledge", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notice_id: notice.id }),
-      });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => null)) as { detail?: string } | null;
-        setError(data?.detail ?? "Không xác nhận được");
-        return;
-      }
+      await api.post("/compliance/acknowledge", { notice_id: notice.id });
       setPending(false);
-    } catch {
-      setError("Không kết nối được máy chủ");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Không xác nhận được");
     } finally {
       setAckBusy(false);
     }

@@ -38,6 +38,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh().finally(() => setLoading(false));
   }, [refresh]);
 
+  // Lắng nghe sự kiện 401 từ api.ts (proxy đã refresh fail + clear cookie) → set user=null,
+  // để layout redirect về /login tự động.
+  useEffect(() => {
+    const onExpired = () => {
+      setUser(null);
+    };
+    window.addEventListener("auth:expired", onExpired);
+    return () => window.removeEventListener("auth:expired", onExpired);
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
