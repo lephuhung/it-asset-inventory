@@ -12,6 +12,8 @@ import {
   EmptyState,
   ErrorBanner,
   PageHeader,
+  Pagination,
+  PageResponse,
   Spinner,
   TABLE,
   TABLE_WRAP,
@@ -37,22 +39,34 @@ const STATUS_META: Record<string, { label: string; badge: string }> = {
 /** Fingerprint drift (#4, Phase 3) — duyệt khi đổi mainboard / ghost Win. */
 export default function DriftsPage() {
   const [drifts, setDrifts] = useState<FingerprintDrift[]>([]);
+  const [page, setPage] = useState<PageResponse<FingerprintDrift>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [offset, setOffset] = useState(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (overrideOffset?: number) => {
+    const useOffset = overrideOffset ?? offset;
     try {
-      const list = await api.get<FingerprintDrift[]>("/drifts");
-      setDrifts(list);
+      const data = await api.get<PageResponse<FingerprintDrift>>("/drifts", {
+        limit: 50,
+        offset: useOffset,
+      });
+      setDrifts(data.items);
+      setPage(data);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được danh sách drift");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   useEffect(() => {
     void load();
@@ -157,6 +171,13 @@ export default function DriftsPage() {
               })}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            onChange={(newOffset) => {
+              setOffset(newOffset);
+              void load(newOffset);
+            }}
+          />
           <p className="border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs text-slate-400">
             Chấp nhận = cập nhật fingerprint + machine_uuid của máy (máy đổi thật sự). Từ chối = giữ
             fingerprint cũ (nghi gian lận định danh). Mọi quyết định ghi audit log.

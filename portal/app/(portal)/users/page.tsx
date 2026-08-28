@@ -25,6 +25,8 @@ import {
   Input,
   Modal,
   PageHeader,
+  Pagination,
+  PageResponse,
   Select,
   Spinner,
   TABLE,
@@ -57,6 +59,13 @@ function roleLabel(role: string) {
 export default function UsersPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [page, setPage] = useState<PageResponse<ManagedUser>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
+  const [offset, setOffset] = useState(0);
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,17 +89,19 @@ export default function UsersPage() {
   const [resetBusy, setResetBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false, overrideOffset?: number) => {
+    const useOffset = overrideOffset ?? offset;
     try {
-      const list = await api.get<ManagedUser[]>("/users");
-      setUsers(list);
+      const data = await api.get<PageResponse<ManagedUser>>("/users", { limit: 50, offset: useOffset });
+      setUsers(data.items);
+      setPage(data);
       setError(null);
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách tài khoản");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   useEffect(() => {
     void load();
@@ -255,6 +266,13 @@ export default function UsersPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={page}
+              onChange={(newOffset) => {
+                setOffset(newOffset);
+                void load(true, newOffset);
+              }}
+            />
           </div>
         </Card>
       )}

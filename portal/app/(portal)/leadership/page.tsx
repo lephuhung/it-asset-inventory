@@ -6,7 +6,7 @@ import { Activity, Ghost, Monitor, Ticket, TrendingUp, Wifi, WifiOff } from "luc
 import { api } from "@/lib/api";
 import type { MachineListItem, MachineStatus, Organization, StatsOverview } from "@/lib/types";
 import { flattenOrgTree } from "@/lib/format";
-import { Card, ErrorBanner, PageHeader, Spinner, StatusDot } from "@/components/ui";
+import { Card, ErrorBanner, PageHeader, PageResponse, Spinner, StatusDot } from "@/components/ui";
 import { MACHINE_STATUS_META } from "@/lib/format";
 
 const DAY_MS = 86_400_000;
@@ -34,11 +34,11 @@ export default function LeadershipPage() {
     try {
       const [s, m, o] = await Promise.all([
         api.get<StatsOverview>("/stats/overview"),
-        api.get<MachineListItem[]>("/machines"),
+        api.get<PageResponse<MachineListItem>>("/machines", { limit: 50 }),
         api.get<Organization[]>("/orgs").catch(() => [] as Organization[]),
       ]);
       setStats(s);
-      setMachines(m);
+      setMachines(m.items);
       setOrgs(Array.isArray(o) ? o : []);
       setError(null);
     } catch (e) {

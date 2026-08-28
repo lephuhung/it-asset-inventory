@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,6 +25,7 @@ from app.core.security import hash_password
 from app.db.models import Organization, User, UserRole
 from app.db.session import get_db
 from app.schemas import (
+    Page,
     UserCreateRequest,
     UserOut,
     UserResetPasswordRequest,
@@ -55,14 +56,18 @@ def _to_out(u: User) -> UserOut:
     )
 
 
-@router.get("", response_model=list[UserOut])
+@router.get("", response_model=Page[UserOut])
 async def list_users(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
     org_id: uuid.UUID | None = None,
     role: str | None = None,
     q: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
+    from sqlalchemy import func as sa_func
+
     query = select(User).options(selectinload(User.org))
     if org_id:
         query = query.where(User.org_id == org_id)
@@ -71,8 +76,17 @@ async def list_users(
     if q:
         like = f"%{q}%"
         query = query.where(User.full_name.ilike(like) | User.email.ilike(like))
-    rows = (await db.execute(query.order_by(User.created_at.desc()))).scalars().all()
-    return [_to_out(u) for u in rows]
+
+    total = (await db.execute(select(sa_func.count()).select_from(query.subquery()))).scalar_one()
+    rows = (
+        await db.execute(query.order_by(User.created_at.desc()).limit(limit).offset(offset))
+    ).scalars().all()
+    return Page[UserOut](
+        items=[_to_out(u) for u in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

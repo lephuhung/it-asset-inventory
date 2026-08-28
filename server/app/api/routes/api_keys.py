@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,7 @@ from app.schemas import (
     ApiKeyOut,
     ApiKeyUpdate,
     MachineListItem,
+    Page,
 )
 
 router = APIRouter(prefix="/api/keys", tags=["api-keys"])
@@ -47,13 +48,26 @@ def _to_out(k: ApiKey) -> ApiKeyOut:
     )
 
 
-@router.get("", response_model=list[ApiKeyOut])
+@router.get("", response_model=Page[ApiKeyOut])
 async def list_keys(
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
-    rows = (await db.execute(select(ApiKey).order_by(ApiKey.created_at.desc()))).scalars().all()
-    return [_to_out(k) for k in rows]
+    from sqlalchemy import func as sa_func
+
+    base = select(ApiKey)
+    total = (await db.execute(select(sa_func.count()).select_from(base.subquery()))).scalar_one()
+    rows = (
+        await db.execute(base.order_by(ApiKey.created_at.desc()).limit(limit).offset(offset))
+    ).scalars().all()
+    return Page[ApiKeyOut](
+        items=[_to_out(k) for k in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=ApiKeyCreated)

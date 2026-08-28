@@ -24,6 +24,8 @@ import {
   IconButton,
   Input,
   PageHeader,
+  Pagination,
+  PageResponse,
   Select,
   Spinner,
   TABLE,
@@ -46,9 +48,23 @@ const CHANNELS = ["email", "telegram", "zalo"];
 export default function AlertsPage() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
+  const [rulesPage, setRulesPage] = useState<PageResponse<AlertRule>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
+  const [eventsPage, setEventsPage] = useState<PageResponse<AlertEvent>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rulesOffset, setRulesOffset] = useState(0);
+  const [eventsOffset, setEventsOffset] = useState(0);
 
   // Form tạo rule
   const [name, setName] = useState("");
@@ -65,18 +81,20 @@ export default function AlertsPage() {
   const load = useCallback(async (silent = false) => {
     try {
       const [r, e] = await Promise.all([
-        api.get<AlertRule[]>("/alert-rules"),
-        api.get<AlertEvent[]>("/alert-rules/events", { limit: 50 }),
+        api.get<PageResponse<AlertRule>>("/alert-rules", { limit: 50, offset: rulesOffset }),
+        api.get<PageResponse<AlertEvent>>("/alert-rules/events", { limit: 50, offset: eventsOffset }),
       ]);
-      setRules(r);
-      setEvents(e);
+      setRules(r.items);
+      setEvents(e.items);
+      setRulesPage(r);
+      setEventsPage(e);
       setError(null);
     } catch (err) {
       if (!silent) setError(err instanceof Error ? err.message : "Không tải được alert");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [rulesOffset, eventsOffset]);
 
   useEffect(() => {
     void load();
@@ -220,6 +238,13 @@ export default function AlertsPage() {
               })}
             </ul>
           )}
+          <Pagination
+            page={rulesPage}
+            onChange={(newOffset) => {
+              setRulesOffset(newOffset);
+              void load(true);
+            }}
+          />
         </Card>
 
         <Card title="Tạo rule mới">
@@ -328,6 +353,13 @@ export default function AlertsPage() {
                 })}
               </tbody>
             </table>
+            <Pagination
+              page={eventsPage}
+              onChange={(newOffset) => {
+                setEventsOffset(newOffset);
+                void load(true);
+              }}
+            />
           </div>
         )}
       </Card>

@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
 from app.db.models import AlertEvent, AlertRule, User
 from app.db.session import get_db
-from app.schemas import AlertEventOut, AlertRuleCreate, AlertRuleOut, AlertRuleUpdate
+from app.schemas import AlertEventOut, AlertRuleCreate, AlertRuleOut, AlertRuleUpdate, Page
 
 router = APIRouter(prefix="/api/alert-rules", tags=["alert-rules"])
 
@@ -38,21 +38,29 @@ async def _rule_to_out(r: AlertRule) -> AlertRuleOut:
     )
 
 
-@router.get("", response_model=list[AlertRuleOut])
+@router.get("", response_model=Page[AlertRuleOut])
 async def list_rules(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin()),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     """Danh sách rule trong phạm vi quyền (rule org nằm trong cây con của admin)."""
+    from sqlalchemy import func as sa_func
+
     visible = await visible_org_ids(db, admin)
-    rows = (
+    all_rows = (
         (await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))).scalars().all()
     )
-    return [
-        await _rule_to_out(r)
-        for r in rows
-        if r.org_id is None or str(r.org_id) in visible
-    ]
+    filtered = [r for r in all_rows if r.org_id is None or str(r.org_id) in visible]
+    total = len(filtered)
+    page_items = filtered[offset : offset + limit]
+    return Page[AlertRuleOut](
+        items=[await _rule_to_out(r) for r in page_items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=AlertRuleOut)
@@ -138,30 +146,38 @@ async def delete_rule(
     return {"ok": True}
 
 
-@router.get("/events", response_model=list[AlertEventOut])
+@router.get("/events", response_model=Page[AlertEventOut])
 async def list_events(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin()),
-    limit: int = 100,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     """Lịch sử alert đã kích hoạt (mới nhất trước)."""
+    from sqlalchemy import func as sa_func
+
+    base = select(AlertEvent)
+    total = (await db.execute(select(sa_func.count()).select_from(base.subquery()))).scalar_one()
     rows = (
-        (
-            await db.execute(select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(limit))
+        await db.execute(
+            base.order_by(AlertEvent.created_at.desc()).limit(limit).offset(offset)
         )
-        .scalars()
-        .all()
+    ).scalars().all()
+    return Page[AlertEventOut](
+        items=[
+            AlertEventOut(
+                id=e.id,
+                rule_id=e.rule_id,
+                machine_id=e.machine_id,
+                severity=e.severity,
+                message=e.message,
+                channels=e.channels or [],
+                delivered=e.delivered,
+                created_at=e.created_at,
+            )
+            for e in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
-    return [
-        AlertEventOut(
-            id=e.id,
-            rule_id=e.rule_id,
-            machine_id=e.machine_id,
-            severity=e.severity,
-            message=e.message,
-            channels=e.channels or [],
-            delivered=e.delivered,
-            created_at=e.created_at,
-        )
-        for e in rows
-    ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from app.db.session import get_db
 from app.schemas import (
     BulkTokenRequest,
     BulkTokenResponse,
+    Page,
     TokenCreateRequest,
     TokenCreateResponse,
     TokenListItem,
@@ -122,12 +123,16 @@ async def create_token(
     return TokenCreateResponse(token=token, install_command=command, expires_at=expires)
 
 
-@router.get("", response_model=list[TokenListItem])
+@router.get("", response_model=Page[TokenListItem])
 async def list_tokens(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
     org_id: uuid.UUID | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
+    from sqlalchemy import func as sa_func
+
     q = select(EnrollToken)
     visible = await visible_org_ids(db, admin)
     q = q.where(EnrollToken.org_id.in_(visible))
@@ -135,7 +140,11 @@ async def list_tokens(
         if str(org_id) not in visible:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền xem token của tổ chức này")
         q = q.where(EnrollToken.org_id == org_id)
-    rows = (await db.execute(q.order_by(EnrollToken.expires_at.desc()))).scalars().all()
+
+    total = (await db.execute(select(sa_func.count()).select_from(q.subquery()))).scalar_one()
+    rows = (
+        await db.execute(q.order_by(EnrollToken.expires_at.desc()).limit(limit).offset(offset))
+    ).scalars().all()
 
     # Lazy-expire: token còn "pending" nhưng đã quá hạn → đánh dấu expired để phễu
     # triển khai và KPI "token hết hạn" luôn đúng logic (không chờ enroll chạm vào).
@@ -150,19 +159,24 @@ async def list_tokens(
         for r in rows:  # refresh status sau commit
             await db.refresh(r)
 
-    return [
-        TokenListItem(
-            id=r.id,
-            full_name=r.full_name,
-            department=r.department,
-            email=r.email,
-            phone_masked=mask_phone(r.phone_encrypted),
-            status=TokenStatus(r.status),
-            expires_at=r.expires_at,
-            created_at=r.created_at if hasattr(r, "created_at") else r.expires_at,
-        )
-        for r in rows
-    ]
+    return Page[TokenListItem](
+        items=[
+            TokenListItem(
+                id=r.id,
+                full_name=r.full_name,
+                department=r.department,
+                email=r.email,
+                phone_masked=mask_phone(r.phone_encrypted),
+                status=TokenStatus(r.status),
+                expires_at=r.expires_at,
+                created_at=r.created_at if hasattr(r, "created_at") else r.expires_at,
+            )
+            for r in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("/revoke")

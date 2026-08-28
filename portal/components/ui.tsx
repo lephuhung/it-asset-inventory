@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Check, Copy, Loader2, X } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, Loader2, X } from "lucide-react";
 
 /* ── Badge ─────────────────────────────────────────────────── */
 
@@ -535,6 +535,107 @@ export function PageHeader({
         {description && <p className="mt-1 max-w-2xl text-sm leading-snug text-slate-500">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+
+/* ── Pagination ─────────────────────────────────────────────────── */
+
+/** Trả về response phân trang từ backend (`Page<T>` wrapper). */
+export interface PageResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Component phân trang — dùng cho table có nhiều dòng.
+ *  Props: `page` (offset/limit/total/items) + callback khi user đổi trang.
+ *  Hiển thị: "Tổng X · Trang N/M" + nút Trước/Sau + chọn trang nhảy nhanh. */
+export function Pagination({
+  page,
+  onChange,
+  className = "",
+}: {
+  page: PageResponse<unknown>;
+  onChange: (offset: number) => void;
+  className?: string;
+}) {
+  const { total, limit, offset } = page;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const currentPage = Math.floor(offset / limit) + 1;
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + limit, total);
+
+  const goTo = (newOffset: number) => {
+    const clamped = Math.max(0, Math.min(newOffset, (totalPages - 1) * limit));
+    if (clamped !== offset) onChange(clamped);
+  };
+
+  return (
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-xs text-slate-500 ${className}`}
+    >
+      <p>
+        Hiển thị <b className="text-slate-700">{from}–{to}</b> trong tổng số{" "}
+        <b className="text-slate-700">{total}</b> · Trang <b className="text-slate-700">{currentPage}/{totalPages}</b>
+      </p>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => goTo(0)}
+          disabled={offset === 0}
+          className="cursor-pointer rounded border border-slate-200 px-2 py-1 text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          title="Trang đầu"
+          aria-label="Trang đầu"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo(offset - limit)}
+          disabled={offset === 0}
+          className="cursor-pointer rounded border border-slate-200 px-2 py-1 text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          title="Trang trước"
+          aria-label="Trang trước"
+        >
+          <ChevronLeft className="size-3.5" />
+        </button>
+        <input
+          type="number"
+          min={1}
+          max={totalPages}
+          value={currentPage}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            if (Number.isFinite(v) && v >= 1 && v <= totalPages) goTo((v - 1) * limit);
+          }}
+          className="w-12 rounded border border-slate-200 px-1.5 py-1 text-center font-mono text-xs tabular-nums"
+          aria-label="Trang hiện tại"
+        />
+        <span className="text-slate-400">/ {totalPages}</span>
+        <button
+          type="button"
+          onClick={() => goTo(offset + limit)}
+          disabled={offset + limit >= total}
+          className="cursor-pointer rounded border border-slate-200 px-2 py-1 text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          title="Trang sau"
+          aria-label="Trang sau"
+        >
+          <ChevronRight className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => goTo((totalPages - 1) * limit)}
+          disabled={offset + limit >= total}
+          className="cursor-pointer rounded border border-slate-200 px-2 py-1 text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          title="Trang cuối"
+          aria-label="Trang cuối"
+        >
+          »
+        </button>
+      </div>
     </div>
   );
 }

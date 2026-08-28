@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ from app.api.deps import get_current_user, is_super_admin, require_admin, visibl
 from app.core.audit import append_audit
 from app.db.models import Organization, OrgType, User
 from app.db.session import get_db
-from app.schemas import OrganizationCreate, OrganizationNode, OrgMachineStat
+from app.schemas import OrganizationCreate, OrganizationNode, OrgMachineStat, Page
 
 router = APIRouter(prefix="/api/orgs", tags=["orgs"])
 
@@ -108,10 +108,12 @@ async def create_org(
     await db.commit()
     return _to_node(org)
 
-@router.get("/machine-stats", response_model=list[OrgMachineStat])
+@router.get("/machine-stats", response_model=Page[OrgMachineStat])
 async def org_machine_stats(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     """Thống kê số máy theo tổ chức — tách máy có agent (đã heartbeat ≥ 1 lần)
     và máy cách ly (chỉ có mặt qua import offline, không bao giờ heartbeat).
@@ -167,4 +169,11 @@ async def org_machine_stats(
             )
         )
     stats.sort(key=lambda s: s.org_name)
-    return stats
+    total = len(stats)
+    page_items = stats[offset : offset + limit]
+    return Page[OrgMachineStat](
+        items=page_items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

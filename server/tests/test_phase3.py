@@ -106,8 +106,8 @@ async def test_fingerprint_drift_approve(client, session_factory, seeded_env):
 
     r = await client.get("/api/drifts", headers=_auth(token))
     assert r.status_code == 200
-    assert len(r.json()) == 1
-    drift_id = r.json()[0]["id"]
+    assert len(r.json()["items"]) == 1
+    drift_id = r.json()["items"][0]["id"]
 
     r = await client.post(f"/api/drifts/{drift_id}/approve", json={}, headers=_auth(token))
     assert r.status_code == 200, r.text

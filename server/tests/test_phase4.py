@@ -44,7 +44,7 @@ async def test_api_key_lifecycle_and_public_endpoint(client, session_factory, se
     r = await client.get("/api/keys", headers=_auth(token))
     assert r.status_code == 200
     assert all("key" not in k for k in r.json())
-    assert any(k["id"] == key_id for k in r.json())
+    assert any(k["id"] == key_id for k in r.json()["items"])
 
     # Public endpoint dùng X-API-Key
     r = await client.get("/api/public/machines", headers={"X-API-Key": key})

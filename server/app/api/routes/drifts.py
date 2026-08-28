@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ from app.api.deps import get_current_user, require_admin, visible_org_ids
 from app.core.audit import append_audit
 from app.db.models import FingerprintDrift, Machine, User
 from app.db.session import get_db
-from app.schemas import FingerprintDriftOut, MachineDecision
+from app.schemas import FingerprintDriftOut, MachineDecision, Page
 from app.services.fingerprint import compute_weighted_id
 
 router = APIRouter(prefix="/api/drifts", tags=["drifts"])
@@ -38,20 +38,33 @@ async def _to_out(db: AsyncSession, d: FingerprintDrift) -> FingerprintDriftOut:
     )
 
 
-@router.get("", response_model=list[FingerprintDriftOut])
+@router.get("", response_model=Page[FingerprintDriftOut])
 async def list_drifts(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     status_filter: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     """Danh sách drift trong phạm vi quyền (máy thuộc org user + cấp dưới)."""
+    from sqlalchemy import func as sa_func
+
     visible = await visible_org_ids(db, user)
     q = select(FingerprintDrift).join(Machine, Machine.id == FingerprintDrift.machine_id)
     q = q.where(Machine.org_id.in_(visible))
     if status_filter:
         q = q.where(FingerprintDrift.status == status_filter)
-    rows = (await db.execute(q.order_by(FingerprintDrift.created_at.desc()))).scalars().all()
-    return [await _to_out(db, d) for d in rows]
+
+    total = (await db.execute(select(sa_func.count()).select_from(q.subquery()))).scalar_one()
+    rows = (
+        await db.execute(q.order_by(FingerprintDrift.created_at.desc()).limit(limit).offset(offset))
+    ).scalars().all()
+    return Page[FingerprintDriftOut](
+        items=[await _to_out(db, d) for d in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def _resolve(drift_id: uuid.UUID, decision: str, admin: User, db: AsyncSession) -> FingerprintDriftOut:

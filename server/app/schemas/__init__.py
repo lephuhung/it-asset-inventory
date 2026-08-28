@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -730,3 +731,26 @@ class OrgMachineStat(BaseModel):
     with_agent: int  # đã gửi heartbeat ít nhất 1 lần → đang cài agent
     isolated: int  # không bao giờ heartbeat → import offline (máy cách ly)
     pending: int  # chờ duyệt enroll — chưa thuộc nhóm nào
+
+
+# ── Pagination ────────────────────────────────────────────────
+
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """Response phân trang. Dùng cho mọi list endpoint có dữ liệu lớn.
+
+    - `items`: trang hiện tại (≤ limit)
+    - `total`: tổng số record khớp filter (frontend tính tổng số trang)
+    - `limit`: số record / trang (mặc định 50, max 200)
+    - `offset`: vị trí bắt đầu (mặc định 0)
+
+    Frontend dùng generic `<T>` để có type chính xác (vd `Page<MachineListItem>`).
+    """
+
+    items: list[T]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1, le=200)
+    offset: int = Field(ge=0)

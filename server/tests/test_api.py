@@ -116,7 +116,7 @@ async def test_full_enroll_heartbeat_inventory(client, seeded_env, session_facto
     r = await client.get("/api/machines", headers={"Authorization": f"Bearer {admin_token}"})
     assert r.status_code == 200, r.text
     machines = r.json()
-    assert any(m["machine_uuid"] for m in machines)
+    assert any(m["machine_uuid"] for m in machines["items"])
 
     r = await client.get(f"/api/machines/{machine_id}", headers={"Authorization": f"Bearer {admin_token}"})
     assert r.status_code == 200, r.text

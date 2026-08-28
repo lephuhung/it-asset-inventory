@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CalendarClock, ChevronRight, Ghost } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineListItem } from "@/lib/types";
+import type { PageResponse } from "@/components/ui";
 import {
   Badge,
   Card,
@@ -33,8 +34,8 @@ export default function GhostMachinesPage() {
 
   const load = useCallback(async () => {
     try {
-      const list = await api.get<MachineListItem[]>("/machines", { status: "lost" });
-      setMachines(list);
+      const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: "lost", limit: 50 });
+      setMachines(data.items);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được danh sách máy mất kết nối");

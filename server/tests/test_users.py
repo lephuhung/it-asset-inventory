@@ -55,7 +55,7 @@ async def test_create_and_list_user(client, seeded_env, session_factory):
     # List users — phải có
     r = await client.get("/api/users", headers=h)
     assert r.status_code == 200
-    emails = [u["email"] for u in r.json()]
+    emails = [u["email"] for u in r.json()["items"]]
     assert "admin2@test.gov.vn" in emails
 
     # Trùng email → 409

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronLeft, ChevronRight, RefreshCw, ScrollText, ShieldAlert, ShieldCheck } from "lucide-react";
+import { CheckCircle2, RefreshCw, ScrollText, ShieldAlert, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/types";
 import {
@@ -14,6 +14,7 @@ import {
   Field,
   Input,
   PageHeader,
+  Pagination,
   Select,
   Spinner,
   StatusDot,
@@ -60,11 +61,12 @@ export default function AuditPage() {
   const [verifyBusy, setVerifyBusy] = useState(false);
 
   const load = useCallback(
-    async (silent = false) => {
+    async (silent = false, overrideOffset?: number) => {
+      const useOffset = overrideOffset ?? offset;
       try {
         const res = await api.get<AuditPageResponse>("/audit", {
           limit: PAGE_SIZE,
-          offset,
+          offset: useOffset,
           action: action || undefined,
           actor: actor || undefined,
           q: q || undefined,
@@ -233,21 +235,13 @@ export default function AuditPage() {
           </div>
 
           {/* Phân trang */}
-          {total > PAGE_SIZE && (
-            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3">
-              <p className="text-xs text-slate-500">
-                {pageStart}–{pageEnd} / {total.toLocaleString("vi-VN")}
-              </p>
-              <div className="flex gap-2">
-                <Button variant="secondary" size="sm" disabled={offset === 0} onClick={() => setOffset((v) => Math.max(0, v - PAGE_SIZE))}>
-                  <ChevronLeft className="size-3.5" /> Trước
-                </Button>
-                <Button variant="secondary" size="sm" disabled={pageEnd >= total} onClick={() => setOffset((v) => v + PAGE_SIZE)}>
-                  Tiếp <ChevronRight className="size-3.5" />
-                </Button>
-              </div>
-            </div>
-          )}
+          <Pagination
+            page={{ items: data.items, total, limit: PAGE_SIZE, offset }}
+            onChange={(newOffset) => {
+              setOffset(newOffset);
+              void load(true, newOffset);
+            }}
+          />
 
           <p className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs text-slate-400">
             <CheckCircle2 className="size-3.5" />

@@ -17,6 +17,8 @@ import {
   IconButton,
   Input,
   Modal,
+  Pagination,
+  PageResponse,
   PageHeader,
   Select,
   Spinner,
@@ -31,6 +33,13 @@ import {
 /** API mở (#22, Phase 4) — quản lý API key (chỉ Super Admin). */
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [page, setPage] = useState<PageResponse<ApiKey>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
+  const [offset, setOffset] = useState(0);
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,16 +52,19 @@ export default function ApiKeysPage() {
   const [removing, setRemoving] = useState<ApiKey | null>(null);
   const [removeBusy, setRemoveBusy] = useState(false);
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false, overrideOffset?: number) => {
+    const useOffset = overrideOffset ?? offset;
     try {
-      setKeys(await api.get<ApiKey[]>("/keys"));
+      const data = await api.get<PageResponse<ApiKey>>("/keys", { limit: 50, offset: useOffset });
+      setKeys(data.items);
+      setPage(data);
       setError(null);
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách key");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   useEffect(() => {
     void load();
@@ -176,6 +188,13 @@ export default function ApiKeysPage() {
                   ))}
                 </tbody>
               </table>
+              <Pagination
+                page={page}
+                onChange={(newOffset) => {
+                  setOffset(newOffset);
+                  void load(true, newOffset);
+                }}
+              />
             </div>
           )}
         </Card>

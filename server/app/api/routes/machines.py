@@ -33,6 +33,7 @@ from app.schemas import (
     MachineDetail,
     MachineLifecycleUpdate,
     MachineListItem,
+    Page,
 )
 from app.services.phone_encryption import mask_phone
 
@@ -43,13 +44,15 @@ router = APIRouter(prefix="/api/machines", tags=["machines"])
 SESSION_GAP_SECONDS = 300
 
 
-@router.get("", response_model=list[MachineListItem])
+@router.get("", response_model=Page[MachineListItem])
 async def list_machines(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     org_id: uuid.UUID | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     visible = await visible_org_ids(db, user)
     if org_id and str(org_id) not in visible:
@@ -63,7 +66,18 @@ async def list_machines(
     if q:
         like = f"%{q}%"
         query = query.where(Machine.hostname.ilike(like) | Machine.machine_uuid.ilike(like))
-    rows = (await db.execute(query.order_by(Machine.enrolled_at.desc()))).scalars().all()
+
+    # Tổng số record trước khi áp limit/offset (cho frontend tính tổng số trang)
+    from sqlalchemy import func as sa_func
+    total = (await db.execute(
+        select(sa_func.count()).select_from(query.subquery())
+    )).scalar_one()
+
+    rows = (
+        await db.execute(
+            query.order_by(Machine.enrolled_at.desc()).limit(limit).offset(offset)
+        )
+    ).scalars().all()
     ids = [m.id for m in rows]
     # user Windows đang đăng nhập — lấy từ machine_current (snapshot mới nhất, có index PK)
     logged: dict[str, str | None] = {}
@@ -76,23 +90,28 @@ async def list_machines(
             )
         ).all()
         logged = {str(mid): lu for mid, lu in latest_rows}
-    return [
-        MachineListItem(
-            id=m.id,
-            hostname=m.hostname,
-            machine_uuid=m.machine_uuid,
-            status=m.status,
-            lifecycle=m.lifecycle,
-            is_vm=m.is_vm,
-            last_seen_at=m.last_seen_at,
-            enrolled_at=m.enrolled_at,
-            org_id=m.org_id,
-            assigned_user_id=m.assigned_user_id,
-            logged_user=logged.get(str(m.id)),
-            public_ip=m.public_ip,
-        )
-        for m in rows
-    ]
+    return Page[MachineListItem](
+        items=[
+            MachineListItem(
+                id=m.id,
+                hostname=m.hostname,
+                machine_uuid=m.machine_uuid,
+                status=m.status,
+                lifecycle=m.lifecycle,
+                is_vm=m.is_vm,
+                last_seen_at=m.last_seen_at,
+                enrolled_at=m.enrolled_at,
+                org_id=m.org_id,
+                assigned_user_id=m.assigned_user_id,
+                logged_user=logged.get(str(m.id)),
+                public_ip=m.public_ip,
+            )
+            for m in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/stats", response_model=dict)

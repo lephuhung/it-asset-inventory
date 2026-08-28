@@ -42,6 +42,8 @@ import {
   Modal,
   Badge,
   PageHeader,
+  Pagination,
+  PageResponse,
   Select,
   Spinner,
   StatusBadge,
@@ -80,6 +82,13 @@ function saveCommand(id: string, command: string) {
 export default function TokensPage() {
   const { user } = useAuth();
   const [tokens, setTokens] = useState<TokenListItem[]>([]);
+  const [page, setPage] = useState<PageResponse<TokenListItem>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
+  const [offset, setOffset] = useState(0);
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,12 +147,14 @@ export default function TokensPage() {
     setShowCreate(true);
   };
 
-  const loadTokens = useCallback(async (silent = false): Promise<TokenListItem[]> => {
+  const loadTokens = useCallback(async (silent = false, overrideOffset?: number): Promise<TokenListItem[]> => {
+    const useOffset = overrideOffset ?? offset;
     try {
-      const list = await api.get<TokenListItem[]>("/tokens");
-      setTokens(list);
+      const data = await api.get<PageResponse<TokenListItem>>("/tokens", { limit: 50, offset: useOffset });
+      setTokens(data.items);
+      setPage(data);
       setError(null);
-      return list;
+      return data.items;
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách token");
       return [];
@@ -167,7 +178,7 @@ export default function TokensPage() {
       .get<Organization[]>("/orgs")
       .then((list) => setOrgs(Array.isArray(list) ? list : []))
       .catch(() => setOrgs([]));
-  }, [loadTokens, loadLinks]);
+  }, [loadTokens, loadLinks, offset]);
 
   const createLink = async () => {
     setCreatingLink(true);
@@ -306,7 +317,7 @@ export default function TokensPage() {
         description="Sinh token 1-lần cho từng máy — người dùng chỉ cần paste 1 dòng lệnh vào PowerShell (chế độ A: admin nhập hộ)"
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => void loadTokens()} disabled={loading}>
+            <Button variant="secondary" size="sm" onClick={() => { setOffset(0); void loadTokens(false, 0); }} disabled={loading}>
               <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Nạp lại
             </Button>
             <Button size="sm" onClick={openCreate}>
@@ -439,6 +450,13 @@ export default function TokensPage() {
                   })}
                 </tbody>
               </table>
+              <Pagination
+                page={page}
+                onChange={(newOffset) => {
+                  setOffset(newOffset);
+                  void loadTokens(true, newOffset);
+                }}
+              />
               <p className="border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs text-slate-400">
                 Token có giá trị 1 lần, tự hủy sau khi enroll (agent chuyển sang mTLS client cert).
               </p>

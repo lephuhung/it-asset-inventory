@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { HardDriveDownload, Monitor, Wifi } from "lucide-react";
 import { api } from "@/lib/api";
-import { Badge, Card, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
+import { Badge, Card, ErrorBanner, PageHeader, PageResponse, Spinner } from "@/components/ui";
 import { ORG_TYPE_META } from "@/lib/format";
 
 /** Thống kê số máy theo tổ chức — máy có agent vs máy BMNN (Vận hành dữ liệu offline). */
@@ -32,7 +32,8 @@ export default function OrgMachineStatsPage() {
 
   const load = useCallback(async () => {
     try {
-      setStats(await api.get<OrgMachineStat[]>("/orgs/machine-stats"));
+      const data = await api.get<PageResponse<OrgMachineStat>>("/orgs/machine-stats", { limit: 50 });
+      setStats(data.items);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được thống kê theo tổ chức");

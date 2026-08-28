@@ -44,7 +44,7 @@ async def test_pending_token_expires_lazily(client, session_factory, seeded_env)
     # List → token quá hạn tự chuyển expired, token còn hạn vẫn pending
     r = await client.get("/api/tokens", headers=_auth(token))
     assert r.status_code == 200
-    by_name = {t["full_name"]: t["status"] for t in r.json()}
+    by_name = {t["full_name"]: t["status"] for t in r.json()["items"]}
     assert by_name["Còn hiệu lực"] == "pending"
     assert by_name["Quá hạn 5 phút"] == "expired"
 

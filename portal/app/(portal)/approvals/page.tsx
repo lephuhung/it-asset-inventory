@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CheckCircle2, ChevronRight, ClipboardCheck, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineListItem } from "@/lib/types";
+import type { PageResponse } from "@/components/ui";
 import {
   Badge,
   Button,
@@ -32,7 +33,8 @@ export default function ApprovalsPage() {
 
   const load = useCallback(async () => {
     try {
-      setMachines(await api.get<MachineListItem[]>("/machines", { status: "pending" }));
+      const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: "pending", limit: 50 });
+      setMachines(data.items);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được danh sách chờ duyệt");

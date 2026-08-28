@@ -8,6 +8,8 @@ import type { MachineListItem, MachineStatus, Organization } from "@/lib/types";
 import { useRealtime } from "@/components/realtime-context";
 import {
   Badge,
+  PageResponse,
+  Pagination,
   Button,
   Card,
   EmptyState,
@@ -42,6 +44,12 @@ export default function MachinesPage() {
   const { lastEvent } = useRealtime();
 
   const [machines, setMachines] = useState<MachineListItem[]>([]);
+  const [page, setPage] = useState<PageResponse<MachineListItem>>({
+    items: [],
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,16 +57,21 @@ export default function MachinesPage() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [orgId, setOrgId] = useState("");
+  const [offset, setOffset] = useState(0);
 
   const load = useCallback(
-    async (silent = false) => {
+    async (silent = false, overrideOffset?: number) => {
+      const useOffset = overrideOffset ?? offset;
       try {
-        const list = await api.get<MachineListItem[]>("/machines", {
+        const data = await api.get<PageResponse<MachineListItem>>("/machines", {
           q: q || undefined,
           status: status || undefined,
           org_id: orgId || undefined,
+          limit: 50,
+          offset: useOffset,
         });
-        setMachines(list);
+        setMachines(data.items);
+        setPage(data);
         setError(null);
       } catch (e) {
         if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách máy");
@@ -66,7 +79,7 @@ export default function MachinesPage() {
         setLoading(false);
       }
     },
-    [q, status, orgId],
+    [q, status, orgId, offset],
   );
 
   // Org list (admin toàn cục) — endpoint /api/orgs chưa có ở backend → ẩn bộ lọc khi thiếu.
@@ -148,7 +161,14 @@ export default function MachinesPage() {
             </Field>
           )}
           <div className="flex items-end self-end">
-            <Button variant="secondary" onClick={() => void load()} disabled={loading}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setOffset(0);
+                void load(false, 0);
+              }}
+              disabled={loading}
+            >
               Áp dụng
             </Button>
           </div>
@@ -229,6 +249,13 @@ export default function MachinesPage() {
               })}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            onChange={(newOffset) => {
+              setOffset(newOffset);
+              void load(true, newOffset);
+            }}
+          />
           {Object.keys(countByStatus).length > 0 && (
             <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
               {Object.entries(countByStatus).map(([s, n]) => (

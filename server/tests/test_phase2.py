@@ -47,7 +47,7 @@ async def test_alert_rule_crud(client, seeded_env):
 
     r = await client.get("/api/alert-rules", headers=_auth(token))
     assert r.status_code == 200
-    assert any(x["id"] == rule_id for x in r.json())
+    assert any(x["id"] == rule_id for x in r.json()["items"])
 
     r = await client.patch(
         f"/api/alert-rules/{rule_id}", json={"enabled": False}, headers=_auth(token)
@@ -96,7 +96,7 @@ async def test_alert_job_fires_and_no_duplicate(client, session_factory, seeded_
         assert events[0].message.startswith("Máy mới enroll")
         r = await client.get("/api/alert-rules/events", headers=_auth(token))
         assert r.status_code == 200
-        assert len(r.json()) >= 1
+        assert len(r.json()["items"]) >= 1
 
 
 # ── Self-service (chế độ B) ────────────────────────────────────
@@ -131,7 +131,7 @@ async def test_self_service_claim_flow(client, seeded_env):
 
     # Token xuất hiện trong phễu triển khai
     r = await client.get("/api/tokens", headers=_auth(token))
-    assert any(t["full_name"] == "Trần Thị B" for t in r.json())
+    assert any(t["full_name"] == "Trần Thị B" for t in r.json()["items"])
 
     # Link đã tắt → claim bị từ chối
     await client.patch(f"/api/self-service/links/{link_id}", json={"enabled": False}, headers=_auth(token))

@@ -12,6 +12,7 @@ import {
   EmptyState,
   ErrorBanner,
   PageHeader,
+  PageResponse,
   Spinner,
   TABLE,
   TABLE_WRAP,
@@ -77,7 +78,8 @@ export default function EolPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await api.get<MachineListItem[]>("/machines", { status: undefined });
+      const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: undefined, limit: 50 });
+      const list = data.items;
       const details = await fetchDetailsSequential(list);
       const mapped = details.map((d) => ({
         machine: d as MachineListItem,

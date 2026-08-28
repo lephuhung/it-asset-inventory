@@ -13,6 +13,7 @@ import {
   ErrorBanner,
   KpiCard,
   PageHeader,
+  PageResponse,
   Spinner,
   StatusDot,
   TABLE,
@@ -44,10 +45,10 @@ export default function DashboardPage() {
     try {
       const [s, m] = await Promise.all([
         api.get<StatsOverview>("/stats/overview"),
-        api.get<MachineListItem[]>("/machines"),
+        api.get<PageResponse<MachineListItem>>("/machines", { limit: 50 }),
       ]);
       setStats(s);
-      setRecent(m.slice(0, 10));
+      setRecent(m.items.slice(0, 10));
       setUpdatedAt(new Date());
       setError(null);
     } catch (e) {
