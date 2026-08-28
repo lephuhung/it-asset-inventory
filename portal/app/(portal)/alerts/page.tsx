@@ -179,9 +179,9 @@ export default function AlertsPage() {
           subtitle="Job quét chạy mỗi phút; mỗi rule + máy + ngày chỉ cảnh báo 1 lần"
           padded={false}
         >
-          {loading && rules.length === 0 ? (
+          {loading && (rules?.length ?? 0) === 0 ? (
             <Spinner />
-          ) : rules.length === 0 ? (
+          ) : (rules?.length ?? 0) === 0 ? (
             <EmptyState
               icon={<Bell className="size-10" />}
               title="Chưa có rule nào"
@@ -261,7 +261,7 @@ export default function AlertsPage() {
                 ))}
               </Select>
             </Field>
-            {orgs.length > 0 && (
+            {(orgs?.length ?? 0) > 0 && (
               <Field label="Phạm vi tổ chức" hint="Bỏ trống = toàn hệ thống (Super Admin)">
                 <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                   <option value="">— Toàn hệ thống —</option>
@@ -314,7 +314,7 @@ export default function AlertsPage() {
         subtitle={`${events.length} sự kiện gần nhất — gửi thành công qua kênh cấu hình hay chỉ ghi log`}
         padded={false}
       >
-        {events.length === 0 ? (
+        {(events?.length ?? 0) === 0 ? (
           <EmptyState icon={<BellRing className="size-10" />} title="Chưa có cảnh báo nào" description="Cảnh báo sẽ xuất hiện khi rule kích hoạt." />
         ) : (
           <div className={TABLE_WRAP}>

@@ -242,7 +242,7 @@ export default function TokensPage() {
 
   const importCsv = async () => {
     const items = parseCsv(csvText);
-    if (items.length === 0) {
+    if ((items?.length ?? 0) === 0) {
       setBulkError("Không có dòng dữ liệu hợp lệ (cần ít nhất 1 dòng: Họ tên,Phòng ban,…)");
       return;
     }
@@ -472,7 +472,7 @@ export default function TokensPage() {
           subtitle="Tạo link chung của tổ chức; người dùng tự nhập thông tin và nhận lệnh cài (mục 4.4)"
         >
           <div className="flex flex-wrap items-end gap-3">
-            {orgs.length > 0 && (
+            {(orgs?.length ?? 0) > 0 && (
               <Field label="Tổ chức" className="min-w-48 flex-1">
                 <Select value={linkOrgId} onChange={(e) => setLinkOrgId(e.target.value)}>
                   {flattenOrgTree(orgs).map(({ org, depth }) => {
@@ -493,7 +493,7 @@ export default function TokensPage() {
           </div>
           {linkError && <p className="mt-2 text-sm text-rose-600">{linkError}</p>}
 
-          {links.length > 0 && (
+          {(links?.length ?? 0) > 0 && (
             <ul className="mt-4 divide-y divide-slate-100">
               {links.map((l) => (
                 <li key={l.id} className="flex flex-wrap items-center gap-2 py-2.5">
@@ -545,7 +545,7 @@ export default function TokensPage() {
           subtitle="Triển khai đợt lớn: 1 dòng = 1 người = 1 token (tối đa 500 dòng/lần)"
         >
           <div className="grid gap-3 sm:grid-cols-2">
-            {orgs.length > 0 && (
+            {(orgs?.length ?? 0) > 0 && (
               <Field label="Tổ chức">
                 <Select value={csvOrgId} onChange={(e) => setCsvOrgId(e.target.value)}>
                   {flattenOrgTree(orgs).map(({ org, depth }) => {
@@ -723,7 +723,7 @@ export default function TokensPage() {
         }
       >
         <form id="token-create-form" onSubmit={create} className="space-y-4">
-          {orgs.length > 0 && (
+          {(orgs?.length ?? 0) > 0 && (
             <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)" required hint="Token kế thừa tổ chức — máy enroll sẽ thuộc tổ chức này">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 {flattenOrgTree(orgs).map(({ org, depth }) => {

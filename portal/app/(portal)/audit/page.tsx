@@ -179,7 +179,7 @@ export default function AuditPage() {
 
       {loading && !data ? (
         <Spinner label="Đang tải audit log…" />
-      ) : !data || data.items.length === 0 ? (
+      ) : !data || (data.items?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<ScrollText className="size-10" />}
           title="Không có bản ghi audit khớp bộ lọc"

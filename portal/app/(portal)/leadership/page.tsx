@@ -104,7 +104,7 @@ export default function LeadershipPage() {
         const to = (acc / total) * 100;
         return `${STATUS_CHART[status]} ${from}% ${to}%`;
       });
-    return stops.length > 0
+    return (stops?.length ?? 0) > 0
       ? `conic-gradient(${stops.join(", ")})`
       : `conic-gradient(var(--color-slate-100) 0% 100%)`;
   }, [machines, statusCounts]);
@@ -197,7 +197,7 @@ export default function LeadershipPage() {
             <ul className="min-w-0 flex-1 space-y-2">
               {statusCounts.map(({ status, count }) => {
                 const meta = MACHINE_STATUS_META[status];
-                const pct = machines.length > 0 ? Math.round((count / machines.length) * 100) : 0;
+                const pct = (machines?.length ?? 0) > 0 ? Math.round((count / machines.length) * 100) : 0;
                 return (
                   <li key={status} className="flex items-center gap-2 text-sm">
                     <StatusDot className={`shrink-0 ${meta.dot}`} />
@@ -219,7 +219,7 @@ export default function LeadershipPage() {
           padded={false}
         >
           <div className="space-y-3.5 p-5">
-            {perOrg.length === 0 && <p className="text-sm text-slate-500">Chưa có dữ liệu máy.</p>}
+            {(perOrg?.length ?? 0) === 0 && <p className="text-sm text-slate-500">Chưa có dữ liệu máy.</p>}
             {perOrg.map((p) => {
               // Mỗi bar luôn đầy 100% — segment chiếm đúng tỉ lệ trong tổng của org đó
               const seg = (n: number) => `${p.total > 0 ? (n / p.total) * 100 : 0}%`;
@@ -241,7 +241,7 @@ export default function LeadershipPage() {
                 </div>
               );
             })}
-            {perOrg.length > 0 && (
+            {(perOrg?.length ?? 0) > 0 && (
               <div className="flex flex-wrap gap-4 pt-1 text-xs text-slate-500">
                 <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-emerald-500" /> Online</span>
                 <span className="inline-flex items-center gap-1.5"><StatusDot className="bg-slate-400" /> Tạm ngừng</span>

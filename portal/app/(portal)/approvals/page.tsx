@@ -77,9 +77,9 @@ export default function ApprovalsPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {loading && machines.length === 0 ? (
+      {loading && (machines?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải…" />
-      ) : machines.length === 0 ? (
+      ) : (machines?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<ClipboardCheck className="size-10" />}
           title="Không có máy nào chờ duyệt"

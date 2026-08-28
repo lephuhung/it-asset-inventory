@@ -144,7 +144,7 @@ export default function MachinesPage() {
               ))}
             </Select>
           </Field>
-          {orgs.length > 0 && (
+          {(orgs?.length ?? 0) > 0 && (
             <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Tất cả</option>
@@ -173,7 +173,7 @@ export default function MachinesPage() {
             </Button>
           </div>
         </div>
-        {user?.role === "super_admin" && orgs.length === 0 && (
+        {user?.role === "super_admin" && (orgs?.length ?? 0) === 0 && (
           <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
             Chưa có tổ chức nào — thêm UBND cấp xã / Sở ban ngành tại mục "Cây tổ chức".
           </p>
@@ -182,9 +182,9 @@ export default function MachinesPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {loading && machines.length === 0 ? (
+      {loading && (machines?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải danh sách máy…" />
-      ) : machines.length === 0 ? (
+      ) : (machines?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<Monitor className="size-10" />}
           title="Không có máy nào khớp bộ lọc"

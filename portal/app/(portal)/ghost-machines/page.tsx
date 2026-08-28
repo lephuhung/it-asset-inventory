@@ -88,9 +88,9 @@ export default function GhostMachinesPage() {
         ))}
       </div>
 
-      {loading && machines.length === 0 ? (
+      {loading && (machines?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải danh sách máy mất kết nối…" />
-      ) : machines.length === 0 ? (
+      ) : (machines?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<Ghost className="size-10" />}
           title="Không có máy mất kết nối nào"

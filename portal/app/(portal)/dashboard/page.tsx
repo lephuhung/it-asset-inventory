@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 }
                 padded={false}
               >
-                {recent.length === 0 ? (
+                {(recent?.length ?? 0) === 0 ? (
                   <EmptyState
                     icon={<Monitor className="size-10" />}
                     title="Chưa có máy nào"
@@ -216,7 +216,7 @@ export default function DashboardPage() {
               }
               padded={false}
             >
-              {events.length === 0 ? (
+              {(events?.length ?? 0) === 0 ? (
                 <EmptyState
                   icon={<Timer className="size-10" />}
                   title="Chưa có sự kiện"

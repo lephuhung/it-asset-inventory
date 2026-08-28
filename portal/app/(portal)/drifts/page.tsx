@@ -100,9 +100,9 @@ export default function DriftsPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {loading && drifts.length === 0 ? (
+      {loading && (drifts?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải…" />
-      ) : visible.length === 0 ? (
+      ) : (visible?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<Fingerprint className="size-10" />}
           title="Không có drift nào"

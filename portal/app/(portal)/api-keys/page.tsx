@@ -134,9 +134,9 @@ export default function ApiKeysPage() {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2" title="Danh sách key" padded={false}>
-          {loading && keys.length === 0 ? (
+          {loading && (keys?.length ?? 0) === 0 ? (
             <Spinner />
-          ) : keys.length === 0 ? (
+          ) : (keys?.length ?? 0) === 0 ? (
             <EmptyState
               icon={<KeyRound className="size-10" />}
               title="Chưa có API key nào"
@@ -204,7 +204,7 @@ export default function ApiKeysPage() {
             <Field label="Tên hệ thống tích hợp" required>
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Hệ thống báo cáo tổng hợp" required />
             </Field>
-            {orgs.length > 0 && (
+            {(orgs?.length ?? 0) > 0 && (
               <Field label="Phạm vi" hint="Bỏ trống = toàn hệ thống (chỉ Super Admin)">
                 <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                   <option value="">— Toàn hệ thống —</option>

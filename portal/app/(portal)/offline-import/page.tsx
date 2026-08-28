@@ -151,7 +151,7 @@ export default function OfflineImportPage() {
       try {
         const users = await api.get<ManagedUser[]>(`/users?org_id=${result.org_id}`);
         setExistingUsers(users);
-        if (!result.assigned_user_id && users.length > 0) {
+        if (!result.assigned_user_id && (users?.length ?? 0) > 0) {
           setSelectedUserId(users[0].id);
         }
       } catch (err) {
@@ -442,7 +442,7 @@ export default function OfflineImportPage() {
 
                   {assignMode === "existing" ? (
                     <div className="space-y-3">
-                      {existingUsers.length === 0 ? (
+                      {(existingUsers?.length ?? 0) === 0 ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                           <Info className="mt-0.5 size-3.5 shrink-0" />
                           <span>

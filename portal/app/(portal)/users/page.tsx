@@ -184,9 +184,9 @@ export default function UsersPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {loading && users.length === 0 ? (
+      {loading && (users?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải danh sách tài khoản…" />
-      ) : users.length === 0 ? (
+      ) : (users?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<UserCog className="size-10" />}
           title="Chưa có tài khoản nào"
@@ -365,7 +365,7 @@ export default function UsersPage() {
         footer={
           <>
             <Button variant="secondary" onClick={() => setResetUser(null)}>Hủy</Button>
-            <Button loading={resetBusy} disabled={resetPass.length < 8} onClick={() => void doResetPassword()}>
+            <Button loading={resetBusy} disabled={(resetPass?.length ?? 0) < 8} onClick={() => void doResetPassword()}>
               <KeyRound className="size-4" /> Xác nhận đặt lại
             </Button>
           </>

@@ -124,9 +124,9 @@ export default function EolPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {loading && rows.length === 0 ? (
+      {loading && (rows?.length ?? 0) === 0 ? (
         <Spinner label="Đang thu thập cấu hình máy (nạp chi tiết từng máy)…" />
-      ) : rows.length === 0 ? (
+      ) : (rows?.length ?? 0) === 0 ? (
         <EmptyState
           icon={<CalendarClock className="size-10" />}
           title="Chưa có dữ liệu cấu hình"

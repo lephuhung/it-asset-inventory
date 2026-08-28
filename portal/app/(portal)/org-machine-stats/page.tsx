@@ -76,7 +76,7 @@ export default function OrgMachineStatsPage() {
   }, [overall]);
 
   const donutGradient =
-    donutSlices.length > 0
+    (donutSlices?.length ?? 0) > 0
       ? `conic-gradient(${donutSlices.map((s) => `${s.color} ${s.from}% ${s.to}%`).join(", ")})`
       : "conic-gradient(var(--color-slate-100) 0% 100%)";
 
