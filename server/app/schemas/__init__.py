@@ -676,6 +676,15 @@ class UserResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    """Người dùng đổi mật khẩu của chính mình (không phải admin reset).
+    Bắt buộc cung cấp mật khẩu hiện tại để chống chiếm đoạt phiên (VD khi
+    máy bị mất/khoá nhưng vẫn có cookie hợp lệ)."""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
 # ── Cấu hình agent (portal Vận hành → Cấu hình Agent) ───────────
 
 

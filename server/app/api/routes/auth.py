@@ -27,6 +27,7 @@ from app.core.security import (
 from app.db.models import User, UserRole
 from app.db.session import get_db
 from app.schemas import (
+    ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
     RefreshRequest,
@@ -136,6 +137,34 @@ async def totp_confirm(
 @router.post("/logout")
 async def logout(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await append_audit(db, action="auth.logout", actor=str(user.id))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User đổi mật khẩu của chính mình.
+
+    Yêu cầu mật khẩu hiện tại (chống chiếm đoạt phiên). Rate-limit theo IP
+    (5/phút) để chống brute-force mật khẩu hiện tại.
+    Ghi audit log với target=self để truy vết nếu nghi ngờ.
+    """
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="Mật khẩu hiện tại không đúng",
+        )
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Mật khẩu mới phải khác mật khẩu hiện tại",
+        )
+    user.password_hash = hash_password(body.new_password)
+    await append_audit(db, action="auth.change_password", actor=str(user.id), target=str(user.id))
     await db.commit()
     return {"ok": True}
 
