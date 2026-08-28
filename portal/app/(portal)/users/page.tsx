@@ -193,7 +193,7 @@ export default function UsersPage() {
           description="Tạo tài khoản đầu tiên bằng nút 'Tạo tài khoản'."
         />
       ) : (
-        <Card padded={false} title={`${users.length} tài khoản`}>
+        <Card padded={false} title={`${users?.length ?? 0} tài khoản`}>
           <div className={TABLE_WRAP}>
             <table className={TABLE}>
               <thead className={THEAD}>

@@ -136,7 +136,7 @@ export default function EolPage() {
         <>
           <EolSummary {...summary} />
           <Card
-            title={`Danh sách chi tiết (${rows.length} máy)`}
+            title={`Danh sách chi tiết (${rows?.length ?? 0} máy)`}
             subtitle={generatedAt ? `Tính lúc ${generatedAt}` : undefined}
             padded={false}
           >

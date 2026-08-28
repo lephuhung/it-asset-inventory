@@ -114,7 +114,7 @@ export default function MachinesPage() {
     <div>
       <PageHeader
         title="Danh sách máy"
-        description={`${machines.length} máy trong phạm vi quản lý`}
+        description={`${machines?.length ?? 0} máy trong phạm vi quản lý`}
         actions={
           <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Làm mới

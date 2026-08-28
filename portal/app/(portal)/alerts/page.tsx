@@ -311,7 +311,7 @@ export default function AlertsPage() {
       <Card
         className="mt-6"
         title="Lịch sử cảnh báo"
-        subtitle={`${events.length} sự kiện gần nhất — gửi thành công qua kênh cấu hình hay chỉ ghi log`}
+        subtitle={`${events?.length ?? 0} sự kiện gần nhất — gửi thành công qua kênh cấu hình hay chỉ ghi log`}
         padded={false}
       >
         {(events?.length ?? 0) === 0 ? (
