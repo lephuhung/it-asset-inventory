@@ -38,3 +38,6 @@ deploy/certs/*
 *.db
 *.sqlite
 *.sqlite3
+
+# ── Runtime logs (chứa JWT/nhạy cảm — không đẩy lên repo) ──
+server/uvicorn.log
