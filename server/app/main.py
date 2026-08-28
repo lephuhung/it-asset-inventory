@@ -66,6 +66,15 @@ limiter = Limiter(key_func=get_remote_address)
 async def lifespan(app: FastAPI):
     _configure_logging()
 
+    # Fail-fast nếu DB chưa migrate — bắt lỗi `UndefinedColumnError` 500 từ code
+    # mới truy vấn cột mới trong khi migration chưa chạy. Bỏ qua trong test env
+    # (conftest tự tạo schema bằng Base.metadata.create_all, không qua alembic).
+    if settings.app_env != "test":
+        from app.core.migrations import assert_schema_at_head
+        from app.db.session import engine as db_engine
+
+        await assert_schema_at_head(db_engine)
+
     # Seed admin + danh sách tổ chức cấp tỉnh (UBND xã, Sở ban ngành) khi khởi động (dev/khởi tạo)
     if settings.app_env in ("dev", "test"):
         from app.db.seed_orgs import seed_all
