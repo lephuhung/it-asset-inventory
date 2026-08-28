@@ -161,7 +161,7 @@ export default function TokensPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   const loadLinks = useCallback(async () => {
     try {
@@ -368,9 +368,9 @@ export default function TokensPage() {
           subtitle="Trạng thái token — dữ liệu sống từ lúc phát lệnh"
           padded={false}
         >
-          {loading && tokens.length === 0 ? (
+          {loading && (tokens?.length ?? 0) === 0 ? (
             <Spinner />
-          ) : tokens.length === 0 ? (
+          ) : (tokens?.length ?? 0) === 0 ? (
             <EmptyState
               icon={<Ticket className="size-10" />}
               title="Chưa có token nào"
