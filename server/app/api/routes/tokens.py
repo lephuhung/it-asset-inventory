@@ -33,11 +33,15 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """Lệnh cài 1 dòng: tải MSI → verify SHA256 → msiexec silent.
 
     KHÔNG dùng pattern `powershell -EP Bypass -c "irm ... | iex"` — Defender ML
-    gắn cờ pattern download-and-execute (Trojan:Win32/Commando.A!ml). Dạng này:
-    tải file xuống đĩa + verify SHA256 + msiexec (thao tác chuẩn của admin).
+    gắn cờ pattern download-and-execute (Trojan:Win32/Commando.A!ml).
+
+    Dùng `-EncodedCommand` (base64 UTF-16LE): copy-paste vào cmd.exe HAY PowerShell
+    đều chạy đúng — không bị shell bóc dấu nháy (cmd bóc `"`, còn `'...'` thì
+    PowerShell chỉ in ra string mà KHÔNG thực thi — lỗi đã gặp thực tế).
     """
-    return (
-        "powershell -NoProfile -c '"
+    import base64
+
+    script = (
         f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
         f'$m="$env:TEMP\\agent-$t.msi";'
@@ -46,8 +50,9 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
         f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
         f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
-        "'"
     )
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return f"powershell -NoProfile -EncodedCommand {encoded}"
 
 
 @router.post("/bulk", response_model=BulkTokenResponse)
