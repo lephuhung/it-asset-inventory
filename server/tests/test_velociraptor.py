@@ -413,3 +413,433 @@ async def test_create_hunt_rejects_non_allowlisted_artifact(client, seeded_env):
     )
     assert r.status_code == 403
     assert "allowlist" in r.json()["detail"].lower()
+
+
+# ── Top 10 DFIR events (client methods + service + routes) ──────
+
+
+def test_velociraptor_client_find_latest_finished_flow() -> None:
+    """find_latest_finished_flow: flow FINISHED mới nhất có artifact (mới nhất trước)."""
+    from app.services.velociraptor import VelociraptorClient
+
+    def handler(req: httpx.Request) -> Any:
+        assert req.url.path == "/api/v1/GetClientFlows"
+        # ⚠️ Velociraptor GetClientFlows dùng `rows` (không phải `limit`) —
+        # nếu dùng `limit` chỉ trả về 1 flow mới nhất (default rows=1)
+        assert "rows=" in str(req.url), "GetClientFlows phải truyền param rows="
+        assert "limit=" not in str(req.url)
+        return {
+            "columns": ["State", "FlowId", "Artifacts", "Rows"],
+            "rows": [
+                {"json": json.dumps(["RUNNING", "F.999", ["Windows.System.Pslist"], 0])},
+                {"json": json.dumps(["FINISHED", "F.111", ["Windows.Forensics.Prefetch"], 4])},
+                {"json": json.dumps(["FINISHED", "F.222", ["Windows.Network.Netstat", "Windows.System.Pslist"], 2])},
+            ],
+        }
+
+    transport = _build_mock_transport(handler)
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+
+    async def run() -> tuple[dict | None, dict | None, dict | None]:
+        async with client as c:
+            pslist = await c.find_latest_finished_flow("C.aaa111", "Windows.System.Pslist")
+            prefetch = await c.find_latest_finished_flow("C.aaa111", "Windows.Forensics.Prefetch")
+            never = await c.find_latest_finished_flow("C.aaa111", "Windows.NTFS.MFT")
+            return pslist, prefetch, never
+
+    import asyncio
+
+    pslist, prefetch, never = asyncio.run(run())
+    assert pslist is not None and pslist["FlowId"] == "F.222"  # bỏ qua F.999 (RUNNING)
+    assert prefetch is not None and prefetch["FlowId"] == "F.111"
+    assert never is None
+
+
+def test_velociraptor_client_get_table_parses_rows() -> None:
+    """get_table: GET /GetTable với artifact + rows → list dict (zip columns)."""
+    from app.services.velociraptor import VelociraptorClient
+
+    def handler(req: httpx.Request) -> Any:
+        assert req.url.path == "/api/v1/GetTable"
+        assert "artifact=Windows.Forensics.Prefetch" in str(req.url)
+        assert "rows=50" in str(req.url)
+        return {
+            "columns": ["Executable", "RunCount", "ModificationTime"],
+            "rows": [
+                {"json": json.dumps(["chrome.exe", 5, "2026-08-01T08:00:00Z"])},
+                {"json": json.dumps(["cmd.exe", 3, "2026-07-01T08:00:00Z"])},
+            ],
+            "total_rows": 2,
+        }
+
+    transport = _build_mock_transport(handler)
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+
+    async def run() -> list[dict]:
+        async with client as c:
+            return await c.get_table("C.aaa111", "F.111", "Windows.Forensics.Prefetch", rows=50)
+
+    import asyncio
+
+    rows = asyncio.run(run())
+    assert rows == [
+        {"Executable": "chrome.exe", "RunCount": 5, "ModificationTime": "2026-08-01T08:00:00Z"},
+        {"Executable": "cmd.exe", "RunCount": 3, "ModificationTime": "2026-07-01T08:00:00Z"},
+    ]
+
+
+def test_velociraptor_client_collect_artifact_and_wait(monkeypatch) -> None:
+    """collect_artifact_and_wait: CollectArtifact → poll GetFlowDetails tới FINISHED."""
+    from app.services.velociraptor import VelociraptorClient
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.velociraptor.asyncio.sleep", no_sleep)
+
+    details_calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> Any:
+        if req.url.path == "/api/v1/CollectArtifact":
+            return {"flow_id": "F.777"}
+        if req.url.path == "/api/v1/GetFlowDetails":
+            details_calls["n"] += 1
+            state = "FINISHED" if details_calls["n"] >= 2 else "RUNNING"
+            return {"context": {"state": state}}
+        raise AssertionError(f"unexpected path: {req.url.path}")
+
+    transport = _build_mock_transport(handler)
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+
+    async def run() -> str:
+        async with client as c:
+            return await c.collect_artifact_and_wait("C.aaa111", "Windows.System.Pslist")
+
+    import asyncio
+
+    assert asyncio.run(run()) == "F.777"
+    assert details_calls["n"] >= 2
+
+
+def test_velociraptor_client_collect_artifact_and_wait_timeout(monkeypatch) -> None:
+    """collect_artifact_and_wait: quá timeout mà flow chưa FINISHED → VelociraptorError."""
+    import asyncio
+
+    import pytest as _pytest
+
+    from app.services.velociraptor import VelociraptorClient, VelociraptorError
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.velociraptor.asyncio.sleep", no_sleep)
+
+    def handler(req: httpx.Request) -> Any:
+        if req.url.path == "/api/v1/CollectArtifact":
+            return {"flow_id": "F.999"}
+        if req.url.path == "/api/v1/GetFlowDetails":
+            return {"context": {"state": "RUNNING"}}
+        raise AssertionError(f"unexpected path: {req.url.path}")
+
+    transport = _build_mock_transport(handler)
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+
+    async def run() -> str:
+        async with client as c:
+            return await c.collect_artifact_and_wait(
+                "C.aaa111", "Windows.System.Pslist", timeout_seconds=0.01
+            )
+
+    with _pytest.raises(VelociraptorError, match="Timeout"):
+        asyncio.run(run())
+
+
+def test_extract_top10_service_reuses_and_sorts() -> None:
+    """extract_top10: tái sử dụng flow FINISHED + sort Prefetch ModificationTime desc."""
+    import asyncio
+
+    from app.services.velociraptor_top10 import extract_top10
+
+    class FakeVelo:
+        async def list_client_flows(self, client_id, limit=50):
+            return [
+                {"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"]},
+                {"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"]},
+            ]
+
+        async def get_table(self, client_id, flow_id, artifact, rows=100):
+            if artifact == "Windows.Forensics.Prefetch":
+                return [
+                    {"Executable": "old.exe", "ModificationTime": "2026-01-01T00:00:00Z"},
+                    {"Executable": "new.exe", "ModificationTime": "2026-08-01T00:00:00Z"},
+                ]
+            if artifact == "Windows.Network.Netstat":
+                return [{"Pid": 1234, "Name": "svchost.exe", "Status": "LISTEN"}]
+            return []
+
+    result = asyncio.run(extract_top10(FakeVelo(), "C.aaa111", collect_missing=False))
+    by_name = {a["artifact"]: a for a in result["artifacts"]}
+
+    pref = by_name["Windows.Forensics.Prefetch"]
+    assert pref["source"] == "reused"
+    assert pref["flow_id"] == "F.111"
+    # Sort desc theo ModificationTime → new.exe lên trước
+    assert [r["Executable"] for r in pref["rows"]] == ["new.exe", "old.exe"]
+    assert pref["total_rows"] == 2
+
+    assert by_name["Windows.Network.Netstat"]["source"] == "reused"
+    assert by_name["Windows.System.Pslist"]["source"] == "missing"
+    assert by_name["Windows.System.Pslist"]["rows"] == []
+    assert len(result["flows"]) == 2
+
+
+def test_extract_top10_service_collects_missing() -> None:
+    """extract_top10 với collect_missing=True: collect artifact chưa có flow FINISHED."""
+    import asyncio
+
+    from app.services.velociraptor_top10 import extract_top10
+
+    class FakeVelo:
+        def __init__(self) -> None:
+            self.collected: list[str] = []
+
+        async def list_client_flows(self, client_id, limit=50):
+            return [{"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Network.Netstat"]}]
+
+        async def collect_artifact_and_wait(self, client_id, artifact, timeout_seconds=90):
+            self.collected.append(artifact)
+            return f"F.{artifact.split('.')[-1]}"
+
+        async def get_table(self, client_id, flow_id, artifact, rows=100):
+            return [{"Executable": "collected.exe", "ModificationTime": "2026-08-01T00:00:00Z"}]
+
+    velo = FakeVelo()
+    result = asyncio.run(extract_top10(velo, "C.aaa111", collect_missing=True))
+    by_name = {a["artifact"]: a for a in result["artifacts"]}
+
+    assert by_name["Windows.Forensics.Prefetch"]["source"] == "collected"
+    assert by_name["Windows.Forensics.Prefetch"]["rows"][0]["Executable"] == "collected.exe"
+    assert by_name["Windows.System.Pslist"]["source"] == "collected"
+    assert by_name["Windows.Network.Netstat"]["source"] == "reused"  # đã có, không collect lại
+    assert set(velo.collected) == {"Windows.Forensics.Prefetch", "Windows.System.Pslist"}
+
+
+def test_collect_missing_top10_allowlist_gating() -> None:
+    """collect_missing_top10: artifact ngoài allowlist → status not_allowed, không collect."""
+    import asyncio
+
+    from app.services.velociraptor_top10 import collect_missing_top10
+
+    class FakeVelo:
+        def __init__(self) -> None:
+            self.collected: list[str] = []
+
+        async def list_client_flows(self, client_id, limit=50):
+            return [{"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"]}]
+
+        async def collect_artifact(self, client_id, artifacts):
+            self.collected.extend(artifacts)
+            return f"F.{artifacts[0].split('.')[-1]}"
+
+    velo = FakeVelo()
+    result = asyncio.run(
+        collect_missing_top10(velo, "C.aaa111", allowlist=["Windows.Network.Netstat", "Windows.System.Pslist"])
+    )
+    by_name = {a["artifact"]: a for a in result["artifacts"]}
+
+    assert by_name["Windows.Network.Netstat"]["status"] == "reused"
+    assert by_name["Windows.System.Pslist"]["status"] == "collecting"
+    assert by_name["Windows.Forensics.Prefetch"]["status"] == "not_allowed"
+    assert velo.collected == ["Windows.System.Pslist"]  # Prefetch KHÔNG bị collect
+
+
+# ── API route tests: Top 10 ──────────────────────────────────
+
+
+async def _login_admin(client, seeded_env) -> str:
+    sa = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    return sa.json()["access_token"]
+
+
+async def test_get_top10_reuses_finished_flows(client, seeded_env):
+    """GET /clients/{id}/top10 — tái sử dụng flow FINISHED, Prefetch sort desc."""
+    from app.services import velociraptor as vmod
+
+    tok = await _login_admin(client, seeded_env)
+    await client.put(
+        "/api/admin/velociraptor/config",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={
+            "enabled": True,
+            "server_url": "https://veloci.test",
+            "username": "admin",
+            "password": "tok",
+            "allowlist": ["Windows.Forensics.Prefetch", "Windows.Network.Netstat", "Windows.System.Pslist"],
+        },
+    )
+
+    flows = [
+        {"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"], "Rows": 2},
+        {"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"], "Rows": 1},
+    ]
+
+    async def fake_list_flows(self, client_id, limit=50):
+        return flows
+
+    async def fake_get_table(self, client_id, flow_id, artifact, rows=100):
+        if flow_id == "F.111":
+            return [
+                {"Executable": "chrome.exe", "ModificationTime": "2026-07-01T08:00:00Z"},
+                {"Executable": "cmd.exe", "ModificationTime": "2026-08-01T08:00:00Z"},
+            ]
+        if flow_id == "F.222":
+            return [{"Pid": 1234, "Name": "svchost.exe", "Status": "LISTEN"}]
+        return []
+
+    orig_flows, orig_table = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.get_table
+    vmod.VelociraptorClient.list_client_flows = fake_list_flows
+    vmod.VelociraptorClient.get_table = fake_get_table
+    try:
+        r = await client.get(
+            "/api/admin/velociraptor/clients/C.aaa111/top10",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+    finally:
+        vmod.VelociraptorClient.list_client_flows = orig_flows
+        vmod.VelociraptorClient.get_table = orig_table
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["client_id"] == "C.aaa111"
+    by_name = {a["artifact"]: a for a in data["artifacts"]}
+
+    pref = by_name["Windows.Forensics.Prefetch"]
+    assert pref["source"] == "reused"
+    assert pref["flow_id"] == "F.111"
+    assert [row["Executable"] for row in pref["rows"]] == ["cmd.exe", "chrome.exe"]
+
+    assert by_name["Windows.Network.Netstat"]["source"] == "reused"
+    assert by_name["Windows.System.Pslist"]["source"] == "missing"
+    assert by_name["Windows.System.Pslist"]["rows"] == []
+    # Top flows kèm theo
+    assert len(data["flows"]) == 2
+
+
+async def test_post_top10_collect_gates_allowlist(client, seeded_env):
+    """POST /clients/{id}/top10/collect — allowlist gate + kick-off collect missing."""
+    from app.services import velociraptor as vmod
+
+    tok = await _login_admin(client, seeded_env)
+    await client.put(
+        "/api/admin/velociraptor/config",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={
+            "enabled": True,
+            "server_url": "https://veloci.test",
+            "username": "admin",
+            "password": "tok",
+            # Prefetch KHÔNG nằm trong allowlist ở test này
+            "allowlist": ["Windows.Network.Netstat", "Windows.System.Pslist"],
+        },
+    )
+
+    collected: list[str] = []
+
+    async def fake_list_flows(self, client_id, limit=50):
+        return [{"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"]}]
+
+    async def fake_collect(self, client_id, artifacts):
+        collected.extend(artifacts)
+        return f"F.{artifacts[0].split('.')[-1]}"
+
+    orig_flows, orig_collect = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.collect_artifact
+    vmod.VelociraptorClient.list_client_flows = fake_list_flows
+    vmod.VelociraptorClient.collect_artifact = fake_collect
+    try:
+        r = await client.post(
+            "/api/admin/velociraptor/clients/C.aaa111/top10/collect",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+    finally:
+        vmod.VelociraptorClient.list_client_flows = orig_flows
+        vmod.VelociraptorClient.collect_artifact = orig_collect
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    by_name = {a["artifact"]: a for a in data["artifacts"]}
+
+    assert by_name["Windows.Network.Netstat"]["status"] == "reused"
+    assert by_name["Windows.System.Pslist"]["status"] == "collecting"
+    assert by_name["Windows.Forensics.Prefetch"]["status"] == "not_allowed"
+    # Chỉ Pslist được collect (Prefetch bị chặn bởi allowlist)
+    assert collected == ["Windows.System.Pslist"]
+
+
+def test_extract_top10_service_respects_top_n() -> None:
+    """extract_top10: `top_n` giới hạn số dòng trả về mỗi artifact."""
+    import asyncio
+
+    from app.services.velociraptor_top10 import extract_top10
+
+    class FakeVelo:
+        async def list_client_flows(self, client_id, limit=50):  # noqa: ARG002
+            return [{"State": "FINISHED", "FlowId": "F.1", "Artifacts": ["Windows.Forensics.Prefetch"]}]
+
+        async def get_table(self, client_id, flow_id, artifact, rows=100):  # noqa: ARG002
+            return [
+                {"Executable": f"e{i}", "ModificationTime": f"2026-08-0{i}T00:00:00Z"}
+                for i in range(1, 6)
+            ]
+
+    result = asyncio.run(extract_top10(FakeVelo(), "C.x", collect_missing=False, top_n=3))
+    pref = next(a for a in result["artifacts"] if a["artifact"] == "Windows.Forensics.Prefetch")
+    assert len(pref["rows"]) == 3
+    assert pref["total_rows"] == 5
+    assert [r["Executable"] for r in pref["rows"]] == ["e5", "e4", "e3"]  # sort desc
+
+
+async def test_get_top10_respects_top_n_param(client, seeded_env):
+    """GET /clients/{id}/top10?top_n=1 — chỉ trả 1 dòng mỗi artifact."""
+    from app.services import velociraptor as vmod
+
+    tok = await _login_admin(client, seeded_env)
+    await client.put(
+        "/api/admin/velociraptor/config",
+        headers={"Authorization": f"Bearer {tok}"},
+        json={
+            "enabled": True,
+            "server_url": "https://veloci.test",
+            "username": "admin",
+            "password": "tok",
+            "allowlist": ["Windows.Forensics.Prefetch"],
+        },
+    )
+
+    async def fake_list_flows(self, client_id, limit=50):  # noqa: ARG002
+        return [{"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"]}]
+
+    async def fake_get_table(self, client_id, flow_id, artifact, rows=100):  # noqa: ARG002
+        return [
+            {"Executable": "a.exe", "ModificationTime": "2026-01-01T00:00:00Z"},
+            {"Executable": "b.exe", "ModificationTime": "2026-08-01T00:00:00Z"},
+        ]
+
+    orig_flows, orig_table = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.get_table
+    vmod.VelociraptorClient.list_client_flows = fake_list_flows
+    vmod.VelociraptorClient.get_table = fake_get_table
+    try:
+        r = await client.get(
+            "/api/admin/velociraptor/clients/C.aaa111/top10?top_n=1",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+    finally:
+        vmod.VelociraptorClient.list_client_flows = orig_flows
+        vmod.VelociraptorClient.get_table = orig_table
+
+    assert r.status_code == 200, r.text
+    pref = next(a for a in r.json()["artifacts"] if a["artifact"] == "Windows.Forensics.Prefetch")
+    assert len(pref["rows"]) == 1
+    assert pref["rows"][0]["Executable"] == "b.exe"  # mới nhất trước

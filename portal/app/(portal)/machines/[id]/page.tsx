@@ -23,7 +23,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { DfirHunt, MachineClassification, MachineDetail, NetworkInterface, Tag, VelociraptorClientFlow, VelociraptorClientMetadata, VelociraptorConfig, VelociraptorLink, VelociraptorLookup } from "@/lib/types";
+import type { DfirHunt, MachineClassification, MachineDetail, NetworkInterface, Tag, VelociraptorClientMetadata, VelociraptorConfig, VelociraptorLink, VelociraptorLookup } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
   Badge,
@@ -333,7 +333,6 @@ export default function MachineDetailPage() {
   const [veloResult, setVeloResult] = useState<{ ok: boolean; message: string; url: string | null } | null>(null);
   // Live Velociraptor data (realtime từ Velociraptor Server API, không qua DB)
   const [veloMetadata, setVeloMetadata] = useState<VelociraptorClientMetadata | null>(null);
-  const [veloFlows, setVeloFlows] = useState<VelociraptorClientFlow[]>([]);
   const [veloLiveLoading, setVeloLiveLoading] = useState(false);
   const [veloLiveError, setVeloLiveError] = useState<string | null>(null);
   const [showCollectModal, setShowCollectModal] = useState(false);
@@ -490,26 +489,22 @@ export default function MachineDetailPage() {
     }
   }, [id, machine?.hostname]);
 
-  // Load live Velociraptor data (flows + metadata realtime) cho máy đã link
+  // Load live Velociraptor data (metadata realtime) cho máy đã link
   const loadVeloLive = useCallback(async () => {
     if (!veloLink) {
       setVeloMetadata(null);
-      setVeloFlows([]);
       return;
     }
     setVeloLiveLoading(true);
     setVeloLiveError(null);
     try {
-      const [meta, flows] = await Promise.all([
-        api.get<VelociraptorClientMetadata>(`/admin/velociraptor/clients/${veloLink.client_id}/metadata`),
-        api.get<VelociraptorClientFlow[]>(`/admin/velociraptor/clients/${veloLink.client_id}/flows`),
-      ]);
+      const meta = await api.get<VelociraptorClientMetadata>(
+        `/admin/velociraptor/clients/${veloLink.client_id}/metadata`,
+      );
       setVeloMetadata(meta);
-      setVeloFlows(flows);
     } catch (e) {
       setVeloLiveError(e instanceof Error ? e.message : "Không tải được dữ liệu Velociraptor");
       setVeloMetadata(null);
-      setVeloFlows([]);
     } finally {
       setVeloLiveLoading(false);
     }
@@ -728,7 +723,6 @@ export default function MachineDetailPage() {
           <VelociraptorLiveCard
             className="h-full lg:col-span-2"
             metadata={veloMetadata}
-            flows={veloFlows}
             loading={veloLiveLoading}
             error={veloLiveError}
             active={Boolean(
@@ -1185,12 +1179,13 @@ export default function MachineDetailPage() {
         </Modal>
       )}
 
-      {/* Panel log Velociraptor — overlay trượt từ phải sang trái */}
+      {/* Panel log Velociraptor — overlay trượt từ phải sang trái.
+          Trong panel hiển thị: thông tin realtime + Top 10 sự kiện DFIR
+          (Prefetch/Netstat/Pslist) — để Admin đánh giá an toàn thiết bị. */}
       <VeloLogDrawer
         open={showVeloLog}
         onClose={() => setShowVeloLog(false)}
         metadata={veloMetadata}
-        flows={veloFlows}
         loading={veloLiveLoading}
         error={veloLiveError}
         onRefresh={() => void loadVeloLive()}
@@ -1199,6 +1194,8 @@ export default function MachineDetailPage() {
             ? `${veloConfig.server_url.replace(/\/$/, "")}/#/host/${veloLink.client_id}`
             : null
         }
+        clientId={veloLink?.client_id ?? null}
+        allowlist={veloConfig?.allowlist ?? []}
       />
 
     </div>

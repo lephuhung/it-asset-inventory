@@ -41,6 +41,7 @@ import json
 import logging
 import ssl
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
@@ -311,12 +312,14 @@ class VelociraptorClient:
     ) -> list[dict]:
         """List flows (hunts/collections/interrogations) cho 1 client.
 
-        Velociraptor API: GET /api/v1/GetClientFlows?client_id=...&limit=...
-        Response (Velociraptor 0.77): {"columns": [...], "rows": [...], "total_rows": N}
-        Mỗi row có format: {"State", "FlowId", "Artifacts", "Created", "Last Active", ...}
+        Velociraptor API: GET /api/v1/GetClientFlows?client_id=...&rows=...
+        ⚠️ Tham số là `rows` — `limit` bị Velociraptor bỏ qua (default rows=1
+        → chỉ trả flow mới nhất!). Response (Velociraptor 0.77):
+        {"columns": [...], "rows": [...], "total_rows": N} — mỗi row có format
+        {"State", "FlowId", "Artifacts", "Created", "Last Active", ...}
         → convert thành dict dễ dùng cho portal.
         """
-        data = await self._get(f"/GetClientFlows?client_id={client_id}&limit={int(limit)}")
+        data = await self._get(f"/GetClientFlows?client_id={client_id}&rows={int(limit)}")
 
         columns = data.get("columns", [])
         rows = data.get("rows", [])
@@ -362,6 +365,102 @@ class VelociraptorClient:
         GetClientMetadata/{client_id} trả near-empty (chỉ client_id).
         """
         return await self._get(f"/GetClient/{client_id}")
+
+    # ── REST API: DFIR Top-N events (flows → tables) ──────────
+
+    async def find_latest_finished_flow(
+        self, client_id: str, artifact_name: str, limit: int = 50
+    ) -> dict | None:
+        """Tìm flow FINISHED gần nhất đã chạy artifact trên 1 client.
+
+        Dùng lại dữ liệu đã thu thập (không collect lại) — chính là logic
+        `get_latest_flow_for_artifact` trong script Top10. Velociraptor trả
+        flows mới nhất trước (GetClientFlows), nên phần tử đầu tiên match
+        artifact + FINISHED chính là flow gần nhất.
+
+        Returns: dict flow (có FlowId, State, Artifacts, Created, Rows, Mb…)
+        hoặc None nếu chưa từng chạy artifact này.
+        """
+        flows = await self.list_client_flows(client_id, limit=limit)
+        for f in flows:
+            artifacts = f.get("Artifacts") or []
+            if artifact_name in artifacts and f.get("State") == "FINISHED":
+                return f
+        return None
+
+    async def get_flow_details(self, client_id: str, flow_id: str) -> dict:
+        """Lấy trạng thái chi tiết 1 flow (polling khi collect).
+
+        Velociraptor API: GET /api/v1/GetFlowDetails?client_id=...&flow_id=...
+        Response: {"context": {"state": "RUNNING"|"FINISHED"|"ERROR", ...}, ...}
+        """
+        return await self._get(
+            f"/GetFlowDetails?client_id={client_id}&flow_id={flow_id}"
+        )
+
+    async def get_table(
+        self,
+        client_id: str,
+        flow_id: str,
+        artifact: str,
+        rows: int = 100,
+    ) -> list[dict]:
+        """Đọc bảng kết quả của 1 artifact trong 1 flow (rows → list dict).
+
+        Velociraptor API: GET /api/v1/GetTable?client_id=...&flow_id=...&artifact=...&rows=...
+        Response: {"columns": [...], "rows": [{"json": "[...]"}, ...], "total_rows": N}
+        Mỗi row là 1 array JSON theo đúng thứ tự `columns` → zip thành dict.
+        """
+        data = await self._get(
+            f"/GetTable?client_id={client_id}&flow_id={flow_id}"
+            f"&artifact={_url_quote(artifact)}&rows={int(rows)}"
+        )
+        return _rows_to_dicts(data)
+
+    async def collect_artifact_and_wait(
+        self,
+        client_id: str,
+        artifact: str,
+        *,
+        timeout_seconds: int = 90,
+        poll_interval: float = 1.5,
+    ) -> str:
+        """Collect artifact + poll GetFlowDetails cho tới khi FINISHED/ERROR.
+
+        Giống `collect_artifact_sync` trong script Top10: gửi CollectArtifact,
+        rồi poll mỗi `poll_interval` giây cho tới khi flow kết thúc hoặc quá
+        `timeout_seconds`. Trả flow_id; raise VelociraptorError nếu timeout
+        hoặc flow kết thúc với trạng thái lỗi.
+        """
+        flow_id = await self.collect_artifact(client_id, [artifact])
+        if not flow_id:
+            raise VelociraptorError(
+                f"CollectArtifact không trả về flow_id cho artifact '{artifact}'"
+            )
+
+        deadline = time.monotonic() + timeout_seconds
+        last_state = "RUNNING"
+        while time.monotonic() < deadline:
+            await asyncio.sleep(poll_interval)
+            try:
+                details = await self.get_flow_details(client_id, flow_id)
+            except VelociraptorError:
+                # Flow vừa tạo có thể chưa visible — retry tới deadline
+                continue
+            state = (details.get("context") or {}).get("state") or ""
+            last_state = state
+            if state == "FINISHED":
+                return flow_id
+            if state == "ERROR":
+                err = (details.get("context") or {}).get("status") or "unknown error"
+                raise VelociraptorError(
+                    f"Flow {flow_id} ({artifact}) kết thúc lỗi: {err}"
+                )
+
+        raise VelociraptorError(
+            f"Timeout sau {timeout_seconds}s chờ flow {flow_id} ({artifact}) "
+            f"— trạng thái cuối: {last_state}"
+        )
 
     # ── VQL: search_clients (qua docker exec) ──────────────────
 
@@ -487,6 +586,45 @@ class VelociraptorClient:
 def _shell_quote(s: str) -> str:
     """Quote 1 chuỗi để chạy an toàn trong shell single-quoted."""
     return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _url_quote(s: str) -> str:
+    """Quote 1 đoạn URL query value (artifact name chứa dấu chấm là an toàn)."""
+    from urllib.parse import quote
+
+    return quote(s, safe="")
+
+
+def _rows_to_dicts(data: dict) -> list[dict]:
+    """Parse response GetClientFlows / GetTable → list dict.
+
+    Velociraptor trả {"columns": [...], "rows": [{"json": "[v1,v2,...]"}, ...]}.
+    Mỗi row có thể có `json` là string (array) hoặc list đã parse sẵn.
+    """
+    columns = data.get("columns") or []
+    rows = data.get("rows") or []
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        raw = r.get("json")
+        values: list[Any] | None = None
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    values = parsed
+            except (json.JSONDecodeError, TypeError):
+                values = None
+        elif isinstance(raw, list):
+            values = raw
+        if values is not None:
+            item = dict(zip(columns, values))
+        else:
+            # Fallback: row đã là dict phẳng (client_id, hostname...)
+            item = {c: r.get(c) for c in columns}
+        out.append(item)
+    return out
 
 
 # ── Client config helpers ───────────────────────────────────────

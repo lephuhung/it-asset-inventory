@@ -1,9 +1,10 @@
 "use client";
 
-import { Activity, CheckCircle2, Database, ExternalLink, Loader2, PlayCircle, RefreshCw, ScrollText, X, XCircle } from "lucide-react";
-import type { VelociraptorClientFlow, VelociraptorClientMetadata } from "@/lib/types";
+import { Activity, CheckCircle2, ExternalLink, Loader2, PlayCircle, RefreshCw, ScrollText, X, XCircle } from "lucide-react";
+import type { VelociraptorClientMetadata } from "@/lib/types";
 import { Badge, Button, Card, IconButton } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
+import { VelociraptorTop10Section } from "@/components/velociraptor-top10";
 
 /**
  * Card "Velociraptor — Live data" — dữ liệu realtime từ Velociraptor Server.
@@ -12,7 +13,6 @@ import { formatDateTime } from "@/lib/format";
  */
 export function VelociraptorLiveCard({
   metadata,
-  flows,
   loading,
   error,
   active,
@@ -26,7 +26,6 @@ export function VelociraptorLiveCard({
   className = "",
 }: {
   metadata: VelociraptorClientMetadata | null;
-  flows: VelociraptorClientFlow[];
   loading: boolean;
   error: string | null;
   /** Velociraptor backend đang hoạt động (có cấu hình + creds hợp lệ). */
@@ -172,122 +171,39 @@ export function VelociraptorLiveCard({
           </dl>
         </div>
       )}
-
-      <div>
-        <h4 className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          <Database className="size-3" /> Flows ({flows.length})
-        </h4>
-        {flows.length === 0 ? (
-          <p className="text-xs text-slate-500">
-            Chưa có flow nào trên client này.{" "}
-            <button
-              className="font-medium text-brand-600 hover:underline"
-              onClick={onCollect}
-            >
-              Chạy "Collect Artifact"
-            </button>{" "}
-            để tạo.
-          </p>
-        ) : (
-          <div className="overflow-x-auto rounded-md ring-1 ring-inset ring-slate-200">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-3 py-2 text-left">State</th>
-                  <th className="px-3 py-2 text-left">Flow ID</th>
-                  <th className="px-3 py-2 text-left">Artifacts</th>
-                  <th className="px-3 py-2 text-left">Created</th>
-                  <th className="px-3 py-2 text-right">Rows</th>
-                  <th className="px-3 py-2 text-right">Size</th>
-                  <th className="px-3 py-2 text-left">By</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {flows.slice(0, 10).map((f) => (
-                  <tr key={f.FlowId ?? Math.random()} className="hover:bg-slate-50">
-                    <td className="px-3 py-2">
-                      <Badge
-                        className={
-                          f.State === "FINISHED"
-                            ? "bg-emerald-100 text-emerald-700 ring-emerald-600/20"
-                            : f.State === "RUNNING"
-                              ? "bg-blue-100 text-blue-700 ring-blue-600/20"
-                              : "bg-slate-100 text-slate-700 ring-slate-600/20"
-                        }
-                      >
-                        {f.State ?? "?"}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
-                      {f.FlowId?.slice(0, 16) ?? "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        {(f.Artifacts ?? []).slice(0, 3).map((a) => (
-                          <span
-                            key={a}
-                            className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700"
-                          >
-                            {a}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-600">
-                      {f.Created
-                        ? formatDateTime(
-                            new Date(Number(f.Created) / 1e6).toISOString(),
-                          )
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-right font-medium text-slate-900">
-                      {f.Rows ?? "—"}
-                    </td>
-                    <td className="px-3 py-2 text-right text-[10px] text-slate-500">
-                      {f.Mb != null ? `${(f.Mb / 1024).toFixed(1)} KB` : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-[10px] text-slate-500">
-                      {f.Creator ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {flows.length > 10 && (
-              <p className="px-3 py-2 text-[11px] text-slate-500">
-                + {flows.length - 10} flows cũ hơn — bấm "Xem log" để xem đầy đủ.
-              </p>
-            )}
-          </div>
-        )}
-      </div>
     </Card>
   );
 }
 
 /**
  * Panel trượt vào từ bên phải (overlay lên màn hình) hiển thị
- * log / dữ liệu đầy đủ từ Velociraptor: metadata + toàn bộ flows + raw JSON.
+ * dữ liệu đầy đủ từ Velociraptor cho 1 client: metadata realtime +
+ * Top 10 sự kiện DFIR (Prefetch / Netstat / Pslist) + toàn bộ flows.
+ * Panel rộng ~1/2 màn hình (lg trở lên) để chứa được các bảng dữ liệu.
  */
 export function VeloLogDrawer({
   open,
   onClose,
   metadata,
-  flows,
   loading,
   error,
   onRefresh,
   guiUrl,
+  clientId = null,
+  allowlist = [],
 }: {
   open: boolean;
   onClose: () => void;
   metadata: VelociraptorClientMetadata | null;
-  flows: VelociraptorClientFlow[];
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
   /** Deep-link tới Velociraptor GUI cho client này (nếu có server_url). */
   guiUrl: string | null;
+  /** Velociraptor client_id — để trích xuất Top 10 sự kiện DFIR trong panel. */
+  clientId?: string | null;
+  /** Allowlist artifact đang hiệu lực — xác định artifact nào thu thập được. */
+  allowlist?: string[];
 }) {
   return (
     <>
@@ -302,7 +218,7 @@ export function VeloLogDrawer({
       <aside
         aria-hidden={!open}
         aria-label="Log Velociraptor"
-        className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-[560px] transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out ${
+        className={`fixed inset-y-0 right-0 z-50 flex w-full transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out lg:w-1/2 ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -402,89 +318,8 @@ export function VeloLogDrawer({
             </div>
           )}
 
-          <div>
-            <h4 className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <Database className="size-3" /> Flows ({flows.length})
-            </h4>
-            {flows.length === 0 ? (
-              <p className="text-xs text-slate-500">Chưa có flow nào trên client này.</p>
-            ) : (
-              <div className="overflow-x-auto rounded-md ring-1 ring-inset ring-slate-200">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500">
-                    <tr>
-                      <th className="px-3 py-2 text-left">State</th>
-                      <th className="px-3 py-2 text-left">Flow ID</th>
-                      <th className="px-3 py-2 text-left">Artifacts</th>
-                      <th className="px-3 py-2 text-left">Created</th>
-                      <th className="px-3 py-2 text-right">Rows</th>
-                      <th className="px-3 py-2 text-right">Size</th>
-                      <th className="px-3 py-2 text-left">By</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {flows.map((f) => (
-                      <tr key={f.FlowId ?? Math.random()} className="hover:bg-slate-50">
-                        <td className="px-3 py-2">
-                          <Badge
-                            className={
-                              f.State === "FINISHED"
-                                ? "bg-emerald-100 text-emerald-700 ring-emerald-600/20"
-                                : f.State === "RUNNING"
-                                  ? "bg-blue-100 text-blue-700 ring-blue-600/20"
-                                  : "bg-slate-100 text-slate-700 ring-slate-600/20"
-                            }
-                          >
-                            {f.State ?? "?"}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
-                          {f.FlowId ?? "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="flex max-w-[180px] flex-wrap gap-1">
-                            {(f.Artifacts ?? []).map((a) => (
-                              <span
-                                key={a}
-                                className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700"
-                              >
-                                {a}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-slate-600">
-                          {f.Created
-                            ? formatDateTime(
-                                new Date(Number(f.Created) / 1e6).toISOString(),
-                              )
-                            : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-right font-medium text-slate-900">
-                          {f.Rows ?? "—"}
-                        </td>
-                        <td className="px-3 py-2 text-right text-[10px] text-slate-500">
-                          {f.Mb != null ? `${(f.Mb / 1024).toFixed(1)} KB` : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-[10px] text-slate-500">
-                          {f.Creator ?? "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          <details className="mt-5">
-            <summary className="cursor-pointer select-none text-[11px] font-medium text-slate-500 hover:text-slate-700">
-              Dữ liệu thô (JSON) trả về từ Velociraptor
-            </summary>
-            <pre className="mt-2 max-h-72 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-[10px] leading-relaxed text-slate-600">
-              {JSON.stringify({ metadata, flows }, null, 2)}
-            </pre>
-          </details>
+          {/* Top 10 sự kiện DFIR (Prefetch / Netstat / Pslist) — trích xuất từ Velociraptor */}
+          {open && <VelociraptorTop10Section clientId={clientId} allowlist={allowlist} />}
         </div>
       </aside>
     </>

@@ -104,6 +104,8 @@ class Settings(BaseSettings):
         "Windows.Network.Netstat",
         "Windows.Network.NetstatEnriched",
         "Windows.Network.Listeners",
+        # Forensics (read-only — dùng cho tính năng Top 10 sự kiện DFIR)
+        "Windows.Forensics.Prefetch",
         # Event logs (chỉ đọc, không xoá)
         "Windows.EventLogs.Reboot",
         "Windows.EventLogs.LogFile",

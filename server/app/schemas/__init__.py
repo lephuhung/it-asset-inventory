@@ -997,6 +997,50 @@ class VelociraptorClientMetadataOut(BaseModel):
     client_count: int | None = None
 
 
+class VelociraptorTop10ArtifactOut(BaseModel):
+    """1 artifact trong bảng "Top 10 sự kiện DFIR" của 1 client.
+
+    source: reused (tái sử dụng flow FINISHED cũ) | running (flow đang chạy)
+            | collected (vừa collect đồng bộ) | missing (chưa có dữ liệu)
+            | error (Velociraptor trả lỗi khi đọc/collect).
+    """
+
+    artifact: str
+    label: str
+    flow_id: str | None = None
+    source: str = "missing"
+    error: str | None = None
+    rows: list[dict] = Field(default_factory=list)
+    total_rows: int = 0
+
+
+class VelociraptorTop10Out(BaseModel):
+    """Kết quả trích xuất Top 10 sự kiện / log gần nhất cho 1 client."""
+
+    client_id: str
+    generated_at: datetime
+    artifacts: list[VelociraptorTop10ArtifactOut] = Field(default_factory=list)
+    flows: list[VelociraptorClientFlowOut] = Field(default_factory=list)
+
+
+class VelociraptorTop10CollectArtifactOut(BaseModel):
+    """1 artifact trong response POST collect — trạng thái kick-off."""
+
+    artifact: str
+    label: str
+    status: str = "missing"  # reused | collecting | not_allowed | missing | error
+    flow_id: str | None = None
+    error: str | None = None
+
+
+class VelociraptorTop10CollectOut(BaseModel):
+    """Kết quả POST /top10/collect — các artifact đã kick-off collect."""
+
+    client_id: str
+    started_at: datetime
+    artifacts: list[VelociraptorTop10CollectArtifactOut] = Field(default_factory=list)
+
+
 
 class DfirScheduleCreate(BaseModel):
     """Tạo scheduled hunt/collect định kỳ."""

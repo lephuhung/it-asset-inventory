@@ -41,3 +41,4 @@ deploy/certs/*
 
 # ── Runtime logs (chứa JWT/nhạy cảm — không đẩy lên repo) ──
 server/uvicorn.log
+server/uvicorn-*.log

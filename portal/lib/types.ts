@@ -582,6 +582,45 @@ export interface VelociraptorClientMetadata {
   last_interrogate_artifact_name: string | null;
 }
 
+/**
+ * 1 artifact trong bảng "Top 10 sự kiện DFIR" (trang máy).
+ * source: reused (tái sử dụng flow FINISHED cũ) | running | collected
+ *         | missing (chưa có dữ liệu) | error
+ */
+export interface VelociraptorTop10Artifact {
+  artifact: string;
+  label: string;
+  flow_id: string | null;
+  source: "reused" | "running" | "collected" | "missing" | "error";
+  error: string | null;
+  rows: Array<Record<string, unknown>>;
+  total_rows: number;
+}
+
+/** GET /api/admin/velociraptor/clients/{client_id}/top10 */
+export interface VelociraptorTop10Response {
+  client_id: string;
+  generated_at: string;
+  artifacts: VelociraptorTop10Artifact[];
+  flows: VelociraptorClientFlow[];
+}
+
+/** 1 artifact trong response POST /top10/collect. */
+export interface VelociraptorTop10CollectArtifact {
+  artifact: string;
+  label: string;
+  status: "reused" | "collecting" | "not_allowed" | "missing" | "error";
+  flow_id: string | null;
+  error: string | null;
+}
+
+/** POST /api/admin/velociraptor/clients/{client_id}/top10/collect */
+export interface VelociraptorTop10CollectResponse {
+  client_id: string;
+  started_at: string;
+  artifacts: VelociraptorTop10CollectArtifact[];
+}
+
 /** Scheduled DFIR hunt (chạy artifact định k�). */
 export interface VelociraptorSchedule {
   id: string;

@@ -53,6 +53,8 @@ from app.schemas import (
     VelociraptorLinkEnriched,
     VelociraptorLinkOut,
     VelociraptorTestConnectionOut,
+    VelociraptorTop10CollectOut,
+    VelociraptorTop10Out,
 )
 from app.services.velociraptor import (
     VelociraptorClient,
@@ -649,6 +651,91 @@ async def get_client_metadata(
                 detail=f"Velociraptor API lỗi: {e}",
             ) from e
     return VelociraptorClientMetadataOut(**meta)
+
+
+@router.get("/clients/{client_id}/top10", response_model=VelociraptorTop10Out)
+async def get_client_top10_events(
+    client_id: str,
+    top_n: int = 10,
+    rows: int = 100,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin()),
+):
+    """Top N sự kiện / log gần nhất cho từng artifact DFIR trên 1 client.
+
+    Chuyển thể từ script "Velociraptor Top 10 DFIR Events Extractor":
+      - Windows.Forensics.Prefetch — Top N binary thực thi gần nhất
+      - Windows.Network.Netstat      — Top N kết nối / cổng đang mở
+      - Windows.System.Pslist        — Top N tiến trình hệ thống
+      - flows                        — Top N hoạt động điều tra gần nhất
+
+    `top_n` = số sự kiện hiển thị mỗi artifact (mặc định 10; Admin có thể
+    chọn 20/50/100 khi điều tra). `rows` = số dòng tối đa đọc từ Velociraptor
+    (luôn >= top_n).
+
+    Read-only: tái sử dụng flow FINISHED gần nhất đã chạy artifact (không
+    collect mới). Artifact chưa có dữ liệu → source="missing" — gọi
+    ``POST /clients/{client_id}/top10/collect`` trước, rồi poll lại endpoint này.
+    """
+    from app.services.velociraptor_top10 import extract_top10
+
+    top_n = max(1, min(top_n, 200))
+    rows = max(top_n, min(rows, 1000))
+    built = await _build_velociraptor_client(db)
+    if built is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Chưa cấu hình Velociraptor",
+        )
+    client, _ = built
+    async with client as velo:
+        try:
+            data = await extract_top10(
+                velo, client_id, collect_missing=False, top_n=top_n, rows=rows
+            )
+        except VelociraptorError as e:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Velociraptor API lỗi: {e}",
+            ) from e
+    return data
+
+
+@router.post(
+    "/clients/{client_id}/top10/collect",
+    response_model=VelociraptorTop10CollectOut,
+)
+async def collect_client_top10_events(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin()),
+):
+    """Kick-off collect các artifact Top10 chưa có dữ liệu (không chờ xong).
+
+    Chỉ collect artifact trong allowlist — artifact ngoài allowlist trả về
+    status="not_allowed" (không chạy, không 403 toàn bộ request) để admin
+    vẫn nhận được dữ liệu các artifact được phép. Portal poll
+    ``GET /clients/{client_id}/top10`` tới khi flow FINISHED rồi đọc Top N.
+    """
+    from app.services.velociraptor_top10 import collect_missing_top10
+
+    built = await _build_velociraptor_client(db)
+    if built is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Chưa cấu hình Velociraptor",
+        )
+    client, cfg = built
+    allowlist = list(cfg.allowlist or [])
+    async with client as velo:
+        try:
+            data = await collect_missing_top10(velo, client_id, allowlist)
+        except VelociraptorError as e:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Velociraptor API lỗi: {e}",
+            ) from e
+    return data
 
 
 # ── Hunt / Collect endpoints ───────────────────────────────────
