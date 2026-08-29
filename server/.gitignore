@@ -19,3 +19,12 @@ dev.db
 
 # Artifact MSI (khi build)
 *.msi
+
+# Built/install artifacts (downloads served by app)
+agent_dist/*.msi
+agent_dist/*.msi.sha256
+agent_dist/install-*.bat
+agent_dist/install-*.ps1
+agent_dist/install-*.sh
+agent_dist/*.zip
+agent_dist/*.yaml
