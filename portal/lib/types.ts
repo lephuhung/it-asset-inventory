@@ -45,7 +45,25 @@ export interface StatsOverview {
   lost: number;
   pending_tokens: number;
   expired_tokens: number;
+  /** Phân loại máy (tag classification). Công vụ thực tế = official + bmnn. */
+  personal: number;
+  official: number;
+  bmnn: number;
 }
+
+/** Tag linh hoạt — `classification` (1 tag/máy, nguồn thống kê) | `purpose` (nhiều tag/máy). */
+export interface Tag {
+  id: string;
+  key: string;
+  label: string;
+  kind: "classification" | "purpose";
+  color: string | null;
+  sort_order: number;
+  is_system: boolean;
+}
+
+/** 3 loại máy (tag classification hệ thống). */
+export type MachineClassification = "personal" | "official" | "bmnn";
 
 export interface Organization {
   id: string;
@@ -74,6 +92,7 @@ export interface MachineListItem {
   org_id: string;
   assigned_user_id: string | null;
   logged_user?: string | null;
+  tags?: Tag[];
 }
 
 export interface NetworkInterface {
@@ -240,6 +259,28 @@ export interface BulkTokenItem {
   note?: string | null;
 }
 
+/** Payload tạo token — kèm loại máy (classification) + tag mục đích (purpose). */
+export interface TokenCreatePayload {
+  org_id: string;
+  full_name?: string | null;
+  department?: string | null;
+  position?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  note?: string | null;
+  ttl_hours?: number;
+  classification?: MachineClassification;
+  purpose_tags?: string[];
+}
+
+export interface BulkTokenPayload {
+  org_id: string;
+  items: BulkTokenItem[];
+  ttl_hours?: number;
+  classification?: MachineClassification;
+  purpose_tags?: string[];
+}
+
 export interface BulkTokenResponse {
   created: number;
   tokens: TokenCreateResponse[];
@@ -391,4 +432,222 @@ export interface UserUpdatePayload {
   org_id?: string;
   is_active?: boolean;
   phone?: string;
+}
+
+/* ── Velociraptor (DFIR — tích hợp từ backend FastAPI) ────────── */
+
+export interface VelociraptorConfig {
+  enabled: boolean;
+  server_url: string | null;
+  /** mTLS — cần authenticator.type: Certs phía Velociraptor Server. */
+  client_config_set: boolean;
+  client_cert_info: Record<string, unknown> | null;
+  /** HTTP Basic — Velociraptor default authenticator. */
+  basic_auth_set: boolean;
+  /** Legacy Bearer token (đã deprecated). */
+  api_token_set: boolean;
+  allowlist: string[];
+  last_sync_at: string | null;
+  last_sync_error: string | null;
+  last_sync_linked: number | null;
+  last_sync_total: number | null;
+  updated_at: string | null;
+  updated_by: string | null;
+  defaults_server_url: string | null;
+  defaults_allowlist: string[];
+}
+
+export interface VelociraptorConfigUpdate {
+  enabled?: boolean | null;
+  server_url?: string | null;
+  /** YAML từ `velociraptor config api_client` — cho mTLS. */
+  client_config?: string | null;
+  /** HTTP Basic username (Velociraptor default authenticator). */
+  username?: string | null;
+  /** HTTP Basic password. Để trống để KHÔNG đ�i; "" để xoá. */
+  password?: string | null;
+  /** Legacy Bearer token (đã deprecated). */
+  api_token?: string | null;
+  allowlist?: string[] | null;
+}
+
+export interface VelociraptorTestResult {
+  ok: boolean;
+  error: string | null;
+  client_count_sampled: number | null;
+  server_url: string | null;
+}
+
+export interface VelociraptorLink {
+  machine_id: string;
+  client_id: string;
+  hostname: string;
+  os_info: Record<string, unknown> | null;
+  last_seen_at: string | null;
+  synced_at: string;
+  machine_hostname?: string | null;
+  machine_status?: MachineStatus | null;
+  machine_org_name?: string | null;
+  machine_last_seen_at?: string | null;
+}
+
+/** Kết quả on-demand lookup hostname → Velociraptor client_id (không qua DB cache). */
+export interface VelociraptorLookup {
+  matched: boolean;
+  client_id: string | null;
+  hostname: string | null;
+  os_info: Record<string, unknown> | null;
+  raw_count: number;
+}
+
+/** Trạng thái Velociraptor Server (ping trực tiếp, không cache). */
+export interface VelociraptorStatus {
+  reachable: boolean;
+  reason?: string | null;
+  server_url?: string | null;
+  client_count_sampled?: number;
+  checked_at?: string;
+}
+
+export interface DfirHuntCreate {
+  artifact: string;
+  scope: "all" | "single";
+  machine_id?: string | null;
+  name?: string | null;
+  description?: string | null;
+  notes?: string | null;
+}
+
+export interface DfirHunt {
+  id: string;
+  hunt_id: string | null;
+  artifact: string;
+  scope: "all" | "single";
+  machine_id: string | null;
+  requested_by: string;
+  status: string;
+  velociraptor_url: string | null;
+  notes: string | null;
+  error: string | null;
+  created_at: string;
+  client_count: number | null;
+}
+
+/** Kết quả live từ Velociraptor Server (GET /api/admin/velociraptor/hunt/{id}). */
+export interface VelociraptorHuntLive {
+  hunt_id: string;
+  velociraptor_status: Record<string, unknown>;
+  db_record: {
+    id: string;
+    artifact: string;
+    scope: "all" | "single";
+    machine_id: string | null;
+    requested_by: string;
+    status: string;
+    created_at: string;
+    notes: string | null;
+    error: string | null;
+  } | null;
+  velociraptor_url: string | null;
+}
+
+/** 1 Velociraptor flow (hunt/collection/interrogation) — live từ Velociraptor API. */
+export interface VelociraptorClientFlow {
+  State: string | null;
+  FlowId: string | null;
+  Artifacts: string[];
+  Created: number | null;
+  LastActive: number | null;
+  Creator: string | null;
+  Mb: number | null;
+  Rows: number | null;
+}
+
+/** Velociraptor client metadata (live t� GetClient API). */
+export interface VelociraptorClientMetadata {
+  client_id: string;
+  agent_information: Record<string, unknown> | null;
+  os_info: {
+    system?: string;
+    hostname?: string;
+    fqdn?: string;
+    release?: string;
+    machine?: string;
+    mac_addresses?: string[];
+  } | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_ip: string | null;
+  last_interrogate_flow_id: string | null;
+  last_interrogate_artifact_name: string | null;
+}
+
+/** Scheduled DFIR hunt (chạy artifact định k�). */
+export interface VelociraptorSchedule {
+  id: string;
+  name: string;
+  artifact: string;
+  scope: "all" | "multi";
+  machine_ids: string[] | null;
+  interval_seconds: number;
+  enabled: boolean;
+  last_run_at: string | null;
+  next_run_at: string;
+  last_status: string | null;
+  last_error: string | null;
+  requested_by: string;
+  created_at: string;
+}
+
+export interface VelociraptorScheduleCreate {
+  name: string;
+  artifact: string;
+  scope?: "all" | "multi";
+  machine_ids?: string[] | null;
+  interval_seconds: number;
+}
+
+export interface VelociraptorScheduleUpdate {
+  name?: string;
+  interval_seconds?: number;
+  enabled?: boolean;
+}
+
+/** DFIR alert khi có flow sensitive xuất hiện. */
+export interface VelociraptorAlert {
+  id: string;
+  artifact_pattern: string;
+  severity: "info" | "warning" | "critical";
+  flow_id: string;
+  client_id: string | null;
+  machine_id: string | null;
+  message: string;
+  resolved: boolean;
+  created_at: string;
+}
+
+/* ── Thống kê máy theo tag (org-machine-stats) ───────────────── */
+
+/** Số máy mang 1 tag trong 1 tổ chức. */
+export interface TagOrgStat {
+  org_id: string;
+  org_name: string;
+  org_type: string;
+  count: number;
+}
+
+/** 1 tag + số máy đang mang (toàn hệ thống + phân bố theo tổ chức). */
+export interface TagStatItem {
+  id: string;
+  key: string;
+  label: string;
+  kind: string;
+  color: string | null;
+  count: number;
+  org_stats: TagOrgStat[];
+}
+
+export interface TagStatsResponse {
+  total_machines: number;
+  tags: TagStatItem[];
 }
