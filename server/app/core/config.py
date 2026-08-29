@@ -80,6 +80,42 @@ class Settings(BaseSettings):
     # Ký số: agent mode (chặn nếu không phải mTLS header hợp lệ)
     require_agent_mtls_header: bool = False  # True khi chạy sau nginx ở prod
 
+    # ── Velociraptor (DFIR) ─────────────────────────────────────
+    # Tích hợp Velociraptor Server (https://github.com/velocidex/velociraptor)
+    # phục vụ DFIR (Digital Forensics & Incident Response). Backend sync hostname
+    # ↔ client_id mỗi VELOCIRAPTOR_SYNC_INTERVAL_SECONDS; portal deep-link sang
+    # Velociraptor GUI để admin chạy hunt/collect artifact.
+    # - enabled=True: bật toàn bộ (sync + API)
+    # - default_url: gợi ý khi admin chưa cấu hình trên portal (vd "https://veloci.example.gov.vn:8889")
+    # - sync_interval_seconds: 5 phút (300s) — đủ để theo kịp máy mới enroll
+    # - api_timeout_seconds: timeout cho mỗi request HTTP sang Velociraptor
+    # - default_allowlist: các artifact Velociraptor MẶC ĐỊNH CHO PHÉP chạy (chống lạm quyền);
+    #   admin có thể chỉnh trên portal. Tất cả là artifact read-only, không tốn disk.
+    velociraptor_enabled: bool = False
+    velociraptor_default_url: str = ""
+    velociraptor_docker_container: str = "velociraptor"
+    velociraptor_sync_interval_seconds: int = 300
+    velociraptor_api_timeout_seconds: int = 30
+    velociraptor_default_allowlist: list[str] = [
+        # Read-only system info (an toàn, thông tin OS/CPU/RAM/disk/network)
+        "Generic.Client.Info",
+        "Windows.System.Services",
+        "Windows.System.Pslist",
+        "Windows.Network.Netstat",
+        "Windows.Network.NetstatEnriched",
+        "Windows.Network.Listeners",
+        # Event logs (chỉ đọc, không xoá)
+        "Windows.EventLogs.Reboot",
+        "Windows.EventLogs.LogFile",
+        # Scheduled tasks / startup (read-only)
+        "Windows.ScheduledTasks.Catalog",
+        "Windows.StartupItems.Persist",
+        # Registry (chỉ đọc các key an toàn)
+        "Windows.Registry.Recursive",
+        "Windows.Registry.System",
+        "Windows.Registry.User",
+    ]
+
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)
     smtp_host: str = ""

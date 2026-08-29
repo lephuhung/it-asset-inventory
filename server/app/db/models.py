@@ -90,6 +90,72 @@ class AssetLifecycle(str, enum.Enum):
     DECOMMISSIONED = "decommissioned"  # Thanh lý
 
 
+class TagKind(str, enum.Enum):
+    """Vai trò của tag.
+
+    - `classification` — PHÂN LOẠI máy: mỗi máy có ĐÚNG 1 tag loại này
+      (`personal` / `official` / `bmnn`). Đây là nguồn DUY NHẤT cho thống kê
+      "cá nhân / công vụ / BMNN" — tag mục đích KHÔNG bao giờ đụng vào số liệu này.
+    - `purpose`        — MỤC ĐÍCH sử dụng: nhiều tag / máy, linh hoạt bổ sung
+      (VD `dich_vu_cong`, `soan_thao_van_ban`…) — chỉ để lọc/hiển thị.
+    """
+
+    CLASSIFICATION = "classification"
+    PURPOSE = "purpose"
+
+
+# 3 tag phân loại hệ thống — key cố định, seed trong migration.
+CLASSIFICATION_TAGS: tuple[tuple[str, str], ...] = (
+    ("personal", "Máy cá nhân"),
+    ("official", "Máy công vụ"),
+    ("bmnn", "Máy BMNN"),
+)
+DEFAULT_CLASSIFICATION = "official"  # máy enroll thường / máy cũ chưa gán
+
+
+class Tag(Base):
+    """Tag linh hoạt — 3 tag phân loại (is_system) + tag mục đích mở rộng sau."""
+
+    __tablename__ = "tags"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, default=TagKind.PURPOSE.value)
+    color: Mapped[str | None] = mapped_column(String(128), nullable=True)  # class badge tailwind
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)  # 3 tag gốc — không xóa
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class MachineTag(Base):
+    """Nhiều–nhiều machines ↔ tags.
+
+    - `kind` denormalized từ `tags.kind` (app set khi insert) để chặn ràng buộc
+      "1 máy tối đa 1 tag classification" ngay tại DB (partial unique index).
+    - `set_by` = ai gán tag (audit).
+    """
+
+    __tablename__ = "machine_tags"
+    __table_args__ = (
+        Index(
+            "uq_machine_tags_classification",
+            "machine_id",
+            unique=True,
+            postgresql_where=text("kind = 'classification'"),
+        ),
+        Index("ix_machine_tags_tag", "tag_id"),
+    )
+
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), primary_key=True)
+    tag_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tags.id"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    set_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    tag: Mapped[Tag] = relationship()
+
+
 class Organization(Base):
     __tablename__ = "organizations"
 
@@ -150,6 +216,9 @@ class Machine(Base):
     )
     software: Mapped[list[MachineSoftware]] = relationship(
         back_populates="machine", cascade="all, delete-orphan"
+    )
+    tags: Mapped[list[MachineTag]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True
     )
 
 
@@ -310,6 +379,9 @@ class EnrollToken(Base):
     used_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=TokenStatus.PENDING.value)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+    # Loại máy + tag mục đích chọn LÚC SINH TOKEN — áp cho máy khi enroll (mục 4.4/4.5).
+    classification: Mapped[str | None] = mapped_column(String(32), nullable=True)  # tag key: personal|official|bmnn
+    purpose_tags: Mapped[list | None] = mapped_column(JSONB, default=list)  # list tag key mục đích
 
 
 class AuditLog(Base):
@@ -462,3 +534,141 @@ class AgentConfigOverride(Base):
     portal_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # IP/Domain Portal công khai — dùng cho install_command + enroll_url
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC))
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class VelociraptorConfig(Base):
+    """Cấu hình Velociraptor Server — singleton (id=1), Super Admin cấu hình trên portal.
+
+    Tích hợp Velociraptor (https://github.com/velocidex/velociraptor) cho DFIR.
+    Backend sync hostname ↔ client_id mỗi 5 phút qua REST API; portal deep-link
+    sang Velociraptor GUI để admin chạy hunt/collect artifact.
+
+    - **`client_config_encrypted`** (mTLS — khuyến nghị): YAML từ
+      `velociraptor config client --name inventory-portal --role administrator`.
+      Mã hoá AES-256-GCM. Khi kết nối Velociraptor REST API, server dựng
+      `ssl.SSLContext` chứa ca_cert + client_cert + client_private_key →
+      giao tiếp mTLS (Velociraptor chỉ trust client cert được CA của nó ký).
+    - `api_token_encrypted` (Bearer — fallback cũ): chỉ dùng nếu
+      `client_config_encrypted` chưa set. Sẽ bị drop sau khi mọi deploy
+      nâng cấp lên mTLS.
+    - `client_cert_info` (JSONB): metadata cert (subject, issuer, expiry,
+      sha256_fingerprint) hiển thị portal — KHÔNG chứa private key.
+    - `allowlist`: artifact Velociraptor được phép chạy (chống lạm quyền).
+    """
+
+    __tablename__ = "velociraptor_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    server_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    api_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)  # legacy Bearer fallback
+    basic_auth_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)  # HTTP Basic (JSON {"username","password"})
+    client_config_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)  # mTLS YAML
+    client_cert_info: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # metadata cert
+    allowlist: Mapped[list | None] = mapped_column(JSONB, default=list)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_sync_linked: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_sync_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC))
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class VelociraptorLink(Base):
+    """Mapping `machine_id ↔ Velociraptor client_id` — được sync mỗi 5 phút từ Velociraptor.
+
+    Cách match: Velociraptor client có `os_info.hostname` (lower-case insensitive)
+    ↔ `machines.hostname` (cũng chuẩn hoá về lower-case khi so sánh). Một client chỉ
+    link với 1 máy; nếu Velociraptor trả nhiều client cùng hostname (VD máy clone),
+    hệ thống chọn client mới thấy gần nhất.
+
+    `client_id` UNIQUE — Velociraptor cũng dùng nó làm primary key phía GUI/API nên
+    không thể trùng giữa 2 máy trong inventory.
+    """
+
+    __tablename__ = "velociraptor_links"
+
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)  # hostname Velociraptor trả về (giữ nguyên case)
+    os_info: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # os_info gốc từ Velociraptor (system, release, fqdn, …)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # Velociraptor last_seen
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class DfirHunt(Base):
+    """Audit log cho mỗi lần admin chạy Hunt / Collect Artifact qua Velociraptor API.
+
+    - `hunt_id`: Velociraptor hunt_id (None nếu là collect_artifact đơn lẻ).
+    - `scope`: `all` (hunt trên nhiều client) hoặc `single` (collect artifact trên 1 client).
+    - `status`: `pending` (đã gửi Velociraptor), `completed` (admin đóng thủ công), `error` (Velociraptor trả lỗi).
+    - Audit log chính (append-only hash chain) lưu riêng ở `audit_log` với action=`dfir.hunt.create`.
+    """
+
+    __tablename__ = "dfir_hunts"
+    __table_args__ = (Index("ix_dfir_hunts_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    hunt_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    artifact: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="all")  # "all" | "single"
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    velociraptor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # deep-link portal mở tab mới
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class DfirSchedule(Base):
+    """Lịch chạy hunt/collect định kỳ qua Velociraptor (cron-like).
+
+    - `interval_seconds`: chạy mỗi N giây (60, 300, 3600, 86400).
+    - `scope`: `all` (tất cả client) hoặc `multi` (chỉ định list machine_ids).
+    - `last_run_at`: lần chạy cuối (null = chưa chạy).
+    - `next_run_at`: lần chạy kế tiếp (monitor loop check).
+    - Background task trong monitor.py scan mỗi phút, thực thi những schedule có
+      next_run_at <= now.
+    """
+
+    __tablename__ = "dfir_schedules"
+    __table_args__ = (Index("ix_dfir_schedules_next_run", "enabled", "next_run_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    artifact: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope: Mapped[str] = mapped_column(String(16), default="all")  # "all" | "multi"
+    machine_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # nếu scope=multi
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=3600)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+    last_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class DfirAlert(Base):
+    """Alert khi có flow/artifact quan trọng xuất hiện (DFIR sensitive pattern).
+
+    - `artifact_pattern`: substring match artifact name (vd "Persistence").
+    - `severity`: info / warning / critical.
+    - `triggered_at`: lần alert cuối.
+    - Hiện tại: chỉ record + show trên UI; chưa gửi email/webhook.
+    - Phase 3: tích hợp AlertRule hiện có để gửi qua SMTP/Telegram/Zalo.
+    """
+
+    __tablename__ = "dfir_alerts"
+    __table_args__ = (Index("ix_dfir_alerts_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    artifact_pattern: Mapped[str] = mapped_column(String(255), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="warning")
+    flow_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))

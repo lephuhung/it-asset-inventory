@@ -32,6 +32,7 @@ PARTITION_SCAN_SECONDS = 3600  # mỗi giờ rà partition
 ALERT_SCAN_SECONDS = 60        # mỗi phút quét alert rules
 LOST_SCAN_SECONDS = 3600       # mỗi giờ quét máy mất kết nối lâu ngày
 MACHINE_NEW_WINDOW_MINUTES = 30
+VELOCIRAPTOR_SYNC_SECONDS = settings.velociraptor_sync_interval_seconds  # 5 phút — sync hostname ↔ client_id
 
 
 async def _sweep_offline() -> None:
@@ -261,8 +262,10 @@ async def monitor_loop() -> None:
     """Vòng lặp chính — chạy nền suốt vòng đời app."""
     # Chạy partition check NGAY ở vòng đầu (last=-3600 → now-(-3600)>=3600 luôn đúng)
     last_partition_check = -PARTITION_SCAN_SECONDS
-    last_alert_check = -ALERT_SCAN_SECONDS
+    last_alert_check = -ALERT_CHECK_SECONDS
+    last_schedule_check = -DFIR_SCHEDULE_SCAN_SECONDS
     last_lost_check = -LOST_SCAN_SECONDS
+    last_velociraptor_check = -VELOCIRAPTOR_SYNC_SECONDS
     while True:
         try:
             await _sweep_offline()
@@ -276,6 +279,20 @@ async def monitor_loop() -> None:
             if now - last_lost_check >= LOST_SCAN_SECONDS:
                 await _sweep_lost()
                 last_lost_check = now
+            if now - last_velociraptor_check >= VELOCIRAPTOR_SYNC_SECONDS:
+                # Đọc trạng thái enabled t� DB (admin toggle qua portal), không dùng
+                # settings.velociraptor_enabled (env — chỉ default ban đầu).
+                # NOTE: Velociraptor hostname ↔ client_id mapping NO LONGER auto-sync.
+                # Full on-demand — admin trigger qua POST /sync (manual).
+                # Sync function kept in app.services.velociraptor_sync for manual use.
+                last_velociraptor_check = now
+
+            # NOTE: DFIR schedules + alerts NO LONGER auto-run on cron.
+            # User yêu cầu full on-demand — admin trigger qua portal endpoints:
+            # - POST /api/admin/velociraptor/schedules/{id}/run-now  (manual)
+            # - POST /api/admin/velociraptor/alerts/scan             (manual)
+            # Cron vars (last_alert_check, last_schedule_check) giữ để không
+            # break signature, nhưng không còn trigger scan tự động.
         except Exception as exc:  # noqa: BLE001
             logger.warning("Monitor loop error: %s", exc)
         await asyncio.sleep(OFFLINE_SCAN_SECONDS)
@@ -284,3 +301,196 @@ async def monitor_loop() -> None:
 async def start_monitor() -> asyncio.Task:
     task = asyncio.create_task(monitor_loop())
     return task
+
+
+# ── DFIR scheduler + alert detector ─────────────────────────────────
+
+# Sensitive artifacts → trigger alert (admin có thể tùy chỉnh phase 3 qua portal)
+SENSITIVE_ARTIFACT_PATTERNS = [
+    ("Windows.Persistence.Permanent*", "critical", "Persistence mechanism detected"),
+    ("Windows.System.Services", "info", "Service enumeration"),
+    ("Windows.EventLogs.Reboot", "info", "Reboot event"),
+    ("Windows.EventLogs.Application", "info", "Application log"),
+    ("Windows.Network.Netstat", "warning", "Network connections"),
+    ("Windows.ScheduledTasks.Catalog", "warning", "Scheduled task"),
+    ("Generic.Detection.FIM.High", "warning", "File integrity"),
+    ("Generic.Client.Info", "info", "Client baseline"),
+    ("Windows.Registry.Recursive", "warning", "Registry scan"),
+]
+
+DFIR_SCHEDULE_SCAN_SECONDS = 60  # check schedules mỗi phút
+ALERT_CHECK_SECONDS = 600  # scan alerts mỗi 10p
+
+
+async def _scan_dfir_schedules() -> None:
+    """Check dfir_schedules có next_run_at <= now → trigger."""
+    from datetime import datetime as dt
+    from sqlalchemy import select as sa_select, update
+    from app.db.models import DfirSchedule, DfirHunt, VelociraptorLink
+    from app.db.session import AsyncSessionLocal
+    from app.services.velociraptor import VelociraptorClient, VelociraptorError
+
+    async with AsyncSessionLocal() as db:
+        now = dt.now(UTC)
+        due = (
+            await db.execute(
+                sa_select(DfirSchedule)
+                .where(DfirSchedule.enabled == True)  # noqa: E712
+                .where(DfirSchedule.next_run_at <= now)
+            )
+        ).scalars().all()
+
+        if not due:
+            return
+
+        # Build VelociraptorClient 1 lần (dùng chung cho nhiều schedule)
+        cfg = (
+            await db.execute(sa_select(type(db)._mapper_registry_ if False else object))  # noop
+        ) if False else None
+        from app.api.routes.velociraptor import _build_velociraptor_client
+
+        for sch in due:
+            built = await _build_velociraptor_client(db)
+            if built is None:
+                sch.last_status = "error"
+                sch.last_error = "Velociraptor chưa cấu hình"
+                continue
+
+            client, _ = built
+            from datetime import timedelta
+
+            dfir = DfirHunt(
+                artifact=sch.artifact,
+                scope=sch.scope,
+                machine_id=None,
+                requested_by=sch.requested_by,
+                status="pending",
+                notes=f"Auto-run từ schedule '{sch.name}'",
+            )
+            db.add(dfir)
+            client_count = 0
+            try:
+                async with client as velo:
+                    if sch.scope == "multi":
+                        machine_ids = sch.machine_ids or []
+                        links = (
+                            await db.execute(
+                                sa_select(VelociraptorLink).where(
+                                    VelociraptorLink.machine_id.in_(
+                                        [uuid.UUID(m) for m in machine_ids]
+                                    )
+                                )
+                            )
+                        ).scalars().all()
+                        tasks = [
+                            velo.collect_artifact(l.client_id, [sch.artifact])
+                            for l in links
+                        ]
+                        flow_ids = await asyncio.gather(*tasks, return_exceptions=True)
+                        successful = [fid for fid in flow_ids if isinstance(fid, str) and fid]
+                        client_count = len(successful)
+                        if successful:
+                            dfir.hunt_id = successful[0]
+                    else:
+                        clients = await velo.get_all_clients()
+                        client_ids = [c.get("client_id") for c in clients if c.get("client_id")]
+                        client_count = len(client_ids)
+                        if client_count == 0:
+                            continue
+                        # Run collect_artifact per client (parallel) — không dùng create_hunt
+                        # vì Velociraptor cần artifact definition + org config setup phức tạp
+                        tasks = [velo.collect_artifact(cid, [sch.artifact]) for cid in client_ids]
+                        flow_ids = await asyncio.gather(*tasks, return_exceptions=True)
+                        successful = [fid for fid in flow_ids if isinstance(fid, str) and fid]
+                        client_count = len(successful)
+                        if successful:
+                            dfir.hunt_id = successful[0]
+
+                dfir.status = "completed"
+                sch.last_status = "completed"
+                sch.last_error = None
+                sch.last_run_at = now
+                sch.next_run_at = now + timedelta(seconds=sch.interval_seconds)
+                logger.info(
+                    "Schedule %s chạy: artifact=%s, clients=%d",
+                    sch.id, sch.artifact, client_count,
+                )
+            except VelociraptorError as e:
+                dfir.status = "error"
+                dfir.error = str(e)
+                sch.last_status = "error"
+                sch.last_error = str(e)
+                sch.last_run_at = now
+                sch.next_run_at = now + timedelta(seconds=sch.interval_seconds)
+                logger.warning("Schedule %s lỗi: %s", sch.id, e)
+            except Exception as e:  # noqa: BLE001
+                dfir.status = "error"
+                dfir.error = str(e)
+                sch.last_status = "error"
+                sch.last_error = str(e)
+                logger.exception("Schedule %s ngoại lệ", sch.id)
+        await db.commit()
+
+
+async def _scan_sensitive_flows() -> None:
+    """Scan recent flows cho sensitive artifacts → tạo alerts (Phase 3 sẽ tích hợp AlertRule)."""
+    from datetime import datetime as dt, timedelta
+    from sqlalchemy import select as sa_select, func
+    from app.db.models import DfirAlert, DfirHunt, VelociraptorLink
+
+    # Lấy các hunt gần đây (24h) có artifact match sensitive patterns
+    cutoff = dt.now(UTC) - timedelta(hours=24)
+    async with AsyncSessionLocal() as db:
+        for pattern, severity, description in SENSITIVE_ARTIFACT_PATTERNS:
+            # Match artifact name theo glob pattern (vd "Windows.Persistence.Permanent*")
+            artifact_prefix = pattern.rstrip("*")
+            recent = (
+                await db.execute(
+                    sa_select(DfirHunt)
+                    .where(DfirHunt.created_at >= cutoff)
+                    .where(DfirHunt.artifact.like(artifact_prefix + "%"))
+                    .where(DfirHunt.hunt_id.is_not(None))  # chỉ hunt có flow_id thật
+                )
+            ).scalars().all()
+
+            for hunt in recent:
+                # Tránh tạo alert trùng cho cùng hunt_id
+                existing = (
+                    await db.execute(
+                        sa_select(DfirAlert).where(DfirAlert.flow_id == hunt.hunt_id)
+                    )
+                ).scalars().first()
+                if existing:
+                    continue
+
+                # Resolve machine_id nếu scope=single
+                machine_id = hunt.machine_id
+                client_id = None
+                if hunt.scope == "single" and machine_id:
+                    link = (
+                        await db.execute(
+                            sa_select(VelociraptorLink).where(
+                                VelociraptorLink.machine_id == machine_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if link:
+                        client_id = link.client_id
+
+                alert = DfirAlert(
+                    artifact_pattern=pattern,
+                    severity=severity,
+                    flow_id=hunt.hunt_id,
+                    client_id=client_id,
+                    machine_id=machine_id,
+                    message=(
+                        f"{description}: artifact={hunt.artifact}, "
+                        f"flow_id={hunt.hunt_id}, scope={hunt.scope}"
+                    ),
+                )
+                db.add(alert)
+                logger.info(
+                    "DFIR alert: artifact=%s match pattern=%s severity=%s",
+                    hunt.artifact, pattern, severity,
+                )
+        await db.commit()

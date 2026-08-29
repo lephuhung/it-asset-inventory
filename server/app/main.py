@@ -32,8 +32,10 @@ from app.api.routes import (
     reports,
     self_service,
     stats,
+    tags,
     tokens,
     users,
+    velociraptor,
     ws,
 )
 from app.core.config import settings
@@ -83,6 +85,10 @@ async def lifespan(app: FastAPI):
         async with AsyncSessionLocal() as db:
             await auth.seed_admin(db)
             await seed_all(db)
+            # 3 tag phân loại máy (cá nhân / công vụ / BMNN) — tự seed nếu thiếu
+            from app.services.tags import ensure_system_tags
+
+            await ensure_system_tags(db)
 
     # Background monitor: phát hiện offline + đảm bảo partition heartbeats
     from app.services.monitor import start_monitor
@@ -128,6 +134,7 @@ app.include_router(inventory.router)
 app.include_router(tokens.router)
 app.include_router(machines.router)
 app.include_router(stats.router)
+app.include_router(tags.router)
 app.include_router(orgs.router)
 app.include_router(alert_rules.router)
 app.include_router(self_service.router)
@@ -139,6 +146,7 @@ app.include_router(audit.router)
 app.include_router(compliance.router)
 app.include_router(reports.router)
 from app.api.routes import agent_settings
+
 app.include_router(agent_settings.router)
 app.include_router(agent_config.router)
 app.include_router(renew.router)
@@ -146,6 +154,7 @@ app.include_router(install.router)
 app.include_router(downloads.router)
 app.include_router(ws.router)
 app.include_router(users.router)
+app.include_router(velociraptor.router)
 
 
 @app.get("/health")

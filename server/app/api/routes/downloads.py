@@ -35,6 +35,15 @@ router = APIRouter(prefix="/download", tags=["download"])
 
 MSI_FILENAME = "OrgInventoryAgent.msi"
 SHA256_FILENAME = "OrgInventoryAgent.msi.sha256"
+AGENT_LINUX_FILENAME = "OrgInventoryAgent-linux-x64"
+VELOCIRAPTOR_ZIP_FILENAME = "velociraptor-agent-windows.zip"
+VELOCIRAPTOR_MSI_FILENAME = "velociraptor-windows-amd64.msi"
+VELOCIRAPTOR_CONFIG_FILENAME = "velociraptor-client.config.yaml"
+VELOCIRAPTOR_INSTALL_BAT = "install-velociraptor.bat"
+VELOCIRAPTOR_DEB_FILENAME = "velociraptor_client_amd64.deb"
+VELOCIRAPTOR_RPM_FILENAME = "velociraptor_client_amd64.rpm"
+INSTALL_BOTH_PS1 = "install-both.ps1"
+INSTALL_BOTH_SH = "install-both.sh"
 
 
 def _safe_resolve(filename: str) -> Path:
@@ -78,6 +87,25 @@ async def download_agent_msi_sha256():
     return PlainTextResponse(content=path.read_text(encoding="utf-8").strip())
 
 
+@router.get("/agent-linux-x64", response_class=FileResponse)
+async def download_agent_linux():
+    """Binary OrgInventoryAgent cho Linux amd64 (self-contained single-file).
+
+    Build (trên máy có .NET 8 SDK):
+      cd agent && dotnet publish src/OrgInventoryAgent -c Release -r linux-x64 \
+          --self-contained -p:PublishSingleFile=true -p:DebugType=none -o publish/linux-x64
+    → copy `OrgInventoryAgent` vào `agent_msi_dir` với tên `OrgInventoryAgent-linux-x64`.
+    Script `install-both.sh` (Linux) tải file này khi có `--portal-url`.
+    """
+    path = _safe_resolve(AGENT_LINUX_FILENAME)
+    _ensure_exists(path)
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=AGENT_LINUX_FILENAME,
+    )
+
+
 @router.get("/install-offline.ps1", response_class=PlainTextResponse)
 async def download_install_offline_script():
     """Trả về `install-offline.ps1` — wrapper cài cho máy cách ly (KHÔNG cần mạng).
@@ -99,6 +127,145 @@ async def download_install_offline_launcher():
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.cmd")
     return PlainTextResponse(content=template_path.read_text(encoding="utf-8"))
+
+
+# ── Velociraptor DFIR Agent (DFIR — Digital Forensics & Incident Response) ────
+# Serve các file cài Velociraptor Client + config cho admin test nhanh.
+# File được build sẵn bởi Velociraptor Server container (ghcr.io/velocidex/velociraptor-server),
+# sau đó copy vào agent_dist/. Admin chỉ cần click link download từ portal → copy sang
+# Windows → cài + chạy.
+
+
+@router.get("/velociraptor-agent.zip", response_class=FileResponse)
+async def download_velociraptor_agent_zip():
+    """Bundle Velociraptor Client MSI + config YAML (tiện copy 1 lần sang Windows).
+
+    File `velociraptor-agent-windows.zip` chứa:
+      - velociraptor-windows-amd64.msi  (~27 MB — Windows installer)
+      - client.config.yaml              (~3 KB — config đã chỉnh `wss://<host>:8888/`)
+
+    Đặt trong `settings.agent_msi_dir` (mặc định `./agent_dist`).
+    SHA256 đi kèm trong response header `X-Content-SHA256` để admin verify.
+    """
+    import hashlib
+
+    path = _safe_resolve(VELOCIRAPTOR_ZIP_FILENAME)
+    _ensure_exists(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=VELOCIRAPTOR_ZIP_FILENAME,
+        headers={"X-Content-SHA256": digest},
+    )
+
+
+@router.get("/velociraptor-windows-amd64.msi", response_class=FileResponse)
+async def download_velociraptor_msi():
+    """Velociraptor Client MSI (Windows x64) — chỉ MSI, không kèm config."""
+    path = _safe_resolve(VELOCIRAPTOR_MSI_FILENAME)
+    _ensure_exists(path)
+    return FileResponse(
+        path,
+        media_type="application/x-msi",
+        filename=VELOCIRAPTOR_MSI_FILENAME,
+    )
+
+
+@router.get("/velociraptor-client.config.yaml", response_class=PlainTextResponse)
+async def download_velociraptor_client_config():
+    """Velociraptor Client config YAML — copy sang Windows trước khi cài MSI.
+
+    URL `server_urls` đã được ch�nh thành `wss://<host>:8888/` (host port Velociraptor
+    Frontend — KHÔNG phải port 8000 vì host 8000 đã bị Inventory backend chiếm).
+    Nếu copy sang máy Windows ở mạng khác, phải sửa `server_urls` trong file này
+    sang FQDN/IP mà máy Windows resolve được.
+    """
+    path = _safe_resolve(VELOCIRAPTOR_CONFIG_FILENAME)
+    _ensure_exists(path)
+    return PlainTextResponse(
+        content=path.read_text(encoding="utf-8"),
+        media_type="application/x-yaml",
+    )
+
+
+@router.get("/install-velociraptor.bat", response_class=PlainTextResponse)
+async def download_velociraptor_install_bat():
+    """`install-velociraptor.bat` — script tự động copy config + restart Velociraptor service.
+
+    Đặt file này cạnh `client.config.yaml` trong cùng thư mục giải nén ZIP.
+    Chuột phải → "Run as administrator" → script sẽ:
+      1. Dừng Velociraptor service
+      2. Copy config của ta đè lên config mặc định của MSI
+      3. Khởi động lại service
+      4. Hiển thị log để verify enroll thành công
+    """
+    path = _safe_resolve(VELOCIRAPTOR_INSTALL_BAT)
+    _ensure_exists(path)
+    return PlainTextResponse(
+        content=path.read_text(encoding="utf-8"),
+        media_type="text/plain",
+    )
+
+
+@router.get("/velociraptor-linux-amd64.deb", response_class=FileResponse)
+async def download_velociraptor_linux_deb():
+    """Velociraptor Client .deb (Linux amd64) — gói đã nhúng client.config.yaml.
+
+    Tạo trên Velociraptor Server bằng artifact `Server.Utils.CreateLinuxPackages`
+    (hoặc lệnh `velociraptor debian client --config client.config.yaml`), copy vào
+    `agent_msi_dir` với tên `velociraptor_client_amd64.deb`. Cài: `sudo dpkg -i ...`.
+    """
+    path = _safe_resolve(VELOCIRAPTOR_DEB_FILENAME)
+    _ensure_exists(path)
+    return FileResponse(
+        path,
+        media_type="application/vnd.debian.binary-package",
+        filename=VELOCIRAPTOR_DEB_FILENAME,
+    )
+
+
+@router.get("/velociraptor-linux-amd64.rpm", response_class=FileResponse)
+async def download_velociraptor_linux_rpm():
+    """Velociraptor Client .rpm (Linux amd64) — gói đã nhúng client.config.yaml.
+
+    Tạo trên Velociraptor Server bằng artifact `Server.Utils.CreateLinuxPackages`
+    (hoặc lệnh `velociraptor rpm client --config client.config.yaml`), copy vào
+    `agent_msi_dir` với tên `velociraptor_client_amd64.rpm`. Cài: `sudo rpm -i ...`.
+    """
+    path = _safe_resolve(VELOCIRAPTOR_RPM_FILENAME)
+    _ensure_exists(path)
+    return FileResponse(
+        path,
+        media_type="application/x-rpm",
+        filename=VELOCIRAPTOR_RPM_FILENAME,
+    )
+
+
+# ── Script cài đặt kết hợp (install-both) — cài OrgInventory + Velociraptor bằng 1 lệnh ──
+# File gốc đặt ở app/templates/ (cùng chỗ install-offline.ps1); bản dev ở agent/.
+#   Windows (1 lệnh):  $env:ORGINVENTORY_TOKEN='t_xxx'; $env:ORGINVENTORY_PORTAL_URL='<portal>';
+#                      irm <portal>/download/install-both.ps1 | iex
+#   Linux (1 lệnh):    curl -fsSL <portal>/download/install-both.sh | sudo bash -s -- \
+#                      --token t_xxx --endpoint https://agent.gov.vn --portal-url <portal>
+
+
+@router.get("/install-both.ps1", response_class=PlainTextResponse)
+async def download_install_both_ps1():
+    """`install-both.ps1` — cài cùng lúc OrgInventory Agent + Velociraptor Client trên Windows."""
+    template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_PS1
+    if not template_path.exists():
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.ps1")
+    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"), media_type="text/plain")
+
+
+@router.get("/install-both.sh", response_class=PlainTextResponse)
+async def download_install_both_sh():
+    """`install-both.sh` — cài cùng lúc OrgInventory Agent + Velociraptor Client trên Linux."""
+    template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_SH
+    if not template_path.exists():
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.sh")
+    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"), media_type="text/plain")
 
 
 @router.get("/server_public_key.pem", response_class=PlainTextResponse)

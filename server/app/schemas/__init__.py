@@ -9,6 +9,43 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.db.models import MachineStatus, TokenStatus
 
+# ── Tags ───────────────────────────────────────────────────────────
+
+
+class TagOut(BaseModel):
+    """Tag hiển thị — `kind='classification'` là 3 loại máy (1 tag/máy);
+    `kind='purpose'` là tag mục đích (nhiều tag/máy, không ảnh hưởng thống kê)."""
+
+    id: uuid.UUID
+    key: str
+    label: str
+    kind: str  # classification | purpose
+    color: str | None = None
+    sort_order: int = 0
+    is_system: bool = False
+
+
+class TagCreateRequest(BaseModel):
+    label: str = Field(..., min_length=1, max_length=128)
+    kind: str = Field(..., pattern="^(classification|purpose)$")
+    key: str | None = Field(default=None, max_length=64)  # bỏ trống → tự sinh slug từ label
+    color: str | None = Field(default=None, max_length=128)  # class badge tailwind
+
+
+class MachineTagSetRequest(BaseModel):
+    """Gán tag cho 1 máy. `classification` bắt buộc 1 trong 3 key.
+    `purpose` = None → không đụng; [] → xóa hết tag mục đích; list → thay toàn bộ."""
+
+    classification: str | None = None  # personal | official | bmnn
+    purpose: list[str] | None = None
+
+
+class BulkTagRequest(BaseModel):
+    machine_ids: list[uuid.UUID] = Field(..., min_length=1, max_length=500)
+    classification: str | None = None
+    purpose: list[str] | None = None  # None = không đụng; [] = xóa hết tag mục đích
+
+
 # ── Auth ──────────────────────────────────────────────────────────
 
 
@@ -274,6 +311,9 @@ class TokenCreateRequest(BaseModel):
     phone: str | None = Field(default=None, max_length=20, description="Tùy chọn, mã hóa AES-256-GCM")
     note: str | None = None
     ttl_hours: int = Field(default=72, ge=1, le=720)
+    # Loại máy + tag mục đích — áp cho máy khi enroll (mặc định công vụ).
+    classification: str | None = Field(default=None, pattern="^(personal|official|bmnn)$")
+    purpose_tags: list[str] = Field(default_factory=list)
 
 
 class TokenCreateResponse(BaseModel):
@@ -313,6 +353,7 @@ class MachineListItem(BaseModel):
     assigned_user_id: uuid.UUID | None
     logged_user: str | None = None  # user Windows đang đăng nhập (từ snapshot mới nhất)
     public_ip: str | None = None  # IP public (WAN) mới nhất agent báo cáo
+    tags: list[TagOut] = []  # toàn bộ tag máy (classification + purpose)
 
 
 class MachineDetail(MachineListItem):
@@ -353,6 +394,12 @@ class StatsOverview(BaseModel):
     lost: int
     pending_tokens: int
     expired_tokens: int
+    # Phân loại máy (theo tag classification — nguồn duy nhất của thống kê này).
+    # công vụ = official + bmnn (BMNN là tập con công vụ); cá nhân = personal.
+    # Tag mục đích (purpose) KHÔNG bao giờ đụng vào các số này.
+    personal: int = 0
+    official: int = 0
+    bmnn: int = 0
 
 
 class StatBucket(BaseModel):
@@ -504,6 +551,9 @@ class BulkTokenRequest(BaseModel):
     org_id: uuid.UUID
     items: list[BulkTokenItem] = Field(..., min_length=1, max_length=500)
     ttl_hours: int = Field(default=72, ge=1, le=720)
+    # Loại máy + tag mục đích áp cho TOÀN BỘ dòng (bulk CSV) — mặc định công vụ.
+    classification: str | None = Field(default=None, pattern="^(personal|official|bmnn)$")
+    purpose_tags: list[str] = Field(default_factory=list)
 
 
 class BulkTokenResponse(BaseModel):
@@ -722,15 +772,49 @@ class AgentSettingsOut(BaseModel):
 
 
 class OrgMachineStat(BaseModel):
-    """Số máy của 1 tổ chức, tách theo có agent (có heartbeat) / cách ly."""
+    """Số máy của 1 tổ chức theo tag phân loại (cá nhân / công vụ / BMNN).
+
+    - `official` = máy công vụ THUẦN (chưa gồm BMNN) — công vụ thực tế = official + bmnn.
+    - `with_agent` giữ làm thông tin phụ "đã cài agent" (không dùng để suy loại máy).
+    """
 
     org_id: uuid.UUID
     org_name: str
     org_type: str
     total: int
+    personal: int  # máy cá nhân — KHÔNG tính vào công vụ
+    official: int  # máy công vụ thuần
+    bmnn: int  # máy BMNN — vẫn là công vụ
     with_agent: int  # đã gửi heartbeat ít nhất 1 lần → đang cài agent
-    isolated: int  # không bao giờ heartbeat → import offline (máy cách ly)
-    pending: int  # chờ duyệt enroll — chưa thuộc nhóm nào
+    pending: int  # chờ duyệt enroll
+
+
+class TagOrgStat(BaseModel):
+    """Số máy mang 1 tag trong 1 tổ chức."""
+
+    org_id: uuid.UUID
+    org_name: str
+    org_type: str
+    count: int
+
+
+class TagStatItem(BaseModel):
+    """1 tag + số máy đang mang tag đó (toàn hệ thống + phân bố theo tổ chức)."""
+
+    id: uuid.UUID
+    key: str
+    label: str
+    kind: str
+    color: str | None = None
+    count: int
+    org_stats: list[TagOrgStat] = Field(default_factory=list)
+
+
+class TagStatsResponse(BaseModel):
+    """Thống kê máy theo tag — đếm số máy mang mỗi tag (classification + purpose)."""
+
+    total_machines: int
+    tags: list[TagStatItem] = Field(default_factory=list)
 
 
 # ── Pagination ────────────────────────────────────────────────
@@ -754,3 +838,213 @@ class Page(BaseModel, Generic[T]):
     total: int = Field(ge=0)
     limit: int = Field(ge=1, le=200)
     offset: int = Field(ge=0)
+
+
+# ── Velociraptor (DFIR) ──────────────────────────────────────
+
+
+class VelociraptorConfigOut(BaseModel):
+    """Cấu hình Velociraptor Server hiệu lực.
+
+    KHÔNG trả cert/credentials thật ra ngoài — chỉ boolean + cert metadata.
+    Admin nhập mới qua update (paste YAML / username+password).
+    """
+
+    enabled: bool
+    server_url: str | None = None
+    # mTLS (Velociraptor-native — cần authenticator.type: Certs phía server)
+    client_config_set: bool = False
+    client_cert_info: dict | None = None
+    # HTTP Basic (Velociraptor default authenticator — username + password)
+    basic_auth_set: bool = False
+    # Bearer fallback (legacy — vẫn hoạt động nếu đã set trước)
+    api_token_set: bool = False
+    allowlist: list[str] = Field(default_factory=list)
+    last_sync_at: datetime | None = None
+    last_sync_error: str | None = None
+    last_sync_linked: int | None = None
+    last_sync_total: int | None = None
+    updated_at: datetime | None = None
+    updated_by: uuid.UUID | None = None
+    # Defaults từ env
+    defaults_server_url: str | None = None
+    defaults_allowlist: list[str] = Field(default_factory=list)
+
+
+class VelociraptorConfigUpdate(BaseModel):
+    """Cập nhật cấu hình Velociraptor (Super Admin).
+
+    Tất cả trường đều optional. 2 cách set credentials:
+
+      - **mTLS (khuyến nghị)**: paste `client_config` = YAML từ
+        `velociraptor config client --name inventory-portal --role administrator`.
+        Server parse, mã hoá AES-256-GCM, lưu vào DB.
+      - **Bearer (fallback cũ)**: `api_token` = plaintext token. Server mã hoá AES-256-GCM.
+
+    Cả 2 cách đều hợp lệ; nếu cả 2 được set, mTLS được ưu tiên.
+    """
+
+    enabled: bool | None = None
+    server_url: str | None = Field(default=None, max_length=512)
+    client_config: str | None = Field(
+        default=None,
+        description=(
+            "YAML từ `velociraptor config api_client` — mTLS client cert (Velociraptor-native). "
+            "Rỗng/null = KHÔNG thay đổi; \"\" để xoá."
+        ),
+    )
+    username: str | None = Field(
+        default=None,
+        max_length=128,
+        description="HTTP Basic username (Velociraptor default authenticator).",
+    )
+    password: str | None = Field(
+        default=None,
+        max_length=512,
+        description="HTTP Basic password. Rỗng/null = KHÔNG đổi; \"\" để xoá.",
+    )
+    api_token: str | None = Field(
+        default=None,
+        max_length=512,
+        description="(Legacy) Bearer API token. Rỗng/null = KHÔNG đổi; \"\" để xoá.",
+    )
+    allowlist: list[str] | None = None
+
+
+class VelociraptorTestConnectionOut(BaseModel):
+    """Kết quả test kết nối Velociraptor Server (không lưu DB)."""
+
+    ok: bool
+    error: str | None = None
+    client_count_sampled: int | None = None
+    server_url: str | None = None
+
+
+class VelociraptorLinkOut(BaseModel):
+    """Mapping machine ↔ Velociraptor client_id (1-1)."""
+
+    model_config = {"from_attributes": True}  # Pydantic v2: cho phép nhận ORM object
+
+    machine_id: uuid.UUID
+    client_id: str
+    hostname: str
+    os_info: dict | None = None
+    last_seen_at: datetime | None = None
+    synced_at: datetime
+
+
+class VelociraptorLinkEnriched(VelociraptorLinkOut):
+    """VelociraptorLinkOut kèm thông tin máy để hiển thị trên portal."""
+
+    machine_hostname: str | None = None
+    machine_status: str | None = None
+    machine_org_name: str | None = None
+    machine_last_seen_at: datetime | None = None
+
+
+class DfirHuntCreate(BaseModel):
+    """Admin tạo hunt (trên nhiều máy đã link Velociraptor) hoặc collect artifact (trên 1/N máy)."""
+
+    artifact: str = Field(..., min_length=1, max_length=255, description="Velociraptor artifact name (vd 'Generic.Client.Info')")
+    scope: str = Field(default="all", pattern="^(all|single|multi)$")
+    machine_id: uuid.UUID | None = None  # bắt buộc nếu scope=single
+    machine_ids: list[uuid.UUID] | None = None  # bắt buộc nếu scope=multi
+    name: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=512)
+    notes: str | None = Field(default=None, max_length=1024)
+
+
+class DfirHuntOut(BaseModel):
+    """Kết quả tạo hunt/collect — trả hunt_id + deep-link Velociraptor GUI."""
+
+    id: uuid.UUID
+    hunt_id: str | None = None
+    artifact: str
+    scope: str
+    machine_id: uuid.UUID | None = None
+    requested_by: uuid.UUID
+    status: str
+    velociraptor_url: str | None = None
+    notes: str | None = None
+    error: str | None = None
+    created_at: datetime
+    # Số client tham gia (lấy từ Velociraptor nếu là hunt, =1 nếu là single)
+    client_count: int | None = None
+
+
+class VelociraptorClientFlowOut(BaseModel):
+    """Flow (hunt/collection/interrogation) của 1 Velociraptor client."""
+    State: str | None = None
+    FlowId: str | None = None
+    Artifacts: list[str] = []
+    Created: int | None = None  # Unix timestamp (ns)
+    LastActive: int | None = None
+    Creator: str | None = None
+    Mb: int | None = None
+    Rows: int | None = None
+
+
+class VelociraptorClientMetadataOut(BaseModel):
+    """Metadata chi tiết của Velociraptor client (từ GetClient API)."""
+    client_id: str
+    agent_information: dict | None = None
+    os_info: dict | None = None
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    last_ip: str | None = None
+    last_interrogate_flow_id: str | None = None
+    last_interrogate_artifact_name: str | None = None
+    client_count: int | None = None
+
+
+
+class DfirScheduleCreate(BaseModel):
+    """Tạo scheduled hunt/collect định kỳ."""
+    name: str = Field(..., min_length=1, max_length=255)
+    artifact: str = Field(..., min_length=1, max_length=255)
+    scope: str = Field(default="all", pattern="^(all|multi)$")
+    machine_ids: list[uuid.UUID] | None = None
+    interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400 * 7,
+        description="60 (1 phút) → 604800 (1 tuần). Phổ biến: 300 (5p), 3600 (1h), 86400 (1 ngày).",
+    )
+
+
+class DfirScheduleUpdate(BaseModel):
+    """Update scheduled hunt."""
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    interval_seconds: int | None = Field(default=None, ge=60, le=86400 * 7)
+    enabled: bool | None = None
+
+
+class DfirScheduleOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: uuid.UUID
+    name: str
+    artifact: str
+    scope: str
+    machine_ids: list | None = None
+    interval_seconds: int
+    enabled: bool
+    last_run_at: datetime | None = None
+    next_run_at: datetime
+    last_status: str | None = None
+    last_error: str | None = None
+    requested_by: uuid.UUID
+    created_at: datetime
+
+
+class DfirAlertOut(BaseModel):
+    """Alert khi có flow sensitive xuất hiện."""
+    model_config = {"from_attributes": True}
+    id: uuid.UUID
+    artifact_pattern: str
+    severity: str
+    flow_id: str
+    client_id: str | None = None
+    machine_id: uuid.UUID | None = None
+    message: str
+    resolved: bool
+    created_at: datetime
