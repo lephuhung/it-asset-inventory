@@ -1,0 +1,7 @@
+# Data + secrets sinh ra khi chạy Velociraptor — KHÔNG commit
+datastore/
+etc/
+*.log
+.env
+.DS_Store
+deploy/velociraptor/etc.bak*/

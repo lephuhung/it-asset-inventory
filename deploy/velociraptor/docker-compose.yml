@@ -1,0 +1,71 @@
+# Velociraptor Server (DFIR) — triển khai độc lập với Inventory Server.
+#
+# Tài liệu: https://docs.velociraptor.app/docs/installation/
+# Image chính thức: ghcr.io/velocidex/velociraptor-server (build từ repo
+#   https://github.com/Velocidex/velociraptor/tree/master/Docker).
+#
+# Upstream entrypoint (/bin/entrypoint) hỗ trợ sẵn các env var:
+#   - VELOCIRAPTOR_HOSTNAME           : public hostname cho client enroll (default localhost)
+#   - VELOCIRAPTOR_FRONTEND_PORT      : port gRPC client enroll (default 8000)
+#   - VELOCIRAPTOR_GUI_PORT           : port GUI + API (default 8889)
+#   - VELOCIRAPTOR_DATASTORE_PATH     : nơi lưu datastore (default /datastore/)
+#   - VELOCIRAPTOR_CONFIG_PATH        : path file config (default /etc/velociraptor/server.config.yaml)
+#   - VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD : password admin ban đầu (default "password" — NÊN đổi!)
+#   - VELOCIRAPTOR_LITERAL_CONFIG     : nếu set, dùng config có sẵn, không generate
+#   - VELOCIRAPTOR_NO_INITIALIZE      : skip init artifact (chỉ generate config)
+#
+# Ta chỉ cần:
+#   1. Mount ./datastore → /datastore  (persistent)
+#   2. Mount ./etc      → /etc/velociraptor/ (config persistent)
+#   3. Truyền VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD từ .env
+
+services:
+  velociraptor:
+    image: ghcr.io/velocidex/velociraptor-server:latest
+    container_name: velociraptor
+    restart: unless-stopped
+    hostname: velociraptor
+    # Tài khoản trong container chạy như non-root — bind mount phải writable.
+    user: "1000:1000"
+    ports:
+      # GUI + REST API (/api/v1/) — Inventory Server backend + admin truy cập.
+      - "8889:8889"
+      # gRPC cho Velociraptor Client (Windows) enroll + nhận hunt.
+      # M� port này nếu muốn client từ máy khác kết nối tới. Bỏ qua nếu chỉ dùng API.
+      # Host port 8888 (dối xứng GUI 8889, dễ nhớ "8xxx = Velociraptor").
+      # Container port 8000 giữ mặc định Velociraptor — KHI ENROLL CLIENT trên Windows,
+      # trỏ URL tới https://<host>:8888 (host port), KHÔNG phải 8000 (container port).
+      - "8888:8000"
+    volumes:
+      # Bind mount để data/config persist qua recreate + admin dễ backup.
+      # ⚠️ UID 1000 (non-root trong container) cần quyền ghi — chown trước khi chạy lần đầu:
+      #   sudo chown -R 1000:1000 ./datastore ./etc
+      - ./datastore:/datastore
+      - ./etc:/etc/velociraptor
+    # Đọc credentials mặc định từ .env (cùng thư mục).
+    environment:
+      VELOCIRAPTOR_HOSTNAME: "${VELOCIRAPTOR_HOSTNAME:-velociraptor}"
+      VELOCIRAPTOR_FRONTEND_PORT: "8000"
+      VELOCIRAPTOR_GUI_PORT: "8889"
+      VELOCIRAPTOR_DATASTORE_PATH: "/datastore"
+      VELOCIRAPTOR_CONFIG_PATH: "/etc/velociraptor/server.config.yaml"
+      VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD: "${VELOCIRAPTOR_ADMIN_PASSWORD:-password}"
+      # TẮT CSRF để script/API tự động hoá dễ gọi — KHÔNG KHUYẾN NGHỊ cho prod.
+      # Velociraptor set CSRF để chống browser-based CSRF attack; internal
+      # API integration đã chạy qua mTLS/Basic + IP allowlist thì không cần.
+      # Bật lại bằng cách xoá dòng này khi deploy production.
+      VELOCIRAPTOR_DISABLE_CSRF: "${VELOCIRAPTOR_DISABLE_CSRF:-1}"
+    healthcheck:
+      # Velociraptor GUI HTTPS self-signed — wget có sẵn trong Alpine, curl không.
+      # Root / trả 307 redirect (login) — GUI đang serve. /api/v1/SearchClients trả 401
+      # khi chưa auth (cũng tính là đang lên). Check root vì ít tốn payload.
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O /dev/null --server-response https://localhost:8889/ 2>&1 | grep -qE '^  HTTP/[12]\\.[01] +3[0-9][0-9]' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s   # chờ generate config + download tools (~60-90s lần đầu)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
