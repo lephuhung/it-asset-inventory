@@ -40,7 +40,7 @@ jobs:
         run: pip install -e ".[dev]"
       - name: Lint (ruff)
         run: ruff check app
-      - name: Chạy test (68 tests)
+      - name: Chạy test (bao gồm Velociraptor/DFIR — 14 test mới)
         run: pytest -q
         env:
           POSTGRES_TEST_HOST: 127.0.0.1

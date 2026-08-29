@@ -163,7 +163,100 @@ mới trong DB (lưu lịch sử), cập nhật bảng `machine_current` (mới 
 - Mỗi release: build agent mới → ký OV cert + timestamp → WDSI → cập nhật hash whitelist AV → release theo đợt.
 - Mỗi quý: test restore backup 1 lần, review audit log hash chain, cập nhật runbook.
 
-## 8. KHÔNG ĐƯỢC LÀM
+## 8. TÍCH HỢP VELOCIRAPTOR (DFIR)
+
+### 8.0. Triển khai nhanh bằng Docker (khuyến nghị)
+
+Repo đã có sẵn compose tại `deploy/velociraptor/` — chạy độc lập với Inventory Server:
+
+```bash
+cd deploy/velociraptor
+mkdir -p data && sudo chown -R 1000:1000 data   # non-root trong container cần quyền ghi
+docker compose up -d
+docker compose logs -f velociraptor             # chờ "Starting frontend..."
+docker compose ps                                # STATUS = healthy
+cat data/initial_password.txt                    # password admin lần đầu
+bash create-api-key.sh "inventory-portal"        # sinh API key → paste vào /dfir/settings
+```
+
+Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/README.md`.
+
+### 8.1. Kiến trúc
+
+- [Velociraptor](https://github.com/velocidex/velociraptor) chạy độc lập (cùng host hoặc host riêng) với GUI/API ở port 8889 (hoặc tuỳ cấu hình).
+- Velociraptor Client (cài thủ công trên từng máy Windows theo cách admin chọn — không qua agent inventory) tự enroll với Velociraptor Server.
+- **Inventory Server** gọi Velociraptor REST API mỗi 5 phút để đối chiếu `os_info.hostname` ↔ `machines.hostname` trong DB, lưu mapping `velociraptor_links(machine_id, client_id)`. KHÔNG cần thay đổi agent.
+- **Portal** cho admin chạy hunt / collect artifact qua API `POST /api/admin/velociraptor/hunt`. Kết quả lưu trên Velociraptor Server, portal deep-link sang GUI.
+
+### 8.2. Triển khai lần đầu
+
+1. **Triển khai Velociraptor Server** (tham khảo [docs chính thức](https://docs.velociraptor.app/docs/installation/)):
+   - Cấu hình GUI + datastore + filename ở 1 thư mục persistent (vd `/var/lib/velociraptor`).
+   - **Mở port 8889 (hoặc tuỳ chọn) ra ngoài** để các client enroll + admin truy cập GUI.
+   - Nếu chạy sau nginx: forward WebSocket + path `/api/v1/` + WebSocket upgrade header.
+2. **Tạo API key**: trong Velociraptor GUI → **Settings → API Keys** → cấp key với scope `Read + Write (admin)` (cần write để tạo hunt/collect).
+3. **Cấu hình trên Inventory Server**:
+   - Sửa `.env`:
+     ```
+     VELOCIRAPTOR_ENABLED=true
+     VELOCIRAPTOR_DEFAULT_URL=https://veloci.example.gov.vn:8889
+     VELOCIRAPTOR_SYNC_INTERVAL_SECONDS=300
+     ```
+   - `cd server && alembic upgrade head` (thêm migration `i8j9k0l1m2n3_velociraptor`).
+   - Restart server.
+4. **Cấu hình trên Portal**:
+   - Login Super Admin → `/dfir/settings`:
+     - Bật **Velociraptor**.
+     - Nhập **Server URL** (đúng URL GUI).
+     - Paste **API Token** (đã tạo ở bước 2).
+     - Rà lại **Allowlist artifact** (mặc định 13 artifact read-only).
+     - Bấm **Lưu** → **Test kết nối** → OK thì sync hostname sẽ tự chạy sau 5 phút.
+5. **Cài Velociraptor Client trên máy trạm** (theo cách riêng của đơn vị, VD qua GPO):
+   - Client cần biết `client.config.yaml` trỏ tới Velociraptor Server URL.
+   - Sau khi enroll xong, client sẽ xuất hiện trong `SearchClients` → sau 5 phút sẽ có mapping trong `/dfir`.
+6. **Audit**: mỗi lần admin chạy hunt/collect đều ghi vào `audit_log` (action `dfir.hunt.create`) + bảng `dfir_hunts` (status, hunt_id, deep-link).
+
+### 8.3. Vận hành hằng ngày
+
+- **Sync hostname tự động**: mỗi 5 phút. Xem trạng thái ở `/dfir` (panel "Số máy đã link") hoặc `/dfir/settings` (panel "Trạng thái sync").
+- **Sync thủ công**: bấm **Sync thủ công** ở `/dfir` (Super Admin). Có confirm dialog cảnh báo Velociraptor rate-limit ở fleet lớn.
+- **Allowlist artifact** (chống lạm quyền):
+  - Mặc định chỉ cho phép artifact read-only (`Generic.Client.Info`, `Windows.System.Services`, `Windows.EventLogs.*`, `Windows.Registry.*`, …).
+  - Nếu cần thêm `Windows.NTFS.MFT` / `Windows.Persistence.Permanent*` (câu lệnh DFIR chuyên sâu, tốn disk), Super Admin chủ động thêm vào allowlist trên portal.
+  - Audit log ghi lại thay đổi allowlist (`action="velociraptor.config.update"`).
+- **Test kết nối**: `/dfir/settings` → bấm **Test kết nối** — nếu lỗi, kiểm tra:
+  1. URL đúng (đã bao gồm scheme `https://`).
+  2. Port 8889 (hoặc tuỳ chọn) đã mở từ Inventory Server.
+  3. Token còn hiệu lực (Velociraptor GUI → API Keys).
+  4. CA cert nếu Velociraptor dùng self-signed: `verify_ssl=False` trong client wrapper — KHÔNG khuyến nghị cho prod, dùng reverse proxy có TLS hợp lệ.
+
+### 8.4. Xử lý sự cố
+
+| Triệu chứng | Nguyên nhân | Cách xử lý |
+|---|---|---|
+| `last_sync_error`: "HTTP 401" | Token sai / hết hạn | Tạo token mới ở Velociraptor GUI, cập nhật trên portal |
+| `last_sync_error`: "Không kết nối Velociraptor" | Firewall / DNS / port 8889 đóng | Kiểm tra từ server: `curl https://veloci.example.gov.vn:8889/api/v1/SearchClients -H "Authorization: Bearer xxx"` |
+| `linked=0, total_clients>0` | Hostname trên Velociraptor khác hostname inventory | Kiểm tra Velociraptor GUI → Host → chọn client → so sánh hostname với portal. Có thể do client install sai config (FQDN vs short name). |
+| `linked=N, total_clients=M` với N<<M | Máy Velociraptor chưa enroll vào Inventory (chưa cài agent) — bình thường | Không phải lỗi; chỉ là những client Velociraptor không có trong inventory DB |
+| Lỗi `RuntimeError` khi sync | DB engine loop issue (chỉ test) | Báo dev; production code đã chạy ổn |
+| Hunt thất bại với 403 | Artifact không trong allowlist | Super Admin vào `/dfir/settings` → thêm artifact vào allowlist |
+
+### 8.5. Bảo mật
+
+- **API Token**: mã hoá AES-256-GCM phía DB; chỉ hiển thị `api_token_set=True/False` ra portal; KHÔNG log giá trị thật.
+- **Audit log**: `velociraptor.config.update` (thay đổi URL/token/allowlist) + `dfir.hunt.create` (chạy hunt) — cùng hash chain với các action khác.
+- **RBAC**: chỉ Super Admin (hoặc `admin_global` legacy) được cấu hình Velociraptor + chạy hunt; org_admin/viewer chỉ xem được danh sách link + xem kết quả.
+- **Allowlist**: chống lạm quyền — nếu Velociraptor token bị lộ, attacker vẫn chỉ chạy được artifact trong allowlist (read-only, không xoá dữ liệu).
+- **Không cache payload**: kết quả hunt KHÔNG cache trên Inventory Server — Velociraptor là nguồn gốc. Nếu cần lưu trữ lâu dài → backup Velociraptor datastore (`/var/lib/velociraptor`).
+
+### 8.6. KHÔNG ĐƯỢC LÀM (Velociraptor)
+
+- KHÔNG dùng Velociraptor làm kênh C2 / exfiltration — chỉ dùng cho DFIR khi có sự cố.
+- KHÔNG bật allowlist artifact có side-effect xoá dữ liệu (vd `Windows.Kape.Targets` nếu không hiểu rõ) mà chưa review.
+- KHÔNG share API token qua kênh không mã hoá (email, chat). Lưu trong Vault/KMS.
+- KHÔNG tự ý tắt sync khi "không thấy lỗi" — last_sync_at cũ có thể che giấu sự cố Velociraptor server đã down.
+
+## 9. KHÔNG ĐƯỢC LÀM
 
 - Không upload agent lên VirusTotal (phát tán mẫu → ML vendor học theo).
 - Không thay đổi agent thành công cụ giám sát (screenshot/keylog/remote shell) — mục 6.6 tài liệu gốc.

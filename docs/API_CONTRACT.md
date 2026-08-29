@@ -516,3 +516,108 @@ File xuất ra có định dạng ZIP bảo mật (ví dụ `INVENTORY_PC-PHONG1
 3. **Thống nhất logic thu thập**: Cùng sử dụng chung module thu thập dữ liệu (Fingerprint, Inventory, Software, Security) và schema JSON v2/v3 cho cả 2 chế độ.
 4. **Read-only & Zero-GUI**: Không hook process, không đọc dữ liệu người dùng cá nhân, không hiển thị pop-up gây phiền hà.
 5. **Khả năng tự phục hồi & Lưu cache cục bộ**: SQLite `%ProgramData%\OrgInventory\cache.db` bảo toàn lịch sử cấu hình máy kể cả khi máy chưa kịp nạp dữ liệu lên server.
+
+---
+
+## 8. Velociraptor (DFIR — Digital Forensics & Incident Response)
+
+> Tích hợp [Velociraptor](https://github.com/velocidex/velociraptor) Server để admin chạy hunt / collect artifact từ xa. **Không can thiệp vào agent inventory** — backend độc lập gọi Velociraptor REST API để đồng bộ hostname ↔ client_id mỗi 5 phút.
+
+### 8.1. Quy trình
+
+1. **Cấu hình (Super Admin, 1 lần)**:
+   - Tạo API key ở Velociraptor GUI (Settings → API Keys).
+   - Vào portal `/dfir/settings` → nhập Server URL + API Token + bật + chỉnh allowlist.
+2. **Sync (background, 5 phút/lần)**:
+   - Server gọi `POST {VeloURL}/api/v1/SearchClients` (pagin) → lấy toàn bộ client.
+   - Với mỗi client, `normalize(os_info.hostname)` (lowercase + strip FQDN) → tìm `machines.hostname` khớp (cũng đã normalize) → upsert `velociraptor_links(machine_id, client_id, hostname, os_info, last_seen_at)`.
+   - Nếu trùng hostname (2 client cùng tên): chọn client có `last_seen_at` mới nhất.
+3. **Hunt / Collect (admin, on-demand)**:
+   - `POST /api/admin/velociraptor/hunt` với `{artifact, scope, machine_id?}`.
+   - Server **validate artifact ∈ allowlist** (403 nếu không). scope=`all` tạo hunt trên toàn bộ Velociraptor client; scope=`single` collect trên 1 client (cần `machine_id` đã có link).
+   - Ghi audit log (`action="dfir.hunt.create"`) + `dfir_hunts` table.
+   - Trả `velociraptor_url` = deep-link sang Velociraptor GUI (`/#/hunts/{hunt_id}` hoặc `/#/host/{client_id}`).
+
+### 8.2. Endpoints (Super Admin / Admin)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| `GET` | `/api/admin/velociraptor/config` | Cấu hình hiệu lực (mask token, chỉ trả `api_token_set: bool`) |
+| `PUT` | `/api/admin/velociraptor/config` | Cập nhật URL + token (AES-256-GCM) + allowlist. **Super Admin** |
+| `POST` | `/api/admin/velociraptor/test` | Test kết nối — trả `ok` + `client_count_sampled` |
+| `POST` | `/api/admin/velociraptor/sync` | Trigger sync hostname thủ công (bỏ qua 5p chờ). **Super Admin** |
+| `GET` | `/api/admin/velociraptor/links` | List mapping `machine ↔ client_id` (kèm tên máy, org, status) |
+| `POST` | `/api/admin/velociraptor/hunt` | Tạo hunt (scope=all) hoặc collect (scope=single) — validate allowlist |
+| `GET` | `/api/admin/velociraptor/hunts?limit=50&offset=0` | Lịch sử hunt/collect (audit log local) |
+| `GET` | `/api/admin/velociraptor/hunt/{hunt_id}` | Lấy status hunt từ Velociraptor Server (live) |
+
+### 8.3. Schema VelociraptorConfigOut
+
+```json
+{
+  "enabled": true,
+  "server_url": "https://veloci.example.gov.vn:8889",
+  "api_token_set": true,
+  "allowlist": ["Generic.Client.Info", "Windows.System.Services", "..."],
+  "last_sync_at": "2026-08-28T10:30:00Z",
+  "last_sync_error": null,
+  "last_sync_linked": 142,
+  "last_sync_total": 156,
+  "updated_at": "2026-08-28T09:00:00Z",
+  "updated_by": "uuid",
+  "defaults_server_url": "https://veloci.example.gov.vn:8889",
+  "defaults_allowlist": ["Generic.Client.Info", "..."]
+}
+```
+
+### 8.4. Schema DfirHuntOut
+
+```json
+{
+  "id": "uuid",
+  "hunt_id": "H.abc123",  // hoặc flow_id cho collect
+  "artifact": "Generic.Client.Info",
+  "scope": "all",  // hoặc "single"
+  "machine_id": "uuid | null",
+  "requested_by": "uuid",
+  "status": "completed",  // pending | completed | error
+  "velociraptor_url": "https://veloci.example.gov.vn:8889/#/hunts/H.abc123",
+  "notes": "Tuỳ chọn",
+  "error": null,
+  "created_at": "2026-08-28T10:00:00Z",
+  "client_count": 156  // số client tham gia (từ Velociraptor)
+}
+```
+
+### 8.5. Quy ước mapping hostname
+
+Velociraptor trả `os_info.hostname` dạng `DESKTOP-AAA.local` (FQDN); agent inventory trả `DESKTOP-AAA` (short name). Backend chuẩn hoá cả hai về dạng short-name-lowercase để so sánh:
+
+```
+normalize("DESKTOP-AAA.local") → "desktop-aaa"
+normalize("  PC-DEF  ")       → "pc-def"
+normalize("")                  → ""  (bỏ qua, không match)
+```
+
+Trường hợp đặc biệt: 1 Velociraptor client chỉ link với 1 máy (client_id UNIQUE). Nếu 2 client cùng hostname → chọn client có `last_seen_at` lớn nhất; client còn lại KHÔNG link (không match với bất kỳ máy nào).
+
+### 8.6. KHÔNG cache payload
+
+Kết quả hunt KHÔNG được lưu trên Inventory Server (chỉ lưu metadata: hunt_id, scope, artifact, client_count, status). Lý do:
+1. Dung lượng lớn (notebook Velociraptor có thể > 100MB/máy).
+2. Velociraptor là nguồn gốc — nếu cache mà Velociraptor xoá → mất dữ liệu.
+3. Audit chain đủ để truy vết (ai chạy, khi nào, artifact gì, bao nhiêu client).
+
+Admin click **Mở Velociraptor GUI** trên portal → mở tab mới sang Velociraptor để xem kết quả trực tiếp.
+
+### 8.7. Lỗi & mã phản hồi
+
+| Mã | Ý nghĩa | Cách xử lý |
+|---|---|---|
+| 200 | OK | — |
+| 400 | Velociraptor chưa cấu hình / scope=single thiếu machine_id | Cấu hình Velociraptor trên `/dfir/settings` trư�c |
+| 403 | Artifact không trong allowlist | Super Admin thêm artifact vào allowlist |
+| 404 | Machine không tồn tại | Kiểm tra ID |
+| 409 | Machine chưa link Velociraptor | Đợi sync (≤5p) hoặc bấm sync thủ công |
+| 422 | URL không hợp lệ / scope không đúng | Sửa input |
+| 502 | Velociraptor API lỗi (network/auth) | Xem `last_sync_error` ở `/dfir/settings` |

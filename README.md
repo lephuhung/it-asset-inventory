@@ -13,7 +13,7 @@ Căn cứ thiết kế: [`KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md`](KE_HOACH_HE_TH
 | `server/` | API Server + nginx + step-ca | FastAPI (Python 3.12), PostgreSQL 16, Redis 7 | ✅ Hoàn chỉnh — 68/68 test |
 | `portal/` | Portal quản trị | Next.js 16 (App Router, TypeScript, Tailwind), BFF proxy | ✅ Hoàn chỉnh — build xanh |
 | `agent/` | Agent Windows | C# .NET 8 Windows Service | ✅ Hoàn chỉnh — build 0 lỗi, e2e với schema server thật |
-| `deploy/` | Helper dev (cert, step-ca, env) | — | ✅ |
+| `deploy/` | Helper dev (cert, step-ca, env, velociraptor) | — | ✅ |
 | `docs/` | API contract, runbook | — | ✅ |
 
 > **Compose canonical nằm ở `server/deploy/docker-compose.yml`** (postgres :5432, redis :6381, api :8000, nginx :443/:9443). Nginx 2 server block: agent mTLS (9443) + portal (443) — xem `server/deploy/nginx/nginx.conf`.
@@ -75,4 +75,5 @@ cd agent && dotnet build -c Release       # 0 lỗi trên Linux; e2e: python3 to
 
 - **Agent kênh:** enroll (token 1 lần → mTLS), heartbeat ~30s±8s jitter, inventory, renew cert tự động, `GET /api/agent/config` (config-driven), on-demand rescan, audit log hash chain.
 - **Portal:** login + 2FA TOTP (backup codes), dashboard realtime (WebSocket), quản lý máy/token (phễu triển khai, one-liner), báo cáo Excel (mask SĐT), xác nhận tuân thủ pháp lý, audit, cây tổ chức UBND xã, self-service enroll (`/enroll/[code]`), alerts/drifts/EOL/offline-import.
-- **Bảo mật:** mTLS qua nginx (X-SSL-Client-* headers), AES-256-GCM cho SĐT/TOTP seed, JWT httpOnly cookie + auto-refresh, RBAC theo cây org, rate-limit, `install.ps1` verify chữ ký trước khi cài.
+- **DFIR (Velociraptor):** backend tích hợp [Velociraptor](https://github.com/velocidex/velociraptor) — Super Admin cấu hình Velociraptor Server URL + API Token (AES-256-GCM) + **allowlist artifact** (chống lạm quyền) trên portal. Background task **5 phút/lần** tự động gọi Velociraptor `SearchClients` để đồng bộ `machine.hostname ↔ Velociraptor client_id` — **không phụ thuộc agent**. Admin chạy hunt/collect artifact từ `/dfir` hoặc từ trang máy; kết quả lưu trên Velociraptor Server, portal deep-link sang GUI. Cho phép điều tra số từ xa khi xảy ra sự cố an ninh mạng.
+- **Bảo mật:** mTLS qua nginx (X-SSL-Client-* headers), AES-256-GCM cho SĐT/TOTP seed + Velociraptor API Token, JWT httpOnly cookie + auto-refresh, RBAC theo cây org, rate-limit, `install.ps1` verify chữ ký trước khi cài.
