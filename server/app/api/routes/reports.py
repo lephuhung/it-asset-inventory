@@ -19,7 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, visible_org_ids
 from app.core.audit import append_audit
-from app.db.models import EnrollToken, Machine, User
+from app.db.models import EnrollToken, Machine, MachineTag, User
 from app.db.session import get_db
 from app.services.report import build_machines_pdf, build_machines_workbook
 
@@ -46,6 +46,7 @@ async def _load_machines(
             selectinload(Machine.org),
             selectinload(Machine.assigned_user),
             selectinload(Machine.specs),
+            selectinload(Machine.tags).selectinload(MachineTag.tag),
         )
         .where(Machine.org_id.in_(visible))
         .order_by(Machine.enrolled_at.desc())

@@ -46,7 +46,13 @@ async def test_full_enroll_heartbeat_inventory(client, seeded_env, session_facto
     tok = await _create_token(client, admin_token, org_id)
     enroll_token = tok["token"]
     assert tok["install_command"].startswith("powershell")
-    assert enroll_token in tok["install_command"]
+    # Lệnh cài là `-EncodedCommand <base64 UTF-16LE>` — giải mã trước khi assert token
+    import base64 as _b64
+
+    _cmd = tok["install_command"]
+    if _cmd.startswith("powershell -NoProfile -EncodedCommand "):
+        _cmd = _b64.b64decode(_cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    assert enroll_token in _cmd
 
     # 2. Render install script — token hợp lệ
     r = await client.get(f"/i/{enroll_token}")

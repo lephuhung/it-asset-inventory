@@ -117,6 +117,11 @@ async def perform_enroll(
                 machine.assigned_user_id = user.id
         db.add(machine)
         await db.flush()
+        # Áp loại máy + tag mục đích đã chọn lúc sinh token (mặc định công vụ).
+        # set_by=None vì actor ở đây là "agent:<machine_id>" (không phải user UUID).
+        from app.services.tags import apply_token_tags
+
+        await apply_token_tags(db, machine.id, token_row)
     else:
         existing.hostname = hostname or existing.hostname
         existing.last_seen_at = now

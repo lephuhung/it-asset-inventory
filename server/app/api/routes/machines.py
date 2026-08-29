@@ -22,18 +22,29 @@ from app.db.models import (
     Machine,
     MachineCurrent,
     MachineSpec,
+    MachineTag,
     Organization,
+    Tag,
     User,
 )
 from app.db.session import get_db
 from app.schemas import (
     AssignUserRequest,
     AssignUserResponse,
+    BulkTagRequest,
     MachineDecision,
     MachineDetail,
     MachineLifecycleUpdate,
     MachineListItem,
+    MachineTagSetRequest,
     Page,
+    TagOut,
+)
+from app.services.phone_encryption import mask_phone
+from app.services.tags import (
+    get_machine_tags,
+    set_machine_classification,
+    set_machine_purpose_tags,
 )
 from app.services.phone_encryption import mask_phone
 
@@ -51,6 +62,7 @@ async def list_machines(
     org_id: uuid.UUID | None = None,
     status_filter: str | None = None,
     q: str | None = None,
+    tag: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -66,6 +78,11 @@ async def list_machines(
     if q:
         like = f"%{q}%"
         query = query.where(Machine.hostname.ilike(like) | Machine.machine_uuid.ilike(like))
+    if tag:
+        # Lọc theo tag (key) — classification lẫn purpose đều lọc được.
+        query = query.join(
+            MachineTag, MachineTag.machine_id == Machine.id
+        ).join(Tag, Tag.id == MachineTag.tag_id).where(Tag.key == tag)
 
     # Tổng số record trước khi áp limit/offset (cho frontend tính tổng số trang)
     from sqlalchemy import func as sa_func
@@ -81,6 +98,8 @@ async def list_machines(
     ids = [m.id for m in rows]
     # user Windows đang đăng nhập — lấy từ machine_current (snapshot mới nhất, có index PK)
     logged: dict[str, str | None] = {}
+    # tags của từng máy — 1 query cho toàn bộ trang
+    tags_by_machine: dict[uuid.UUID, list[TagOut]] = {mid: [] for mid in ids}
     if ids:
         latest_rows = (
             await db.execute(
@@ -90,6 +109,26 @@ async def list_machines(
             )
         ).all()
         logged = {str(mid): lu for mid, lu in latest_rows}
+        tag_rows = (
+            await db.execute(
+                select(MachineTag.machine_id, Tag)
+                .join(Tag, Tag.id == MachineTag.tag_id)
+                .where(MachineTag.machine_id.in_(ids))
+                .order_by(Tag.kind.asc(), Tag.sort_order.asc(), Tag.label.asc())
+            )
+        ).all()
+        for mid, tag_obj in tag_rows:
+            tags_by_machine.setdefault(mid, []).append(
+                TagOut(
+                    id=tag_obj.id,
+                    key=tag_obj.key,
+                    label=tag_obj.label,
+                    kind=tag_obj.kind,
+                    color=tag_obj.color,
+                    sort_order=tag_obj.sort_order,
+                    is_system=tag_obj.is_system,
+                )
+            )
     return Page[MachineListItem](
         items=[
             MachineListItem(
@@ -105,6 +144,7 @@ async def list_machines(
                 assigned_user_id=m.assigned_user_id,
                 logged_user=logged.get(str(m.id)),
                 public_ip=m.public_ip,
+                tags=tags_by_machine.get(m.id, []),
             )
             for m in rows
         ],
@@ -178,6 +218,7 @@ async def get_machine(
     org = (
         await db.execute(select(Organization).where(Organization.id == machine.org_id))
     ).scalar_one_or_none()
+    tags = await get_machine_tags(db, machine.id)
 
     return MachineDetail(
         id=machine.id,
@@ -191,6 +232,18 @@ async def get_machine(
         org_id=machine.org_id,
         assigned_user_id=machine.assigned_user_id,
         public_ip=machine.public_ip,
+        tags=[
+            TagOut(
+                id=t.id,
+                key=t.key,
+                label=t.label,
+                kind=t.kind,
+                color=t.color,
+                sort_order=t.sort_order,
+                is_system=t.is_system,
+            )
+            for t in tags
+        ],
         fingerprint=machine.fingerprint or {},
         note=machine.note,
         latest_spec=(
@@ -377,6 +430,92 @@ async def reject_machine(
     await db.commit()
     return {"ok": True, "status": machine.status}
 
+
+@router.put("/{machine_id}/tags", response_model=dict)
+async def set_machine_tags_route(
+    machine_id: uuid.UUID,
+    body: MachineTagSetRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gán tag cho 1 máy — `classification` phải là 1 trong 3 loại (cá nhân / công vụ / BMNN),
+    `purpose` là list tag mục đích (nhiều, linh hoạt). Ghi audit."""
+    machine = await _get_machine_in_scope(db, machine_id, admin)
+
+    changed: list[str] = []
+    if body.classification is not None:
+        ok = await set_machine_classification(db, machine.id, body.classification, actor=admin.id)
+        if not ok:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Loại máy không hợp lệ — phải là personal | official | bmnn",
+            )
+        changed.append(f"classification={body.classification}")
+    if body.purpose is not None:
+        await set_machine_purpose_tags(db, machine.id, body.purpose, actor=admin.id)
+        changed.append(f"purpose={body.purpose}")
+
+    if changed:
+        await append_audit(
+            db,
+            action="machine.tag.set",
+            actor=str(admin.id),
+            target=str(machine.id),
+            ip=request.client.host if request.client else None,
+            machine_id=machine.id,
+        )
+    await db.commit()
+    tags = await get_machine_tags(db, machine.id)
+    return {
+        "ok": True,
+        "tags": [
+            TagOut(
+                id=t.id, key=t.key, label=t.label, kind=t.kind,
+                color=t.color, sort_order=t.sort_order, is_system=t.is_system,
+            )
+            for t in tags
+        ],
+    }
+
+
+@router.post("/tags/bulk", response_model=dict)
+async def set_machine_tags_bulk(
+    body: BulkTagRequest,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gán tag hàng loạt cho nhiều máy (cùng org phạm vi quyền)."""
+    visible = await visible_org_ids(db, admin)
+    rows = (
+        await db.execute(select(Machine).where(Machine.id.in_(body.machine_ids)))
+    ).scalars().all()
+    allowed = [m for m in rows if str(m.org_id) in visible]
+    if not allowed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không có máy nào trong phạm vi quyền")
+
+    if body.classification is not None:
+        for m in allowed:
+            ok = await set_machine_classification(db, m.id, body.classification, actor=admin.id)
+            if not ok:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Loại máy không hợp lệ — phải là personal | official | bmnn",
+                )
+    if body.purpose is not None:
+        for m in allowed:
+            await set_machine_purpose_tags(db, m.id, body.purpose, actor=admin.id)
+
+    await append_audit(
+        db,
+        action="machine.tag.bulk",
+        actor=str(admin.id),
+        target=f"machines:{len(allowed)}",
+        ip=request.client.host if request.client else None,
+    )
+    await db.commit()
+    return {"ok": True, "updated": len(allowed)}
 
 
 

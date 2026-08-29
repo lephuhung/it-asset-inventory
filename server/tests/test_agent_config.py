@@ -278,9 +278,16 @@ async def test_portal_url_override_used_in_install_command(client, seeded_env):
     )
     assert r.status_code == 200, r.text
     cmd = r.json()["install_command"]
-    assert new_portal in cmd, f"install_command phải chứa URL mới, got: {cmd}"
-    assert "127.0.0.1" not in cmd or "127.0.0.1:3003" == new_portal, (
-        f"install_command KHÔNG được dùng 127.0.0.1 nếu admin đã override: {cmd}"
+    # Lệnh cài là `powershell -EncodedCommand <base64 UTF-16LE>` — giải mã trước khi assert
+    import base64 as _b64
+
+    if cmd.startswith("powershell -NoProfile -EncodedCommand "):
+        decoded_cmd = _b64.b64decode(cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    else:
+        decoded_cmd = cmd
+    assert new_portal in decoded_cmd, f"install_command phải chứa URL mới, got: {decoded_cmd}"
+    assert "127.0.0.1" not in decoded_cmd or "127.0.0.1:3003" == new_portal, (
+        f"install_command KHÔNG được dùng 127.0.0.1 nếu admin đã override: {decoded_cmd}"
     )
 
     # GET /i/{token} → render install.ps1 cũng phải có URL mới

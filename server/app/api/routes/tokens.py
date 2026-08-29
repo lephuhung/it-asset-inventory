@@ -85,6 +85,8 @@ async def create_tokens_bulk(
             note=item.note,
             expires_at=expires,
             status=TokenStatus.PENDING.value,
+            classification=body.classification,
+            purpose_tags=body.purpose_tags or [],
         )
         db.add(row)
         tokens_out.append(
@@ -131,6 +133,9 @@ async def create_token(
         note=body.note,
         expires_at=expires,
         status=TokenStatus.PENDING.value,
+        # Loại máy + tag mục đích — áp cho máy khi enroll (mặc định công vụ).
+        classification=body.classification,
+        purpose_tags=body.purpose_tags or [],
     )
     db.add(row)
     await append_audit(

@@ -127,7 +127,13 @@ async def test_self_service_claim_flow(client, seeded_env):
     assert claim.status_code == 200, claim.text
     data = claim.json()
     assert data["token"].startswith("t_")
-    assert "irm" in data["install_command"]
+    # Lệnh cài là `-EncodedCommand <base64 UTF-16LE>` — giải mã trước khi assert
+    import base64 as _b64
+
+    _cmd = data["install_command"]
+    if _cmd.startswith("powershell -NoProfile -EncodedCommand "):
+        _cmd = _b64.b64decode(_cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    assert "irm" in _cmd
 
     # Token xuất hiện trong phễu triển khai
     r = await client.get("/api/tokens", headers=_auth(token))

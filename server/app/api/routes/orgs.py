@@ -115,20 +115,24 @@ async def org_machine_stats(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    """Thống kê số máy theo tổ chức — tách máy có agent (đã heartbeat ≥ 1 lần)
-    và máy cách ly (chỉ có mặt qua import offline, không bao giờ heartbeat).
+    """Thống kê số máy theo tổ chức — phân loại theo TAG (cá nhân / công vụ / BMNN).
 
-    Máy `pending` (chờ duyệt enroll) liệt kê riêng vì chưa thuộc nhóm nào.
+    - `official` = công vụ THUẦN; công vụ thực tế = official + bmnn (BMNN là tập con).
+    - `personal` = máy cá nhân — KHÔNG tính vào công vụ.
+    - `with_agent` giữ làm thông tin phụ (máy đã heartbeat ≥ 1 lần) — KHÔNG còn
+      dùng để suy ra "máy cách ly" (heuristic cũ bỏ vì sai với máy mới/heartbeat bị purge).
+    - `pending` = máy chờ duyệt enroll.
     """
     from sqlalchemy import case, func
 
-    from app.db.models import Heartbeat, Machine
+    from app.db.models import Heartbeat, Machine, MachineTag, Tag
 
     visible = await visible_org_ids(db, user)
     if not visible:
         return []
 
     agent_sq = select(Heartbeat.machine_id).distinct().subquery()
+    # Query 1: tổng + có agent + chờ duyệt theo org
     rows = (
         await db.execute(
             select(
@@ -143,6 +147,28 @@ async def org_machine_stats(
         )
     ).all()
 
+    # Query 2: đếm tag classification theo (org, key) — query RIÊNG để không nhân dòng
+    cls_rows = (
+        await db.execute(
+            select(
+                Machine.org_id,
+                Tag.key,
+                func.count(),
+            )
+            .select_from(MachineTag)
+            .join(Machine, Machine.id == MachineTag.machine_id)
+            .join(Tag, Tag.id == MachineTag.tag_id)
+            .where(
+                Machine.org_id.in_(visible),
+                MachineTag.kind == "classification",
+            )
+            .group_by(Machine.org_id, Tag.key)
+        )
+    ).all()
+    cls_counts: dict[tuple[uuid.UUID, str], int] = {
+        (org_id, key): int(n) for org_id, key, n in cls_rows
+    }
+
     orgs = {
         o.id: o
         for o in (
@@ -155,17 +181,17 @@ async def org_machine_stats(
         org = orgs.get(org_id)
         if org is None:
             continue
-        p = int(pending or 0)
-        w = int(with_agent or 0)
         stats.append(
             OrgMachineStat(
                 org_id=org_id,
                 org_name=org.name,
                 org_type=org.type,
                 total=int(total),
-                with_agent=w,
-                isolated=int(total) - w - p,
-                pending=p,
+                personal=int(cls_counts.get((org_id, "personal"), 0)),
+                official=int(cls_counts.get((org_id, "official"), 0)),
+                bmnn=int(cls_counts.get((org_id, "bmnn"), 0)),
+                with_agent=int(with_agent or 0),
+                pending=int(pending or 0),
             )
         )
     stats.sort(key=lambda s: s.org_name)

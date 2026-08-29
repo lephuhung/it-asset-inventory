@@ -189,9 +189,17 @@ async def import_offline(
         )
         db.add(machine)
         await db.flush()
+        # Máy BMNN — gán tag phân loại ngay tại nguồn (nếu máy cũ chưa có tag thì cũng set).
+        from app.services.tags import ensure_classification
+
+        await ensure_classification(db, machine.id, "bmnn")
     else:
         machine.last_seen_at = exported_dt
         machine.hostname = hostname or machine.hostname
+        # Máy import offline (dù đã tồn tại) → đảm bảo phân loại BMNN.
+        from app.services.tags import ensure_classification
+
+        await ensure_classification(db, machine.id, "bmnn")
 
     # Nếu payload có bọc trong key "spec" thì lấy từ spec, nếu không thì lấy trực tiếp từ payload
     inner_spec = payload.get("spec") if isinstance(payload.get("spec"), dict) else payload

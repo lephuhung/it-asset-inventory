@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, visible_org_ids
 from app.db.models import EnrollToken, Machine, MachineCurrent, MachineSoftware, TokenStatus, User
 from app.db.session import get_db
-from app.schemas import InventoryStatsResponse, StatBucket, StatsOverview, TopSoftwareItem
+from app.schemas import InventoryStatsResponse, StatBucket, StatsOverview, TagOrgStat, TagStatItem, TagStatsResponse, TopSoftwareItem
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
@@ -42,6 +42,25 @@ async def overview(
     pending = sum(1 for t in tokens if t.status == TokenStatus.PENDING.value)
     expired = sum(1 for t in tokens if t.status == TokenStatus.EXPIRED.value)
 
+    # Phân loại máy — đếm theo tag classification (công vụ = official + bmnn).
+    # Tag mục đích KHÔNG đụng vào — chỉ lọc kind='classification'.
+    from app.db.models import MachineTag, Tag, TagKind
+
+    class_rows = (
+        await db.execute(
+            select(Tag.key, func.count())
+            .select_from(MachineTag)
+            .join(Machine, Machine.id == MachineTag.machine_id)
+            .join(Tag, Tag.id == MachineTag.tag_id)
+            .where(
+                Machine.org_id.in_(visible),
+                MachineTag.kind == TagKind.CLASSIFICATION.value,
+            )
+            .group_by(Tag.key)
+        )
+    ).all()
+    class_counts = {key: int(cnt) for key, cnt in class_rows}
+
     return StatsOverview(
         total_machines=total,
         online=online,
@@ -49,6 +68,9 @@ async def overview(
         lost=lost,
         pending_tokens=pending,
         expired_tokens=expired,
+        personal=class_counts.get("personal", 0),
+        official=class_counts.get("official", 0),
+        bmnn=class_counts.get("bmnn", 0),
     )
 
 
@@ -163,3 +185,86 @@ async def inventory_stats(
         top_software=top_software,
         generated_at=datetime.now(UTC),
     )
+
+
+@router.get("/tags", response_model=TagStatsResponse)
+async def tag_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Thống kê máy theo TAG — đếm số máy đang mang mỗi tag (classification + purpose).
+
+    Trả về toàn bộ tag trong phạm vi user (visible_org_ids), kèm phân bố theo tổ chức
+    để portal vẽ biểu đồ (donut / bar) khi người dùng chọn 1 tag. Mỗi máy có thể mang
+    nhiều tag mục đích → máy được đếm ở MỌI tag nó mang.
+    """
+    from app.db.models import MachineTag, Organization, Tag
+
+    visible = await visible_org_ids(db, user)
+    if not visible:
+        return TagStatsResponse(total_machines=0, tags=[])
+
+    total = (
+        await db.execute(select(func.count()).select_from(Machine).where(Machine.org_id.in_(visible)))
+    ).scalar_one()
+
+    # Đếm (tag, org) — join qua machine_tags; không nhân dòng vì group theo (tag, org).
+    rows = (
+        await db.execute(
+            select(
+                Tag.id,
+                Tag.key,
+                Tag.label,
+                Tag.kind,
+                Tag.color,
+                Machine.org_id,
+                func.count(),
+            )
+            .select_from(MachineTag)
+            .join(Machine, Machine.id == MachineTag.machine_id)
+            .join(Tag, Tag.id == MachineTag.tag_id)
+            .where(Machine.org_id.in_(visible))
+            .group_by(Tag.id, Tag.key, Tag.label, Tag.kind, Tag.color, Machine.org_id)
+        )
+    ).all()
+
+    orgs = {
+        o.id: o
+        for o in (await db.execute(select(Organization).where(Organization.id.in_(visible)))).scalars()
+    }
+
+    # Gom theo tag → org_stats
+    by_tag: dict[uuid.UUID, dict] = {}
+    for tag_id, key, label, kind, color, org_id, cnt in rows:
+        item = by_tag.setdefault(
+            tag_id,
+            {"key": key, "label": label, "kind": kind, "color": color, "orgs": {}},
+        )
+        item["orgs"][org_id] = int(cnt)
+
+    tags: list[TagStatItem] = []
+    for tag_id, item in by_tag.items():
+        org_stats = [
+            TagOrgStat(
+                org_id=oid,
+                org_name=orgs[oid].name,
+                org_type=orgs[oid].type,
+                count=cnt,
+            )
+            for oid, cnt in sorted(item["orgs"].items(), key=lambda kv: orgs[kv[0]].name)
+        ]
+        tags.append(
+            TagStatItem(
+                id=tag_id,
+                key=item["key"],
+                label=item["label"],
+                kind=item["kind"],
+                color=item["color"],
+                count=sum(item["orgs"].values()),
+                org_stats=org_stats,
+            )
+        )
+
+    # Classification trước, purpose sau; trong kind sort theo label
+    tags.sort(key=lambda t: (0 if t.kind == "classification" else 1, t.label))
+    return TagStatsResponse(total_machines=total, tags=tags)

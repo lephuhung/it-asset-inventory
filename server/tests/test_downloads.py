@@ -16,6 +16,11 @@ def msi_dir(tmp_path, monkeypatch):
     (d / "OrgInventoryAgent.msi.sha256").write_text(
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  OrgInventoryAgent.msi\n"
     )
+    # Velociraptor packages (Linux deb/rpm) cho /download/velociraptor-linux-*
+    (d / "velociraptor_client_amd64.deb").write_bytes(b"DEB-FAKE-CONTENT")
+    (d / "velociraptor_client_amd64.rpm").write_bytes(b"RPM-FAKE-CONTENT")
+    # Binary Linux cho /download/agent-linux-x64
+    (d / "OrgInventoryAgent-linux-x64").write_bytes(b"LINUX-BIN-FAKE-CONTENT")
     # Module-level singleton đã được import và bind ở app start → monkeypatch trực tiếp
     from app.core import config as config_module
     monkeypatch.setattr(config_module.settings, "agent_msi_dir", str(d))
@@ -80,6 +85,76 @@ async def test_downloads_require_no_auth(client, msi_dir):
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r3.status_code == 200
+
+
+# ── install-both (cài OrgInventory + Velociraptor bằng 1 lệnh) ─────────────
+
+
+async def test_download_install_both_ps1_ok(client):
+    """install-both.ps1 đọc từ template — phải chứa cả 2 phần cài đặt agent."""
+    r = await client.get("/download/install-both.ps1")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "OrgInventoryAgent" in r.text
+    assert "Velociraptor" in r.text
+
+
+async def test_download_install_both_sh_ok(client):
+    """install-both.sh đọc từ template — hỗ trợ --token/--endpoint/--velociraptor-package-url."""
+    r = await client.get("/download/install-both.sh")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "--velociraptor-package-url" in r.text
+    assert "orginventory-agent" in r.text  # systemd unit cho agent
+
+
+async def test_download_agent_linux_x64_ok(client, msi_dir):
+    """Binary Linux của OrgInventoryAgent — phục vụ cho install-both.sh."""
+    r = await client.get("/download/agent-linux-x64")
+    assert r.status_code == 200, r.text
+    assert r.content == b"LINUX-BIN-FAKE-CONTENT"
+    assert "OrgInventoryAgent-linux-x64" in r.headers.get("content-disposition", "")
+
+
+async def test_download_agent_linux_x64_not_found(client, tmp_path, monkeypatch):
+    """Chưa đặt binary Linux vào agent_msi_dir → 404 có hướng dẫn."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    from app.core import config as config_module
+    monkeypatch.setattr(config_module.settings, "agent_msi_dir", str(empty))
+
+    r = await client.get("/download/agent-linux-x64")
+    assert r.status_code == 404
+    assert "Không tìm thấy" in r.json()["detail"]
+
+
+# ── Velociraptor Linux packages (deb/rpm) ──────────────────────────────────
+
+
+async def test_download_velociraptor_linux_deb_ok(client, msi_dir):
+    r = await client.get("/download/velociraptor-linux-amd64.deb")
+    assert r.status_code == 200, r.text
+    assert r.content == b"DEB-FAKE-CONTENT"
+    assert "velociraptor_client_amd64.deb" in r.headers.get("content-disposition", "")
+
+
+async def test_download_velociraptor_linux_rpm_ok(client, msi_dir):
+    r = await client.get("/download/velociraptor-linux-amd64.rpm")
+    assert r.status_code == 200, r.text
+    assert r.content == b"RPM-FAKE-CONTENT"
+    assert "velociraptor_client_amd64.rpm" in r.headers.get("content-disposition", "")
+
+
+async def test_download_velociraptor_linux_deb_not_found(client, tmp_path, monkeypatch):
+    """Nếu chưa đặt gói .deb vào agent_msi_dir → 404 có hướng dẫn."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    from app.core import config as config_module
+    monkeypatch.setattr(config_module.settings, "agent_msi_dir", str(empty))
+
+    r = await client.get("/download/velociraptor-linux-amd64.deb")
+    assert r.status_code == 404
+    assert "Không tìm thấy" in r.json()["detail"]
 
 
 # ── Offline package — ZIP KHÔNG password (yêu cầu nghiệp vụ) ────────────────

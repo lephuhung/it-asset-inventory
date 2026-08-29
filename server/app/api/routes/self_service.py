@@ -194,6 +194,9 @@ async def claim(
         note=body.note,
         expires_at=datetime.now(UTC) + timedelta(hours=72),
         status=TokenStatus.PENDING.value,
+        # Link tự khai báo → mặc định máy công vụ.
+        classification="official",
+        purpose_tags=[],
     )
     db.add(row)
     await append_audit(

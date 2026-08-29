@@ -76,7 +76,7 @@ async def build_machines_workbook(
     ws = wb.active
     ws.title = "Máy tính"
     headers = [
-        "STT", "Hostname", "Mã máy (hash)", "Trạng thái", "Vòng đời", "Máy ảo?",
+        "STT", "Hostname", "Mã máy (hash)", "Trạng thái", "Vòng đời", "Phân loại", "Máy ảo?",
         "OS", "Build", "CPU", "RAM (GB)", "Ổ đĩa",
         "Người dùng", "Email", "Số điện thoại", "Phòng ban",
         "Tổ chức", "Lần cuối online", "Enrolled at", "Ghi chú",
@@ -100,6 +100,7 @@ async def build_machines_workbook(
             m.machine_uuid[:16] + "…",
             _label_status(m.status),
             m.lifecycle or "",
+            _classification_label(m),
             "Có" if m.is_vm else ("Không" if m.is_vm is False else ""),
             _spec_field(spec, "os_name"),
             _spec_field(spec, "os_build"),
@@ -132,6 +133,21 @@ async def build_machines_workbook(
         ws2.cell(row=row, column=1, value=f"  • {_label_status(status)}: {cnt}")
         row += 1
     row += 1
+
+    # Phân bổ theo LOẠI MÁY (tag classification — công vụ = official + bmnn)
+    ws2.cell(row=row, column=1, value="Phân bổ theo loại máy:").font = Font(bold=True)
+    row += 1
+    class_counts: dict[str, int] = {"Máy cá nhân": 0, "Máy công vụ": 0, "Máy BMNN": 0}
+    for m in machines:
+        label = _classification_label(m)
+        class_counts[label] = class_counts.get(label, 0) + 1
+    for label, cnt in class_counts.items():
+        ws2.cell(row=row, column=1, value=f"  • {label}: {cnt}")
+        row += 1
+    official_total = class_counts.get("Máy công vụ", 0) + class_counts.get("Máy BMNN", 0)
+    ws2.cell(row=row, column=1, value=f"  • Tổng máy công vụ (gồm BMNN): {official_total}").font = Font(bold=True)
+    row += 2
+
     ws2.cell(row=row, column=1, value="Phân bổ theo tổ chức:").font = Font(bold=True)
     org_counts: dict[str, int] = {}
     for m in machines:
@@ -219,6 +235,18 @@ def _label_status(status: str) -> str:
     return labels.get(status, status)
 
 
+def _classification_label(m) -> str:
+    """Nhãn loại máy từ tag classification (máy công vụ / cá nhân / BMNN).
+
+    `m.tags` là list[MachineTag] (selectinload kèm MachineTag.tag). Máy luôn có
+    đúng 1 tag classification (migration backfill + ràng buộc DB).
+    """
+    for mt in getattr(m, "tags", None) or []:
+        if mt.kind == "classification" and mt.tag is not None:
+            return mt.tag.label
+    return "—"
+
+
 def _decrypt_phone(assigned) -> str:
     from app.core.security import decrypt_aes_gcm
 
@@ -250,7 +278,7 @@ _PDF_HTML = """<!doctype html>
 <h1>DANH SÁCH MÁY TÍNH — HỆ THỐNG QUẢN LÝ TÀI SẢN</h1>
 <p class="meta">Tổng số: {total} máy · Xuất lúc {generated} · Người xuất: {generated_by}</p>
 <table>
-<thead><tr><th>STT</th><th>Hostname</th><th>Mã máy</th><th>Trạng thái</th><th>Vòng đời</th>
+<thead><tr><th>STT</th><th>Hostname</th><th>Mã máy</th><th>Trạng thái</th><th>Vòng đời</th><th>Phân loại</th>
 <th>OS</th><th>CPU</th><th>RAM</th><th>Người dùng</th><th>Điện thoại</th><th>Tổ chức</th><th>Lần cuối online</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
@@ -291,6 +319,7 @@ def build_machines_pdf(
             f"<td>{m.machine_uuid[:12]}…</td>"
             f"<td>{_label_status(m.status)}</td>"
             f"<td>{m.lifecycle or ''}</td>"
+            f"<td>{_classification_label(m)}</td>"
             f"<td>{_spec_field(spec, 'os_name')} {_spec_field(spec, 'os_build')}</td>"
             f"<td>{_cpu_label(spec)}</td>"
             f"<td>{spec.ram_gb if spec and spec.ram_gb else ''}</td>"
