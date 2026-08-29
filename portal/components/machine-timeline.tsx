@@ -45,7 +45,16 @@ const HEAT_CLASSES = [
  * Heat map bật/tắt máy (tính năng #1) — mỗi ngày 1 ô, đậm nhạt theo thời gian
  * online; sắp theo tuần (hàng = thứ, cột = tuần). Thay cho danh sách phiên.
  */
-export function MachineTimelineSection({ machineId, days = 35 }: { machineId: string; days?: number }) {
+export function MachineTimelineSection({
+  machineId,
+  days = 35,
+  className = "",
+}: {
+  machineId: string;
+  days?: number;
+  /** Class thêm cho Card — vd "lg:col-span-3 h-full" khi đặt trực tiếp trong grid. */
+  className?: string;
+}) {
   const [data, setData] = useState<MachineTimeline | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +111,7 @@ export function MachineTimelineSection({ machineId, days = 35 }: { machineId: st
 
   return (
     <Card
+      className={className}
       title="Lịch sử bật/tắt máy"
       subtitle={`${data.days} ngày gần nhất — ô càng đậm thì máy online càng lâu (di chuột để xem chi tiết)`}
       actions={

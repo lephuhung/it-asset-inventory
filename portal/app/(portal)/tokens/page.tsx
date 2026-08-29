@@ -23,8 +23,10 @@ import { api, ApiError } from "@/lib/api";
 import type {
   BulkTokenItem,
   BulkTokenResponse,
+  MachineClassification,
   Organization,
   SelfServiceLink,
+  Tag,
   TokenCreateResponse,
   TokenListItem,
 } from "@/lib/types";
@@ -107,6 +109,20 @@ export default function TokensPage() {
   const [submitted, setSubmitted] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
+  // Loại máy + tag mục đích (đánh tag lúc thêm thiết bị — áp cho máy khi enroll)
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [classification, setClassification] = useState<MachineClassification>("official");
+  const [purposeTags, setPurposeTags] = useState<string[]>([]);
+  const [csvClassification, setCsvClassification] = useState<MachineClassification>("official");
+  const [csvPurposeTags, setCsvPurposeTags] = useState<string[]>([]);
+
+  const classificationTags = tags.filter((t) => t.kind === "classification");
+  const purposeTagOptions = tags.filter((t) => t.kind === "purpose");
+
+  const togglePurposeTag = (key: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
+    setter((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
+
   // Modal kết quả
   const [created, setCreated] = useState<TokenCreateResponse | null>(null);
   const [revoking, setRevoking] = useState<TokenListItem | null>(null);
@@ -178,6 +194,17 @@ export default function TokensPage() {
       .get<Organization[]>("/orgs")
       .then((list) => setOrgs(Array.isArray(list) ? list : []))
       .catch(() => setOrgs([]));
+    // Tag phân loại + mục đích — phục vụ form thêm thiết bị
+    api
+      .get<Tag[]>("/tags")
+      .then((list) => {
+        setTags(Array.isArray(list) ? list : []);
+        if (Array.isArray(list)) {
+          const def = list.find((t) => t.kind === "classification" && t.key === "official");
+          if (def) setClassification("official");
+        }
+      })
+      .catch(() => setTags([]));
   }, [loadTokens, loadLinks, offset]);
 
   const createLink = async () => {
@@ -253,6 +280,8 @@ export default function TokensPage() {
         org_id: csvOrgId || user?.org_id,
         items,
         ttl_hours: csvTtl,
+        classification: csvClassification,
+        purpose_tags: csvPurposeTags,
       });
       setBulkResult(res);
       setCsvText("");
@@ -279,6 +308,8 @@ export default function TokensPage() {
         phone: phone || null,
         note: note || null,
         ttl_hours: ttl,
+        classification,
+        purpose_tags: purposeTags,
       });
       setCreated(res);
       setSubmitted(true);
@@ -569,6 +600,57 @@ export default function TokensPage() {
                 ))}
               </Select>
             </Field>
+            <Field label="Loại máy" required hint="Áp cho toàn bộ dòng — máy cá nhân không tính vào công vụ; BMNN là công vụ">
+              <div className="flex flex-wrap gap-2">
+                {classificationTags.map((t) => (
+                  <label
+                    key={t.key}
+                    className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      csvClassification === t.key
+                        ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                        : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="csv-classification"
+                      value={t.key}
+                      checked={csvClassification === t.key}
+                      onChange={() => setCsvClassification(t.key as MachineClassification)}
+                      className="size-3.5 accent-brand-600"
+                    />
+                    {t.label}
+                  </label>
+                ))}
+              </div>
+            </Field>
+            {purposeTagOptions.length > 0 && (
+              <Field label="Mục đích sử dụng (tag linh hoạt)">
+                <div className="flex flex-wrap gap-2">
+                  {purposeTagOptions.map((t) => {
+                    const on = csvPurposeTags.includes(t.key);
+                    return (
+                      <label
+                        key={t.key}
+                        className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                          on
+                            ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                            : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() => togglePurposeTag(t.key, setCsvPurposeTags)}
+                          className="size-3.5 rounded accent-brand-600"
+                        />
+                        {t.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
+            )}
           </div>
           <Field label="Dữ liệu (mỗi dòng: Họ tên, Phòng ban, Chức vụ, Email, Điện thoại, Ghi chú)" className="mt-3">
             <textarea
@@ -601,6 +683,11 @@ export default function TokensPage() {
           </span>
         }
         wide
+        footer={
+          <Button variant="secondary" onClick={() => setCreated(null)}>
+            Xong
+          </Button>
+        }
       >
         {created && (
           <div className="space-y-4">
@@ -684,14 +771,11 @@ export default function TokensPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
-              <span className="inline-flex items-center gap-1.5">
-                <Clock className="size-3.5" />
+            <div className="flex items-start gap-1.5 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+              <Clock className="mt-0.5 size-3.5 shrink-0" />
+              <span>
                 Hết hạn lúc <b>{formatDateTime(created.expires_at)}</b> — sau đó token vô giá trị và cần sinh lại.
               </span>
-              <Button size="sm" variant="secondary" onClick={() => setCreated(null)}>
-                Xong
-              </Button>
             </div>
           </div>
         )}
@@ -766,6 +850,62 @@ export default function TokensPage() {
               </Select>
             </Field>
           </div>
+
+          {/* Loại máy — bắt buộc chọn 1 trong 3 (tag classification) */}
+          <Field label="Loại máy" required hint="Máy cá nhân không tính vào máy công vụ; máy BMNN là máy công vụ">
+            <div className="flex flex-wrap gap-2">
+              {classificationTags.map((t) => (
+                <label
+                  key={t.key}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                    classification === t.key
+                      ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="classification"
+                    value={t.key}
+                    checked={classification === t.key}
+                    onChange={() => setClassification(t.key as MachineClassification)}
+                    className="size-3.5 accent-brand-600"
+                  />
+                  {t.label}
+                </label>
+              ))}
+            </div>
+          </Field>
+
+          {/* Tag mục đích — linh hoạt, tích nhiều (không ảnh hưởng thống kê công vụ) */}
+          {purposeTagOptions.length > 0 && (
+            <Field label="Mục đích sử dụng (tag linh hoạt)" hint="Tích nhiều — máy để làm gì: dịch vụ công, soạn thảo văn bản…">
+              <div className="flex flex-wrap gap-2">
+                {purposeTagOptions.map((t) => {
+                  const on = purposeTags.includes(t.key);
+                  return (
+                    <label
+                      key={t.key}
+                      className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                        on
+                          ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => togglePurposeTag(t.key, setPurposeTags)}
+                        className="size-3.5 rounded accent-brand-600"
+                      />
+                      {t.label}
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
+          )}
+
           <Field label="Ghi chú">
             <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ký hiệu hợp đồng / đơn vị…" />
           </Field>
@@ -793,26 +933,21 @@ export default function TokensPage() {
       />
 
       {/* Modal: xác nhận thu hồi */}
-      <Modal
+      <ConfirmDialog
         open={revoking !== null}
         onClose={() => setRevoking(null)}
         title="Thu hồi token"
-        footer={
+        danger
+        loading={revokeBusy}
+        confirmLabel="Xác nhận thu hồi"
+        onConfirm={() => void revoke()}
+        message={
           <>
-            <Button variant="secondary" onClick={() => setRevoking(null)}>
-              Hủy
-            </Button>
-            <Button variant="danger" loading={revokeBusy} onClick={() => void revoke()}>
-              Xác nhận thu hồi
-            </Button>
+            Token của <b>{revoking?.full_name ?? "người dùng"}</b> sẽ bị vô hiệu hóa ngay lập tức.
+            Hành động này được ghi vào audit log.
           </>
         }
-      >
-        <p className="text-sm text-slate-600">
-          Token của <b>{revoking?.full_name ?? "người dùng"}</b> sẽ bị vô hiệu hóa ngay lập tức.
-          Hành động này được ghi vào audit log.
-        </p>
-      </Modal>
+      />
 
       {/* Modal: kết quả bulk import */}
       <Modal
@@ -824,6 +959,11 @@ export default function TokensPage() {
           </span>
         }
         wide
+        footer={
+          <Button variant="secondary" onClick={() => setBulkResult(null)}>
+            Xong
+          </Button>
+        }
       >
         {bulkResult && (
           <div className="space-y-3">
@@ -836,7 +976,7 @@ export default function TokensPage() {
               <table className={TABLE}>
                 <thead className={THEAD}>
                   <tr>
-                    <th scope="col" className={TH}>Người dùng</th>
+                    <th scope="col" className={TH}>Token</th>
                     <th scope="col" className={TH}>Lệnh cài đặt</th>
                     <th scope="col" className={TH}></th>
                   </tr>

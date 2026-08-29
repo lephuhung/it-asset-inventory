@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, Monitor, RefreshCw, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MachineListItem, MachineStatus, Organization } from "@/lib/types";
+import type { MachineListItem, MachineStatus, Organization, Tag } from "@/lib/types";
 import { useRealtime } from "@/components/realtime-context";
 import {
   Badge,
@@ -27,7 +27,7 @@ import {
   THEAD,
   TR_HOVER,
 } from "@/components/ui";
-import { LIFECYCLE_META, MACHINE_STATUS_META, ORG_TYPE_META, flattenOrgTree, formatDateTime, timeAgo } from "@/lib/format";
+import { LIFECYCLE_META, MACHINE_STATUS_META, ORG_TYPE_META, classificationTag, flattenOrgTree, formatDateTime, purposeTags, tagBadgeClass, timeAgo } from "@/lib/format";
 import { useAuth } from "@/components/auth-context";
 
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
@@ -51,12 +51,14 @@ export default function MachinesPage() {
     offset: 0,
   });
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [orgId, setOrgId] = useState("");
+  const [tag, setTag] = useState("");
   const [offset, setOffset] = useState(0);
 
   const load = useCallback(
@@ -67,6 +69,7 @@ export default function MachinesPage() {
           q: q || undefined,
           status: status || undefined,
           org_id: orgId || undefined,
+          tag: tag || undefined,
           limit: 50,
           offset: useOffset,
         });
@@ -79,7 +82,7 @@ export default function MachinesPage() {
         setLoading(false);
       }
     },
-    [q, status, orgId, offset],
+    [q, status, orgId, tag, offset],
   );
 
   // Org list (admin toàn cục) — endpoint /api/orgs chưa có ở backend → ẩn bộ lọc khi thiếu.
@@ -90,6 +93,11 @@ export default function MachinesPage() {
         setOrgs(Array.isArray(list) ? list : []);
       })
       .catch(() => setOrgs([]));
+    // Tags (phân loại + mục đích) — cho bộ lọc
+    api
+      .get<Tag[]>("/tags")
+      .then((list) => setTags(Array.isArray(list) ? list : []))
+      .catch(() => setTags([]));
   }, []);
 
   useEffect(() => {
@@ -160,6 +168,16 @@ export default function MachinesPage() {
               </Select>
             </Field>
           )}
+          <Field label="Phân loại / tag">
+            <Select value={tag} onChange={(e) => setTag(e.target.value)}>
+              <option value="">Tất cả loại máy</option>
+              {tags.map((t) => (
+                <option key={t.id} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <div className="flex items-end self-end">
             <Button
               variant="secondary"
@@ -196,11 +214,9 @@ export default function MachinesPage() {
             <thead className={THEAD}>
               <tr>
                 <th scope="col" className={TH}>Hostname</th>
-                <th scope="col" className={TH}>UUID máy</th>
                 <th scope="col" className={TH}>Trạng thái</th>
                 <th scope="col" className={TH}>Vòng đời</th>
-                <th scope="col" className={TH}>Loại</th>
-                <th scope="col" className={TH}>Người dùng đăng nhập</th>
+                <th scope="col" className={TH}>Phân loại</th>
                 <th scope="col" className={TH}>Lần cuối online</th>
                 <th scope="col" className={TH}>Enroll</th>
                 <th scope="col" className={TH}></th>
@@ -213,7 +229,6 @@ export default function MachinesPage() {
                 return (
                   <tr key={m.id} className={TR_HOVER}>
                     <td className={`${TD} font-medium text-slate-800`}>{m.hostname ?? "(chưa đặt tên)"}</td>
-                    <td className={`${TD} font-mono text-xs text-slate-500`}>{m.machine_uuid.slice(0, 12)}…</td>
                     <td className={TD}>
                       <Badge className={meta.badge}>
                         <StatusDot className={meta.dot} />
@@ -226,13 +241,30 @@ export default function MachinesPage() {
                     <td className={TD}>
                       <Badge className={life.badge}>{life.label}</Badge>
                     </td>
-                    <td className={TD}>{m.is_vm ? "Ảo" : "Vật lý"}</td>
-                    <td className={`${TD} text-xs`}>
-                      {m.logged_user ? (
-                        <span className="font-mono" title={m.logged_user}>{m.logged_user}</span>
-                      ) : (
-                        <span className="text-slate-400">—</span>
-                      )}
+                    <td className={TD}>
+                      {/* Tag nổi bật theo type (classification) + kind (purpose) của máy */}
+                      <div className="flex flex-wrap items-center gap-1">
+                        {(() => {
+                          const cls = classificationTag(m.tags);
+                          return cls ? (
+                            <Badge className={tagBadgeClass(cls)}>{cls.label}</Badge>
+                          ) : (
+                            <Badge className="bg-slate-100 text-slate-500 ring-slate-500/20">Chưa phân loại</Badge>
+                          );
+                        })()}
+                        {purposeTags(m.tags).map((t) => (
+                          <Badge key={t.key} className={tagBadgeClass(t)}>{t.label}</Badge>
+                        ))}
+                        <Badge
+                          className={
+                            m.is_vm
+                              ? "bg-sky-50 text-sky-700 ring-sky-600/20"
+                              : "bg-slate-100 text-slate-700 ring-slate-600/20"
+                          }
+                        >
+                          {m.is_vm ? "Máy ảo" : "Vật lý"}
+                        </Badge>
+                      </div>
                     </td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.last_seen_at)}</td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.enrolled_at)}</td>

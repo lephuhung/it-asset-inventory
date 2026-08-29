@@ -19,8 +19,10 @@ import {
   LayoutDashboard,
   Monitor,
   ScrollText,
+  Search,
   ServerCog,
   ShieldCheck,
+  Tags,
   Ticket,
   UserCog,
   type LucideIcon,
@@ -105,6 +107,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: ADMIN_ROLES,
       },
       {
+        href: "/dfir",
+        label: "DFIR",
+        icon: Search,
+        roles: ADMIN_ROLES,
+      },
+      {
         href: "/audit",
         label: "System Logs",
         icon: ScrollText,
@@ -127,6 +135,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         label: "Cấu hình Agent",
         icon: ServerCog,
         roles: ADMIN_ROLES,
+      },
+      {
+        href: "/tags",
+        label: "Phân loại & mục đích",
+        icon: Tags,
+        roles: SUPER_ADMIN_ROLES,
       },
       {
         href: "/security",

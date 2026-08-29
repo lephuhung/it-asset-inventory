@@ -285,12 +285,13 @@ export default function UsersPage() {
         footer={
           <>
             <Button variant="secondary" onClick={() => setShowCreate(false)}>Hủy</Button>
-            <Button loading={createBusy} onClick={() => void createUser(null as unknown as FormEvent)}>
+            <Button form="user-create-form" type="submit" loading={createBusy}>
               <UserPlus className="size-4" /> Tạo tài khoản
-            </Button>          </>
+            </Button>
+          </>
         }
       >
-        <form onSubmit={createUser} className="space-y-4">
+        <form id="user-create-form" onSubmit={createUser} className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Họ tên" required>
               <Input
@@ -371,18 +372,20 @@ export default function UsersPage() {
           </>
         }
       >
-        <Field label="Mật khẩu mới" required hint="Tối thiểu 8 ký tự">
-          <Input
-            type="password"
-            value={resetPass}
-            onChange={(e) => setResetPass(e.target.value)}
-            placeholder="••••••••"
-            minLength={8}
-          />
-        </Field>
-        <p className="mt-3 text-xs text-slate-400">
-          Hành động ghi vào audit log. Người dùng phải đăng nhập bằng mật khẩu mới.
-        </p>
+        <div className="space-y-4">
+          <Field label="Mật khẩu mới" required hint="Tối thiểu 8 ký tự">
+            <Input
+              type="password"
+              value={resetPass}
+              onChange={(e) => setResetPass(e.target.value)}
+              placeholder="••••••••"
+              minLength={8}
+            />
+          </Field>
+          <p className="text-xs text-slate-400">
+            Hành động ghi vào audit log. Người dùng phải đăng nhập bằng mật khẩu mới.
+          </p>
+        </div>
       </Modal>
     </div>
   );

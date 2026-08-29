@@ -241,9 +241,14 @@ export default function ApiKeysPage() {
             <KeyRound className="size-4 text-emerald-600" /> API key đã tạo
           </span>
         }
+        footer={
+          <Button variant="secondary" onClick={() => setCreated(null)}>
+            Xong
+          </Button>
+        }
       >
         {created && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
               <code className="block break-all font-mono text-sm text-emerald-900">{created.key}</code>
             </div>

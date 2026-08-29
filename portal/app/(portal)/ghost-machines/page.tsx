@@ -34,7 +34,11 @@ export default function GhostMachinesPage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: "lost", limit: 50 });
+      const data = await api.get<PageResponse<MachineListItem>>("/machines", {
+        status: "lost",
+        tag: "bmnn", // chỉ máy BMNN — máy công vụ/cá nhân mất kết nối không nằm trang này
+        limit: 50,
+      });
       setMachines(data.items);
       setError(null);
     } catch (e) {

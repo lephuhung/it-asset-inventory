@@ -19,7 +19,6 @@ import {
   Badge,
   Button,
   Card,
-  ConfirmDialog,
   ErrorBanner,
   Field,
   IconButton,

@@ -116,6 +116,42 @@ export const ALERT_SEVERITY_META: Record<string, { label: string; badge: string 
   critical: { label: "Nghiêm trọng", badge: "bg-rose-50 text-rose-700 ring-rose-600/20" },
 };
 
+/* ── Tags máy (phân loại + mục đích) ──────────────────────────── */
+
+/** Nhãn + màu mặc định cho 3 loại máy (tag classification hệ thống). */
+export const CLASSIFICATION_META: Record<string, { label: string; badge: string }> = {
+  personal: { label: "Máy cá nhân", badge: "bg-sky-50 text-sky-700 ring-sky-600/20" },
+  official: { label: "Máy công vụ", badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  bmnn: { label: "Máy BMNN", badge: "bg-amber-50 text-amber-700 ring-amber-600/20" },
+};
+
+export interface TagLike {
+  key: string;
+  label: string;
+  kind: "classification" | "purpose" | string;
+  color?: string | null;
+}
+
+/** Class badge cho 1 tag — ưu tiên màu đặt ở server, fallback theo key/kind.
+ *  Classification → màu theo loại máy (sky/emerald/amber); purpose → violet nổi bật. */
+export function tagBadgeClass(tag: TagLike): string {
+  if (tag.color) return tag.color;
+  if (tag.kind === "classification") {
+    return CLASSIFICATION_META[tag.key]?.badge ?? "bg-emerald-50 text-emerald-700 ring-emerald-600/20";
+  }
+  return "bg-violet-50 text-violet-700 ring-violet-600/20";
+}
+
+/** Tag classification của máy (mỗi máy đúng 1) — trả về tag hoặc null. */
+export function classificationTag(tags: TagLike[] | undefined | null): TagLike | null {
+  return (tags ?? []).find((t) => t.kind === "classification") ?? null;
+}
+
+/** Tag mục đích của máy (nhiều). */
+export function purposeTags(tags: TagLike[] | undefined | null): TagLike[] {
+  return (tags ?? []).filter((t) => t.kind === "purpose");
+}
+
 /** Làm phẳng cây tổ chức thành danh sách select (kèm độ sâu). */
 export function flattenOrgTree(
   roots: Organization[],

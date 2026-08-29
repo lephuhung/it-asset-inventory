@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Ghost, Hourglass, Monitor, Timer, Ticket, Wifi, WifiOff, XCircle } from "lucide-react";
+import { Briefcase, ChevronRight, Ghost, HardDriveDownload, Hourglass, Monitor, Timer, Ticket, User, Wifi, WifiOff, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineEvent, MachineListItem, StatsOverview } from "@/lib/types";
 import { useRealtime } from "@/components/realtime-context";
@@ -128,7 +128,7 @@ export default function DashboardPage() {
               icon={<Ticket className="size-4 text-amber-600" />}
               accent="bg-amber-50"
               sub="Đã cấp lệnh, máy chưa chạy"
-              hint="Đếm token đã phát cho người dùng (qua form self-service, bulk CSV hoặc admin tạo) nhưng máy chưa chạy lệnh cài agent. KHÁC với 'Máy ch� duyệt' ở trang Approvals — đó là máy đã enroll thành công và cần admin duyệt."
+              hint="Đếm token đã phát cho người dùng (qua form self-service, bulk CSV hoặc admin tạo) nhưng máy chưa chạy lệnh cài agent. KHÁC với 'Máy chờ duyệt' ở trang Approvals — đó là máy đã enroll thành công và cần admin duyệt."
             />
             <KpiCard
               label="Token hết hạn"
@@ -137,6 +137,31 @@ export default function DashboardPage() {
               accent="bg-zinc-100"
               sub="Cần gửi lại lệnh"
               hint="Token đã quá 72h mà máy chưa cài agent — cần phát lại lệnh mới cho người dùng."
+            />
+          </div>
+
+          {/* Phân loại máy — máy cá nhân KHÔNG tính vào công vụ; BMNN là công vụ */}
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <KpiCard
+              label="Máy cá nhân"
+              value={stats?.personal ?? 0}
+              icon={<User className="size-4 text-sky-600" />}
+              accent="bg-sky-50"
+              sub="Không tính vào máy công vụ"
+            />
+            <KpiCard
+              label="Máy công vụ"
+              value={(stats?.official ?? 0) + (stats?.bmnn ?? 0)}
+              icon={<Briefcase className="size-4 text-emerald-600" />}
+              accent="bg-emerald-50"
+              sub="Công vụ thuần + BMNN"
+            />
+            <KpiCard
+              label="Trong đó: Máy BMNN"
+              value={stats?.bmnn ?? 0}
+              icon={<HardDriveDownload className="size-4 text-amber-600" />}
+              accent="bg-amber-50"
+              sub="Tập con của máy công vụ"
             />
           </div>
 

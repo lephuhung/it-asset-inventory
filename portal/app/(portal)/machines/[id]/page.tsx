@@ -7,19 +7,23 @@ import {
   ArrowLeft,
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Cpu,
   Fingerprint,
   HardDrive,
+  Loader2,
   Monitor,
   Network,
   Package,
+  PlayCircle,
   RefreshCw,
+  Search,
   ShieldCheck,
   StickyNote,
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MachineDetail, NetworkInterface } from "@/lib/types";
+import type { DfirHunt, MachineClassification, MachineDetail, NetworkInterface, Tag, VelociraptorClientFlow, VelociraptorClientMetadata, VelociraptorConfig, VelociraptorLink, VelociraptorLookup } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
   Badge,
@@ -39,12 +43,16 @@ import {
 import {
   LIFECYCLE_META,
   MACHINE_STATUS_META,
+  classificationTag,
   formatBytes,
   formatDateTime,
+  purposeTags,
+  tagBadgeClass,
   timeAgo,
 } from "@/lib/format";
 import { EOL_STATUS_META, getWindowsEol } from "@/lib/eol";
 import { MachineTimelineSection } from "@/components/machine-timeline";
+import { VeloLogDrawer, VelociraptorLiveCard } from "@/components/velociraptor-live";
 
 /** "—" nếu rỗng; object → JSON. */
 function kv(value: unknown): string {
@@ -307,6 +315,32 @@ export default function MachineDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
 
+  // ── Tag máy (phân loại + mục đích) ──
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [editClass, setEditClass] = useState<MachineClassification>("official");
+  const [editPurpose, setEditPurpose] = useState<string[]>([]);
+  const [tagBusy, setTagBusy] = useState(false);
+  const [tagError, setTagError] = useState<string | null>(null);
+
+  const classificationOptions = allTags.filter((t) => t.kind === "classification");
+  const purposeOptions = allTags.filter((t) => t.kind === "purpose");
+
+  // ── Velociraptor (DFIR) ──
+  const [veloConfig, setVeloConfig] = useState<VelociraptorConfig | null>(null);
+  const [veloLink, setVeloLink] = useState<VelociraptorLink | null>(null);
+  const [veloBusy, setVeloBusy] = useState(false);
+  const [veloError, setVeloError] = useState<string | null>(null);
+  const [veloResult, setVeloResult] = useState<{ ok: boolean; message: string; url: string | null } | null>(null);
+  // Live Velociraptor data (realtime từ Velociraptor Server API, không qua DB)
+  const [veloMetadata, setVeloMetadata] = useState<VelociraptorClientMetadata | null>(null);
+  const [veloFlows, setVeloFlows] = useState<VelociraptorClientFlow[]>([]);
+  const [veloLiveLoading, setVeloLiveLoading] = useState(false);
+  const [veloLiveError, setVeloLiveError] = useState<string | null>(null);
+  const [showCollectModal, setShowCollectModal] = useState(false);
+  const [collectArtifact, setCollectArtifact] = useState("");
+  // ── Panel log Velociraptor (trượt vào từ bên phải, đẩy nội dung sang trái) ──
+  const [showVeloLog, setShowVeloLog] = useState(false);
+
   // ── Luôn khóa chiều cao card "Phần mềm đã cài" theo card "Trạng thái bảo mật" cùng hàng ──
   const securityCardRef = useRef<HTMLElement | null>(null);
   const softwareCardRef = useRef<HTMLElement | null>(null);
@@ -375,6 +409,10 @@ export default function MachineDetailPage() {
       const m = await api.get<MachineDetail>(`/machines/${id}`);
       setMachine(m);
       setLifecycle(m.lifecycle);
+      // Đồng bộ bộ chỉnh tag với tag hiện tại của máy
+      const cls = classificationTag(m.tags);
+      if (cls) setEditClass(cls.key as MachineClassification);
+      setEditPurpose(purposeTags(m.tags).map((t) => t.key));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được chi tiết máy");
@@ -383,9 +421,118 @@ export default function MachineDetailPage() {
     }
   }, [id]);
 
+  // Toàn bộ tag (classification + purpose) — cho bộ chỉnh trong modal Quản trị
+  useEffect(() => {
+    api
+      .get<Tag[]>("/tags")
+      .then((list) => {
+        setAllTags(Array.isArray(list) ? list : []);
+        if (Array.isArray(list)) {
+          const def = list.find((t) => t.kind === "classification" && t.key === "official");
+          if (def) setEditClass((cur) => cur ?? "official");
+        }
+      })
+      .catch(() => setAllTags([]));
+  }, []);
+
+  /** Lưu loại máy + tag mục đích (PUT /machines/{id}/tags — ghi audit). */
+  const saveTags = async () => {
+    if (!machine) return;
+    setTagBusy(true);
+    setTagError(null);
+    try {
+      const res = await api.put<{ tags: Tag[] }>(`/machines/${machine.id}/tags`, {
+        classification: editClass,
+        purpose: editPurpose,
+      });
+      setMachine((prev) => (prev ? { ...prev, tags: res.tags } : prev));
+      setAdminOpen(false);
+    } catch (e) {
+      setTagError(e instanceof Error ? e.message : "Không lưu được tag");
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  // On-demand lookup Velociraptor (NO background sync):
+  // 1. Config từ DB (allowlist, server_url) — sync_state không còn
+  // 2. Client_id lookup trực tiếp từ Velociraptor Server bằng hostname (không cache DB)
+  const loadVelo = useCallback(async () => {
+    setVeloConfig(null);
+    setVeloLink(null);
+    try {
+      const cfg = await api.get<VelociraptorConfig>("/admin/velociraptor/config");
+      setVeloConfig(cfg);
+      if (cfg.allowlist.length > 0) setCollectArtifact((cur) => cur || cfg.allowlist[0]);
+      // Lookup hostname → client_id qua Velociraptor API trực tiếp
+      if (machine?.hostname && cfg.enabled) {
+        const lookup = await api.get<VelociraptorLookup>(
+          `/admin/velociraptor/lookup?hostname=${encodeURIComponent(machine.hostname)}`,
+        );
+        if (lookup.matched && lookup.client_id) {
+          // Synthesize VelociraptorLink-like object từ lookup (không qua DB)
+          setVeloLink({
+            machine_id: id,
+            client_id: lookup.client_id,
+            hostname: lookup.hostname ?? machine.hostname,
+            os_info: lookup.os_info,
+            last_seen_at: null,
+            synced_at: new Date().toISOString(),
+          });
+        }
+      }
+    } catch {
+      // Velociraptor chưa cấu hình / unreachable — section hiện "chưa cấu hình"
+    }
+  }, [id, machine?.hostname]);
+
+  // Load live Velociraptor data (flows + metadata realtime) cho máy đã link
+  const loadVeloLive = useCallback(async () => {
+    if (!veloLink) {
+      setVeloMetadata(null);
+      setVeloFlows([]);
+      return;
+    }
+    setVeloLiveLoading(true);
+    setVeloLiveError(null);
+    try {
+      const [meta, flows] = await Promise.all([
+        api.get<VelociraptorClientMetadata>(`/admin/velociraptor/clients/${veloLink.client_id}/metadata`),
+        api.get<VelociraptorClientFlow[]>(`/admin/velociraptor/clients/${veloLink.client_id}/flows`),
+      ]);
+      setVeloMetadata(meta);
+      setVeloFlows(flows);
+    } catch (e) {
+      setVeloLiveError(e instanceof Error ? e.message : "Không tải được dữ liệu Velociraptor");
+      setVeloMetadata(null);
+      setVeloFlows([]);
+    } finally {
+      setVeloLiveLoading(false);
+    }
+  }, [veloLink]);
+
+  useEffect(() => {
+    void loadVelo();
+  }, [loadVelo]);
+
+  // Load live data sau khi veloLink sẵn sàng (từ lần loadVelo đầu tiên)
+  useEffect(() => {
+    void loadVeloLive();
+  }, [loadVeloLive]);
+
+  // ESC đóng panel log Velociraptor
+  useEffect(() => {
+    if (!showVeloLog) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowVeloLog(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showVeloLog]);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "org_admin" || user?.role === "admin_global" || user?.role === "admin_org";
 
@@ -400,6 +547,34 @@ export default function MachineDetailPage() {
       setActionError(e instanceof Error ? e.message : "Thao tác thất bại");
     } finally {
       setActionBusy(null);
+    }
+  };
+
+  /** Collect artifact qua Velociraptor trên máy này (1 client cụ thể). */
+  const collectArtifactOnMachine = async () => {
+    if (!machine || !veloLink || !collectArtifact) return;
+    setVeloBusy(true);
+    setVeloError(null);
+    setVeloResult(null);
+    try {
+      const res = await api.post<DfirHunt>("/admin/velociraptor/hunt", {
+        artifact: collectArtifact,
+        scope: "single",
+        machine_id: machine.id,
+        notes: `Thu thập từ trang máy ${machine.hostname ?? machine.id}`,
+      });
+      setVeloResult({
+        ok: true,
+        message: `Đã gửi Velociraptor — flow_id ${res.hunt_id ?? res.id}. Xem kết quả ở GUI.`,
+        url: res.velociraptor_url,
+      });
+      setShowCollectModal(false);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Collect thất bại";
+      setVeloError(msg);
+      setVeloResult({ ok: false, message: msg, url: null });
+    } finally {
+      setVeloBusy(false);
     }
   };
 
@@ -499,6 +674,14 @@ export default function MachineDetailPage() {
               {meta.label}
             </Badge>
             <Badge className={life.badge}>{life.label}</Badge>
+            {(() => {
+              const cls = classificationTag(machine.tags);
+              return cls ? (
+                <Badge className={tagBadgeClass(cls)}>{cls.label}</Badge>
+              ) : (
+                <Badge className="bg-slate-100 text-slate-500 ring-slate-500/20">Chưa phân loại</Badge>
+              );
+            })()}
             <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">
               {machine.is_vm ? "Máy ảo" : "Vật lý"}
             </Badge>
@@ -511,6 +694,23 @@ export default function MachineDetailPage() {
         }
       />
 
+      {/* Ghi chú quản trị — hiện ngay dưới tên thiết bị như nội dung EOL */}
+      {machine.note && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700">
+          <StickyNote className="mt-0.5 size-4 shrink-0 text-slate-400" />
+          <span className="min-w-0">{machine.note}</span>
+        </div>
+      )}
+
+      {/* Tag mục đích — chip nhỏ dưới tên máy, không ảnh hưởng thống kê */}
+      {purposeTags(machine.tags).length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+          {purposeTags(machine.tags).map((t) => (
+            <Badge key={t.key} className={tagBadgeClass(t)}>{t.label}</Badge>
+          ))}
+        </div>
+      )}
+
       {eol && (
         <div className="mb-4">
           <Badge className={EOL_STATUS_META[eol.status].badge}>
@@ -521,10 +721,46 @@ export default function MachineDetailPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {/* Timeline bật/tắt — đặt lên đầu trang theo yêu cầu */}
-      <div className="mb-5">
-        <MachineTimelineSection machineId={machine.id} />
-      </div>
+      {/* Heatmap 3/5 trái + Velociraptor — Live data 2/5 phải (nếu máy đã link Velociraptor) */}
+      {veloLink ? (
+        <div className="mb-5 grid items-stretch gap-5 lg:grid-cols-5">
+          <MachineTimelineSection machineId={machine.id} className="h-full lg:col-span-3" />
+          <VelociraptorLiveCard
+            className="h-full lg:col-span-2"
+            metadata={veloMetadata}
+            flows={veloFlows}
+            loading={veloLiveLoading}
+            error={veloLiveError}
+            active={Boolean(
+              veloConfig?.enabled &&
+                (veloConfig.basic_auth_set || veloConfig.client_config_set || veloConfig.api_token_set),
+            )}
+            result={veloResult}
+            busy={veloBusy}
+            canCollect={Boolean(
+              isAdmin &&
+                veloConfig?.enabled &&
+                (veloConfig.basic_auth_set || veloConfig.client_config_set || veloConfig.api_token_set),
+            )}
+            guiUrl={
+              veloConfig?.server_url
+                ? `${veloConfig.server_url.replace(/\/$/, "")}/#/host/${veloLink.client_id}`
+                : null
+            }
+            onRefresh={() => void loadVeloLive()}
+            onOpenLogs={() => setShowVeloLog(true)}
+            onCollect={() => {
+              setVeloError(null);
+              setVeloResult(null);
+              setShowCollectModal(true);
+            }}
+          />
+        </div>
+      ) : (
+        <div className="mb-5">
+          <MachineTimelineSection machineId={machine.id} />
+        </div>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Cấu hình phần cứng" subtitle={spec ? `Snapshot lúc ${formatDateTime(spec.collected_at)}` : "Chưa có snapshot inventory"}>
@@ -571,6 +807,24 @@ export default function MachineDetailPage() {
               )}
             </div>
           )}
+
+          {/* Fingerprint máy — định danh tĩnh (không đổi theo snapshot), gộp gọn tại đây */}
+          <details className="group mt-1 text-sm">
+            <summary className="flex cursor-pointer select-none items-center justify-between gap-2 text-slate-500">
+              <span className="inline-flex items-center gap-1.5">
+                <Fingerprint className="size-3.5 shrink-0 text-slate-400" />
+                <span className="font-medium">Fingerprint máy</span>
+              </span>
+              <ChevronRight className="size-3.5 shrink-0 text-slate-400 transition-transform group-open:rotate-90" />
+            </summary>
+            <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5 font-mono text-[11px] leading-relaxed text-slate-600">
+              {JSON.stringify(machine.fingerprint ?? {}, null, 2)}
+            </pre>
+            <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
+              Fingerprint drift (đổi mainboard / ghost Win) sẽ hiện cảnh báo ở Phase 3 — admin duyệt
+              trên màn chuyên dụng.
+            </p>
+          </details>
         </Card>
 
         <Card title="Mạng & người dùng">
@@ -742,26 +996,52 @@ export default function MachineDetailPage() {
           )}
         </Card>
 
-        <Card title="Fingerprint máy" subtitle="Định danh đa nguồn, dùng fuzzy-match khi enroll">
-          <pre className="max-h-80 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">
-            {JSON.stringify(machine.fingerprint ?? {}, null, 2)}
-          </pre>
-        </Card>
-
-        <Card title="Ghi chú" subtitle="Vòng đời tài sản & ghi chú quản trị">
-          <div className="flex items-start gap-2 text-sm text-slate-700">
-            <StickyNote className="mt-0.5 size-4 shrink-0 text-slate-400" />
-            {machine.note ? machine.note : "Chưa có ghi chú."}
-          </div>
-          <div className="mt-3 flex items-start gap-2 text-sm text-slate-700">
-            <Fingerprint className="mt-0.5 size-4 shrink-0 text-slate-400" />
-            <span>
-              Fingerprint drift (đổi mainboard / ghost Win) sẽ hiện cảnh báo ở Phase 3 — admin duyệt
-              trên màn chuyên dụng.
-            </span>
-          </div>
-        </Card>
+        {/* Velociraptor Live Data — card đã tách sang cột 2/5 cạnh heatmap (VelociraptorLiveCard) */}
       </div>
+
+      {/* Modal: Collect Artifact qua Velociraptor */}
+      <Modal
+        open={showCollectModal}
+        onClose={() => setShowCollectModal(false)}
+        title={`Collect Artifact qua Velociraptor — ${machine?.hostname ?? machine?.id ?? ""}`}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setShowCollectModal(false)} disabled={veloBusy}>
+              Hủy
+            </Button>
+            <Button onClick={collectArtifactOnMachine} disabled={veloBusy || !collectArtifact}>
+              {veloBusy ? <Loader2 className="size-3.5 animate-spin" /> : <PlayCircle className="size-3.5" />}
+              Gửi Velociraptor
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          {veloError && <ErrorBanner message={veloError} />}
+
+          <Field
+            label="Artifact"
+            hint="Chỉ chạy được artifact có trong allowlist (cấu hình ở /dfir/settings)."
+          >
+            <Select value={collectArtifact} onChange={(e) => setCollectArtifact(e.target.value)}>
+              {(veloConfig?.allowlist ?? []).map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <div className="rounded-md bg-slate-50 p-3 text-xs leading-relaxed text-slate-600 ring-1 ring-inset ring-slate-200">
+            <Search className="mr-1 inline size-3.5 align-text-top text-violet-600" />
+            Velociraptor sẽ chạy artifact trên client_id{" "}
+            <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">
+              {veloLink?.client_id?.slice(0, 16)}…
+            </code>
+            . Kết quả lưu trên Velociraptor Server — click <em>Mở Velociraptor GUI</em> sau khi gửi để xem notebook.
+          </div>
+        </div>
+      </Modal>
 
       {isAdmin && (
         <Modal
@@ -770,8 +1050,85 @@ export default function MachineDetailPage() {
           title="Thao tác quản trị"
         >
           <div className="space-y-5">
-            {/* Vòng đời tài sản (#18) */}
+            {/* Phân loại máy + tag mục đích (#tag) */}
             <div>
+              <Field
+                label="Loại máy"
+                required
+                hint="Máy cá nhân không tính vào máy công vụ; máy BMNN là máy công vụ — quyết định số liệu thống kê"
+              >
+                <div className="flex flex-wrap gap-2">
+                  {classificationOptions.map((t) => (
+                    <label
+                      key={t.key}
+                      className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                        editClass === t.key
+                          ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="edit-classification"
+                        value={t.key}
+                        checked={editClass === t.key}
+                        onChange={() => setEditClass(t.key as MachineClassification)}
+                        className="size-3.5 accent-brand-600"
+                      />
+                      {t.label}
+                    </label>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Mục đích sử dụng (tag linh hoạt — kind)" className="mt-3">
+                {purposeOptions.length === 0 ? (
+                  <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500 ring-1 ring-inset ring-slate-200">
+                    Chưa có tag mục đích nào. Super Admin tạo tag (kind) tại{" "}
+                    <Link href="/tags" className="font-medium text-brand-600 hover:underline">
+                      Quản lý tag
+                    </Link>{" "}
+                    — sau đó quay lại đây gán cho máy.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {purposeOptions.map((t) => {
+                      const on = editPurpose.includes(t.key);
+                      return (
+                        <label
+                          key={t.key}
+                          className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                            on
+                              ? "border-brand-600 bg-brand-50 text-brand-700 ring-1 ring-inset ring-brand-600"
+                              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() =>
+                              setEditPurpose((prev) =>
+                                prev.includes(t.key) ? prev.filter((k) => k !== t.key) : [...prev, t.key],
+                              )
+                            }
+                            className="size-3.5 rounded accent-brand-600"
+                          />
+                          {t.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </Field>
+              {tagError && <p className="mt-2 text-sm text-rose-600">{tagError}</p>}
+              <div className="mt-3 flex justify-end">
+                <Button size="sm" loading={tagBusy} onClick={() => void saveTags()} disabled={classificationOptions.length === 0}>
+                  Lưu phân loại & tag
+                </Button>
+              </div>
+            </div>
+
+            {/* Vòng đời tài sản (#18) */}
+            <div className="border-t border-slate-100 pt-4">
               <Field label="Vòng đời tài sản">
                 <div className="flex gap-2">
                   <Select value={lifecycle} onChange={(e) => setLifecycle(e.target.value)}>
@@ -827,6 +1184,22 @@ export default function MachineDetailPage() {
           </div>
         </Modal>
       )}
+
+      {/* Panel log Velociraptor — overlay trượt từ phải sang trái */}
+      <VeloLogDrawer
+        open={showVeloLog}
+        onClose={() => setShowVeloLog(false)}
+        metadata={veloMetadata}
+        flows={veloFlows}
+        loading={veloLiveLoading}
+        error={veloLiveError}
+        onRefresh={() => void loadVeloLive()}
+        guiUrl={
+          veloConfig?.server_url && veloLink
+            ? `${veloConfig.server_url.replace(/\/$/, "")}/#/host/${veloLink.client_id}`
+            : null
+        }
+      />
 
     </div>
   );
