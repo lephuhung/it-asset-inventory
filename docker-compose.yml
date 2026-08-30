@@ -41,6 +41,29 @@ services:
       retries: 10
     networks: [inventory-net]
 
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.dev
+    env_file: .env
+    environment:
+      # override để dùng docker DNS thay vì localhost
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inventory}:${POSTGRES_PASSWORD:-inventory}@postgres:5432/${POSTGRES_DB:-inventory}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./server:/app:ro
+      - ./server/agent_dist:/data/artifacts:ro
+    working_dir: /app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [inventory-net]
+
 volumes:
   pgdata:
   redisdata:
