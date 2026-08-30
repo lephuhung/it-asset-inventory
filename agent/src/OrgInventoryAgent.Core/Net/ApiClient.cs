@@ -1,4 +1,5 @@
 using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Crypto;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
@@ -7,7 +8,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
-namespace OrgInventoryAgent.Net;
+namespace OrgInventoryAgent.Core.Net;
 
 /// <summary>Lỗi vận chuyển sau khi retry (không phải HTTP error response).</summary>
 public sealed class ApiTransportException : Exception
@@ -36,7 +37,7 @@ public sealed class ApiClient : IDisposable
 
     private readonly AgentConfig _config;
     private readonly EndpointManager _endpoints;
-    private readonly Crypto.KeyStore _keyStore;
+    private readonly IKeyStore _keyStore;
     private readonly ILogger<ApiClient> _logger;
     private readonly string _userAgent;
 
@@ -46,7 +47,7 @@ public sealed class ApiClient : IDisposable
     private X509Certificate2? _attachedCert;
     private string? _attachedThumbprint;
 
-    public ApiClient(AgentConfig config, EndpointManager endpoints, Crypto.KeyStore keyStore, ILogger<ApiClient> logger)
+    public ApiClient(AgentConfig config, EndpointManager endpoints, IKeyStore keyStore, ILogger<ApiClient> logger)
     {
         _config = config;
         _endpoints = endpoints;

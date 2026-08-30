@@ -1,9 +1,10 @@
 using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Crypto;
 using System.Net;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
 using OrgInventoryAgent.Crypto;
-using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Core.Net;
 
 namespace OrgInventoryAgent.Services;
 

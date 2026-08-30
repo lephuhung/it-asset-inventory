@@ -3,7 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
 using OrgInventoryAgent.Crypto;
-using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Core.Net;
 
 namespace OrgInventoryAgent.Services;
 

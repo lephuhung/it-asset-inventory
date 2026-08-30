@@ -1,10 +1,11 @@
 using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Crypto;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Crypto;
-using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Core.Net;
 
 namespace OrgInventoryAgent.Services;
 

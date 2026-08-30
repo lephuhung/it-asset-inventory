@@ -2,7 +2,7 @@ using OrgInventoryAgent.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
-using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Core.Net;
 
 namespace OrgInventoryAgent.Services;
 

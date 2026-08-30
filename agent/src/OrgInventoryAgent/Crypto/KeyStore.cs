@@ -215,4 +215,74 @@ public sealed class KeyStore : IKeyStore
             }
         }
     }
+
+    // ── IKeyStore: new string-based methods (Linux PEM contract).
+    // Windows dùng AgentConfig + Windows store — các method mới trả null/throw Unsupported.
+    // Phương án đồng bộ: tìm theo CN=machine-<machineId>.
+
+    public bool HasPrivateKey(string machineId) => FindByCn(machineId) is { HasPrivateKey: true };
+
+    public string? GetPrivateKeyPem(string machineId)
+    {
+        // Windows store không export private key dạng PEM (CSP/KSP không cho export).
+        // Field này dành cho Linux impl. Windows: trả null.
+        _logger.LogDebug("WindowsKeyStore.GetPrivateKeyPem không hỗ trợ (Windows store không export PEM key).");
+        return null;
+    }
+
+    public string? GetCertificatePem(string machineId)
+    {
+        var cert = FindByCn(machineId);
+        return cert?.ExportCertificatePem();
+    }
+
+    public void InstallCertificate(string machineId, string certPem, string? keyPem)
+    {
+        if (string.IsNullOrWhiteSpace(keyPem))
+        {
+            throw new NotSupportedException(
+                "WindowsKeyStore.InstallCertificate(machineId, certPem, keyPem) yêu cầu keyPem " +
+                "(Windows CSP/KSP không nhập key từ store). Dùng overload InstallCertificate(certPem, ECDsa, AgentConfig) thay thế.");
+        }
+        using var ecdsa = ECDsa.Create();
+        ecdsa.ImportFromPem(keyPem);
+        var cfg = new AgentConfig { MachineId = machineId };
+        InstallCertificate(certPem, ecdsa, cfg);
+    }
+
+    public void DeleteCertificate(string machineId)
+    {
+        var cert = FindByCn(machineId);
+        if (cert is null) return;
+        var cfg = new AgentConfig
+        {
+            MachineId = machineId,
+            ClientCertThumbprint = cert.Thumbprint,
+            CertStoreLocation = "LocalMachine",
+        };
+        RemoveFromStore(cfg);
+        cert.Dispose();
+    }
+
+    private X509Certificate2? FindByCn(string machineId)
+    {
+        var cn = "CN=machine-" + machineId;
+        var locations = new[] { StoreLocation.LocalMachine, StoreLocation.CurrentUser };
+        foreach (var loc in locations)
+        {
+            try
+            {
+                using var store = new X509Store(StoreName.My, loc);
+                store.Open(OpenFlags.ReadOnly);
+                var found = store.Certificates.FirstOrDefault(c =>
+                    c.Subject.Contains(cn, StringComparison.OrdinalIgnoreCase));
+                if (found is not null) return found;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("FindByCn {Cn} trong {Loc} lỗi: {Msg}", cn, loc, ex.Message);
+            }
+        }
+        return null;
+    }
 }

@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
-namespace OrgInventoryAgent.Crypto;
+namespace OrgInventoryAgent.Core.Crypto;
 
 /// <summary>
 /// Tạo CSR (PKCS#10) — ECDSA P-256, Subject CN theo yêu cầu.

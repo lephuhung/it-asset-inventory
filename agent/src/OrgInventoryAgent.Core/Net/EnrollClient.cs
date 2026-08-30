@@ -1,10 +1,11 @@
 using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Collectors.Schema;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace OrgInventoryAgent.Net;
+namespace OrgInventoryAgent.Core.Net;
 
 // ── DTO khớp EnrollRequest / EnrollResponse của server ──────────────────────
 
@@ -12,7 +13,7 @@ public sealed class EnrollRequestPayload
 {
     [JsonPropertyName("token")] public string? Token { get; set; }
     [JsonPropertyName("hostname")] public string? Hostname { get; set; }
-    [JsonPropertyName("fingerprint")] public Collectors.FingerprintPayload? Fingerprint { get; set; }
+    [JsonPropertyName("fingerprint")] public Core.Collectors.Schema.FingerprintPayload? Fingerprint { get; set; }
     [JsonPropertyName("csr_pem")] public string? CsrPem { get; set; }
 }
 

@@ -2,16 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Core.Collectors.Schema;
 
 namespace OrgInventoryAgent.Collectors;
-
-/// <summary>Fingerprint gửi lên server khi enroll (3 nguồn RIÊNG — server tính hash có trọng số).</summary>
-public sealed class FingerprintPayload
-{
-    [JsonPropertyName("smbios_uuid")] public string? SmbiosUuid { get; set; }
-    [JsonPropertyName("machine_guid")] public string? MachineGuid { get; set; }
-    [JsonPropertyName("mainboard_serial")] public string? MainboardSerial { get; set; }
-}
 
 /// <summary>
 /// Thu thập fingerprint đa nguồn: SMBIOS UUID + MachineGuid + serial mainboard.

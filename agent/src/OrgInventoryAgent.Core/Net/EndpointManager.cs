@@ -1,7 +1,7 @@
 using OrgInventoryAgent.Core;
 using Microsoft.Extensions.Logging;
 
-namespace OrgInventoryAgent.Net;
+namespace OrgInventoryAgent.Core.Net;
 
 /// <summary>
 /// Failover endpoint (mục 3.5 kế hoạch — Tầng 1):

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
 using OrgInventoryAgent.Crypto;
 using OrgInventoryAgent.Logging;
-using OrgInventoryAgent.Net;
+using OrgInventoryAgent.Core.Net;
 using OrgInventoryAgent.Services;
 
 namespace OrgInventoryAgent;
