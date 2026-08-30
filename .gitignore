@@ -46,3 +46,6 @@ server/uvicorn-*.log
 # ── Runtime logs (root + portal) ──
 *.log
 portal-dev.log
+
+# ── Local git worktrees ──
+.worktrees/
