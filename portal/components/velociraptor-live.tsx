@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, CheckCircle2, ExternalLink, Loader2, PlayCircle, RefreshCw, ScrollText, X, XCircle } from "lucide-react";
+import { Activity, Brain, CheckCircle2, ExternalLink, History, Loader2, PlayCircle, RefreshCw, ScrollText, X, XCircle } from "lucide-react";
 import type { VelociraptorClientMetadata } from "@/lib/types";
 import { Badge, Button, Card, IconButton } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
@@ -22,7 +22,9 @@ export function VelociraptorLiveCard({
   guiUrl,
   onRefresh,
   onOpenLogs,
-  onCollect,
+  onShowHistory,
+  onInvestigateAI,
+  llmBusy = false,
   className = "",
 }: {
   metadata: VelociraptorClientMetadata | null;
@@ -40,7 +42,12 @@ export function VelociraptorLiveCard({
   guiUrl: string | null;
   onRefresh: () => void;
   onOpenLogs: () => void;
-  onCollect: () => void;
+  /** Mở panel "Lịch sử điều tra" của máy này. */
+  onShowHistory?: () => void;
+  /** Trigger LLM-DFIR investigation (Super Admin only). */
+  onInvestigateAI?: () => void;
+  /** Đang trigger LLM investigation. */
+  llmBusy?: boolean;
   /** Class thêm cho Card — vd "lg:col-span-2 h-full" khi đặt trực tiếp trong grid. */
   className?: string;
 }) {
@@ -49,7 +56,10 @@ export function VelociraptorLiveCard({
       className={className}
       title={
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Activity className="size-4 text-violet-600" /> Velociraptor — Live data
+          <span className="flex size-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+            <Activity className="size-4" />
+          </span>
+          Velociraptor — Live data
           {active ? (
             <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">
               <CheckCircle2 className="mr-1 size-3" /> Đang hoạt động
@@ -66,9 +76,24 @@ export function VelociraptorLiveCard({
           <Button variant="secondary" size="sm" onClick={onOpenLogs} title="Xem log từ Velociraptor">
             <ScrollText className="size-3.5" /> Xem log
           </Button>
-          {canCollect && (
-            <Button size="sm" onClick={onCollect} disabled={busy} title="Thu thập bằng chứng qua Velociraptor">
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <PlayCircle className="size-3.5" />} Collect
+          {onShowHistory && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onShowHistory}
+              title="Lịch sử các cuộc điều tra AI trên máy này"
+            >
+              <History className="size-3.5" /> Lịch sử điều tra
+            </Button>
+          )}
+          {onInvestigateAI && (
+            <Button
+              size="sm"
+              onClick={onInvestigateAI}
+              disabled={llmBusy}
+              title="Trigger LLM-DFIR investigation: Velociraptor collect 10 artifact + LLM phân tích"
+            >
+              {llmBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />} Điều tra AI
             </Button>
           )}
           <Button
@@ -225,7 +250,10 @@ export function VeloLogDrawer({
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div className="min-w-0">
             <h3 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight text-slate-800">
-              <ScrollText className="size-4 text-violet-600" /> Velociraptor — Logs
+              <span className="flex size-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+                <ScrollText className="size-4" />
+              </span>
+              Velociraptor — Logs
             </h3>
             <p className="mt-0.5 text-[13px] leading-snug text-slate-500">
               Dữ liệu realtime từ Velociraptor Server (client {metadata?.client_id ?? "?"})

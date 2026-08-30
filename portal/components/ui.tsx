@@ -51,6 +51,44 @@ export function BoolSwitch({ on, label }: { on: boolean; label?: string }) {
   );
 }
 
+/**
+ * Công tắc bật/tắt (interactive, a11y: role=switch + aria-checked).
+ * Bật = primary blue (màu hành động duy nhất), tắt = slate — theo Design.md.
+ */
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+  className = "",
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+        checked ? "bg-brand-600" : "bg-slate-300"
+      } ${className}`}
+    >
+      <span
+        className={`absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform duration-150 motion-reduce:transition-none ${
+          checked ? "translate-x-5" : ""
+        }`}
+      />
+    </button>
+  );
+}
+
 /* ── Card ──────────────────────────────────────────────────── */
 
 export function Card({
@@ -392,8 +430,16 @@ export function Modal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
+  // Giữ onClose mới nhất qua ref — KHÔNG đưa onClose vào deps của effect bên dưới.
+  // Caller thường truyền inline () => setX(false) nên reference đổi mỗi render;
+  // nếu để trong deps, effect chạy lại mỗi lần gõ phím trong form → cleanup
+  // restore focus (lastFocused.focus()) → focus bị cướp khỏi ô đang nhập.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
-  // ESC đóng + focus trap
+  // ESC đóng + focus trap — chỉ chạy lại khi open thay đổi (không theo onClose)
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -402,7 +448,7 @@ export function Modal({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !panelRef.current) return;
@@ -430,7 +476,7 @@ export function Modal({
       document.removeEventListener("keydown", onKeyDown, true);
       lastFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   // Khóa cuộn body khi mở
   useEffect(() => {

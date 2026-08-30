@@ -690,3 +690,175 @@ export interface TagStatsResponse {
   total_machines: number;
   tags: TagStatItem[];
 }
+
+
+// ── LLM-DFIR (AI Assistant) ──────────────────────────────────────
+
+export interface LlmConfig {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  api_key_masked: string;
+  model: string;
+  fallback_model: string | null;
+  system_prompt: string | null;
+  max_tokens: number;
+  temperature: number;
+  request_timeout: number;
+  max_context_chars: number;
+  allow_cloud: boolean;
+  daily_token_budget: number | null;
+  tokens_used_today: number;
+  test_status: string | null;
+  test_error: string | null;
+  test_at: string | null;
+  updated_at: string;
+  available_models: string[];
+}
+
+export interface LlmConfigUpdate {
+  enabled?: boolean | null;
+  provider?: string | null;
+  base_url?: string | null;
+  api_key?: string | null;
+  model?: string | null;
+  fallback_model?: string | null;
+  system_prompt?: string | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  request_timeout?: number | null;
+  max_context_chars?: number | null;
+  allow_cloud?: boolean | null;
+  daily_token_budget?: number | null;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  latency_ms: number;
+  models: string[];
+  error: string | null;
+}
+
+export type InvestigationStatus =
+  | "pending"
+  | "running"
+  | "collecting"
+  | "analyzing"
+  | "completed"
+  | "failed";
+
+export type InvestigationSeverity = "critical" | "high" | "medium" | "low" | "info";
+
+export interface DfirInvestigation {
+  id: string;
+  machine_id: string;
+  machine_hostname: string | null;
+  status: InvestigationStatus;
+  artifacts: string[];
+  llm_provider: string | null;
+  llm_model: string | null;
+  severity: InvestigationSeverity | null;
+  findings: any[] | null;
+  iocs: any[] | null;
+  findings_count: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  estimated_cost_usd: number | null;
+  error: string | null;
+  report_markdown: string | null;
+  external_orchestrator: string | null;
+  hermes_status: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  requested_by: string;
+}
+
+export interface DfirInvestigationCreate {
+  machine_id: string;
+  artifacts?: string[] | null;
+  custom_instructions?: string | null;
+}
+
+export interface DfirInvestigationMessage {
+  id: string;
+  role: "system" | "user" | "assistant";
+  content: string;
+  tokens: number | null;
+  created_at: string;
+}
+
+// ── Notifications ─────────────────────────────────────────────
+
+export type NotificationSeverity = "info" | "success" | "warning" | "error" | "critical";
+export type NotificationCategory =
+  | "investigation" | "alert" | "system" | "machine" | "security" | "message";
+export type NotificationSource = "user" | "system" | "hermes" | "velociraptor" | "agent";
+
+export interface NotificationOut {
+  id: string;
+  source: NotificationSource | string;
+  category: NotificationCategory | string;
+  severity: NotificationSeverity | string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  read_at: string | null;
+  created_at: string;
+  sender_name: string | null;
+}
+
+export interface TelegramLinkStartOut {
+  bot_url: string;
+  linking_token: string;
+  expires_at: string;
+}
+
+export interface TelegramLinkStatusOut {
+  linked: boolean;
+  telegram_chat_id: string | null;
+  linked_at: string | null;
+}
+
+// ── LLM-DFIR Statistics & Pagination ───────────────────────────
+
+export interface DfirInvestigationListOut {
+  items: DfirInvestigation[];
+  total: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+}
+
+export interface DfirStatsByMachine {
+  machine_id: string;
+  hostname: string | null;
+  count: number;
+  critical: number;
+}
+
+export interface DfirStatsDaily {
+  date: string;
+  total: number;
+  critical: number;
+}
+
+export interface DfirStatsTopFinding {
+  mitre_id: string;
+  title: string;
+  count: number;
+}
+
+export interface DfirInvestigationStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_severity: Record<string, number>;
+  by_machine: DfirStatsByMachine[];
+  recent_24h: number;
+  recent_7d: number;
+  avg_duration_seconds: number | null;
+  daily_counts: DfirStatsDaily[];
+  top_findings: DfirStatsTopFinding[];
+}
