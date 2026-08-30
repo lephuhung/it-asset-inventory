@@ -1,0 +1,21 @@
+# ════════════════════════════════════════════════════════════════
+# Portal dev image — Node 20 + pnpm (qua corepack)
+# Mount ./portal:/app:ro từ host (hot reload). Image chỉ chứa deps.
+# ════════════════════════════════════════════════════════════════
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Bật pnpm (corepack có sẵn trong node:20-alpine)
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Manifests — chỉ cần cho `pnpm install`. Code/config mount từ host lúc runtime.
+COPY package.json pnpm-lock.yaml* ./
+
+# Cài deps 1 lần (frozen lockfile → reproducible)
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 3003
+
+# Default CMD — compose override bằng "pnpm dev"
+CMD ["pnpm", "dev"]
