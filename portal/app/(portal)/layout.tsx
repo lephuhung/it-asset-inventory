@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Menu, Wifi, WifiOff } from "lucide-react";
 import { AuthProvider, useAuth } from "@/components/auth-context";
 import { RealtimeProvider, useRealtime } from "@/components/realtime-context";
+import { NotificationProvider, NotificationBell, NotificationToast } from "@/components/notification-bell";
 import { ComplianceGate } from "@/components/compliance-gate";
 import { Sidebar } from "@/components/sidebar";
 import { UserInfo } from "@/components/user-info";
@@ -98,6 +99,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             </span>
             <span className="h-6 w-px bg-slate-200" aria-hidden />
             <UserInfo />
+            <NotificationBell />
           </div>
         </header>
 
@@ -111,6 +113,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </div>
 
       <ComplianceGate />
+      <NotificationToast />
     </div>
   );
 }
@@ -119,7 +122,9 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   return (
     <AuthProvider>
       <RealtimeProvider>
-        <Shell>{children}</Shell>
+        <NotificationProvider>
+          <Shell>{children}</Shell>
+        </NotificationProvider>
       </RealtimeProvider>
     </AuthProvider>
   );
