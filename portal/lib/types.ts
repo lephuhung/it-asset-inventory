@@ -160,7 +160,10 @@ export interface TokenListItem {
 
 export interface TokenCreateResponse {
   token: string;
-  install_command: string;
+  install_command: string; // back-compat: Windows PowerShell MSI command
+  install_command_windows?: string; // PowerShell -EncodedCommand — MSI silent install
+  install_command_linux?: string; // curl | bash one-liner — auto-detect .deb / .rpm
+  install_offline_url?: string; // gói USB .zip cho máy cách ly (chế độ 2)
   expires_at: string;
 }
 

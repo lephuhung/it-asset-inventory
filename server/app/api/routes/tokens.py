@@ -30,6 +30,18 @@ from app.services.agent_settings import effective_agent_config
 router = APIRouter(prefix="/api/tokens", tags=["tokens"])
 
 
+def _install_command_linux(token: str, portal_url: str, agent_server_url: str) -> str:
+    """One-liner cài cho Linux: `curl -fsSL https://host/i/<token> | sudo bash`.
+
+    Tự detect distro + architecture → tải .deb hoặc .rpm phù hợp → verify SHA256
+    → cài package → ghi /etc/orginventory/config.json → enable systemd service.
+
+    KHÔNG tự fetch token từ URL (giống Windows): token đã có sẵn, không lộ
+    qua URL — vẫn gửi qua HTTPS nhưng tránh log URL ở proxy.
+    """
+    return f"curl -fsSL {portal_url}/i/{token} | sudo bash"
+
+
 def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """Lệnh cài 1 dòng: tải MSI → verify SHA256 → msiexec silent.
 
@@ -90,10 +102,16 @@ async def create_tokens_bulk(
             purpose_tags=body.purpose_tags or [],
         )
         db.add(row)
+        cmd_win = _install_command(token, portal_url, agent_cfg["agent_server_url"])
+        cmd_linux = _install_command_linux(token, portal_url, agent_cfg["agent_server_url"])
+        offline_url = f"{portal_url}/download/offline-package.zip"
         tokens_out.append(
             TokenCreateResponse(
                 token=token,
-                install_command=_install_command(token, portal_url, agent_cfg["agent_server_url"]),
+                install_command=cmd_win,
+                install_command_windows=cmd_win,
+                install_command_linux=cmd_linux,
+                install_offline_url=offline_url,
                 expires_at=expires,
             )
         )
@@ -150,9 +168,19 @@ async def create_token(
 
     # install command — tải MSI + verify SHA256 + msiexec (không dùng /i/{token} | iex)
     agent_cfg = await effective_agent_config(db)
+    portal_url = agent_cfg["portal_url"]
 
-    command = _install_command(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"])
-    return TokenCreateResponse(token=token, install_command=command, expires_at=expires)
+    cmd_win = _install_command(token, portal_url, agent_cfg["agent_server_url"])
+    cmd_linux = _install_command_linux(token, portal_url, agent_cfg["agent_server_url"])
+    offline_url = f"{portal_url}/download/offline-package.zip"
+    return TokenCreateResponse(
+        token=token,
+        install_command=cmd_win,
+        install_command_windows=cmd_win,
+        install_command_linux=cmd_linux,
+        install_offline_url=offline_url,
+        expires_at=expires,
+    )
 
 
 @router.get("", response_model=Page[TokenListItem])

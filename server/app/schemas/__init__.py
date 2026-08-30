@@ -329,7 +329,10 @@ class TokenCreateRequest(BaseModel):
 
 class TokenCreateResponse(BaseModel):
     token: str  # chỉ hiện 1 lần
-    install_command: str
+    install_command: str  # back-compat: Windows PowerShell MSI (default)
+    install_command_windows: str | None = None  # PowerShell -EncodedCommand — MSI silent install
+    install_command_linux: str | None = None  # curl | bash one-liner (.deb / .rpm auto-detect)
+    install_offline_url: str | None = None  # gói USB .zip cho máy cách ly (chế độ 2)
     expires_at: datetime
 
 

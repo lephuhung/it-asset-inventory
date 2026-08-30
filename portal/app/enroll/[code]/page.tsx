@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
-import { Check, Copy, KeyRound, ShieldCheck } from "lucide-react";
+import { Check, Copy, KeyRound, ShieldCheck, Terminal } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { SelfServiceInfo, TokenCreateResponse } from "@/lib/types";
 import { Button, Card, Field, Input, Spinner } from "@/components/ui";
 import { LogoMark } from "@/components/logo";
+import { OsPicker, type OsId } from "@/components/os-picker";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -53,6 +54,7 @@ export default function EnrollPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [result, setResult] = useState<TokenCreateResponse | null>(null);
+  const [resultOs, setResultOs] = useState<OsId>("windows");
 
   const loadInfo = useCallback(async () => {
     try {
@@ -122,17 +124,45 @@ export default function EnrollPage() {
               <div className="text-sm text-emerald-800">
                 <p className="font-semibold">Đăng ký thành công!</p>
                 <p className="mt-0.5 text-xs">
-                  Chạy lệnh dưới đây trong <b>PowerShell (Run as Administrator)</b> để cài agent:
+                  Chọn hệ điều hành máy đích để lấy đúng lệnh cài đặt:
                 </p>
               </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <code className="block break-all font-mono text-xs leading-relaxed text-slate-800">
-                {result.install_command}
-              </code>
-            </div>
-            <div className="mt-3 flex justify-end">
-              <CopyButton text={result.install_command} label="Copy lệnh cài đặt" />
+            <OsPicker value={resultOs} onChange={setResultOs} hideOffline />
+            <div className="mt-3">
+              {resultOs === "windows" && result.install_command_windows && (
+                <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-3">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <Terminal className="size-3.5 text-blue-600" />
+                    <p className="text-xs font-semibold text-slate-700">
+                      PowerShell (Run as Administrator):
+                    </p>
+                  </div>
+                  <code className="block break-all rounded-md border border-emerald-200 bg-emerald-50 p-2 font-mono text-[11px] leading-relaxed text-emerald-900">
+                    {result.install_command_windows}
+                  </code>
+                  <div className="mt-2 flex justify-end">
+                    <CopyButton text={result.install_command_windows} label="Copy lệnh Windows" />
+                  </div>
+                </div>
+              )}
+
+              {resultOs === "linux" && result.install_command_linux && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <Terminal className="size-3.5 text-amber-600" />
+                    <p className="text-xs font-semibold text-slate-700">
+                      Terminal (sudo) — Ubuntu / Debian / RHEL / Rocky:
+                    </p>
+                  </div>
+                  <code className="block break-all rounded-md border border-emerald-200 bg-emerald-50 p-2 font-mono text-[11px] leading-relaxed text-emerald-900">
+                    {result.install_command_linux}
+                  </code>
+                  <div className="mt-2 flex justify-end">
+                    <CopyButton text={result.install_command_linux} label="Copy lệnh Linux" />
+                  </div>
+                </div>
+              )}
             </div>
             <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">
               <p className="flex items-center gap-1.5">

@@ -31,6 +31,7 @@ import type {
   TokenListItem,
 } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
+import { OsPicker, type OsId } from "@/components/os-picker";
 import {
   Button,
   Card,
@@ -125,6 +126,7 @@ export default function TokensPage() {
 
   // Modal kết quả
   const [created, setCreated] = useState<TokenCreateResponse | null>(null);
+  const [createdOs, setCreatedOs] = useState<OsId>("windows");
   const [revoking, setRevoking] = useState<TokenListItem | null>(null);
   const [revokeBusy, setRevokeBusy] = useState(false);
 
@@ -364,7 +366,7 @@ export default function TokensPage() {
           {[
             { n: 1, t: "Sinh token", d: "Admin nhập thông tin người dùng → nhận mã + lệnh cài. Token có TTL (mặc định 72h), dùng 1 lần." },
             { n: 2, t: "Gửi lệnh cài", d: "Gửi 1 dòng PowerShell (kèm token nhúng) cho người dùng qua email/Zalo/chat." },
-            { n: 3, t: "Chạy lệnh (cài)", d: "install.ps1 ký số → tải MSI → verify SHA256 + chữ ký → cài agent âm thầm." },
+            { n: 3, t: "Chạy lệnh (cài)", d: "Windows: install.ps1 ký số → tải MSI → verify SHA256 + chữ ký → cài agent. Linux: curl | bash (tự detect .deb/.rpm, verify SHA256, cài + enable systemd). Người dùng chọn OS phù hợp tại cửa sổ token." },
             { n: 4, t: "Enroll", d: "Agent gửi token + fingerprint + CSR → fuzzy-match máy cũ/mới → trả machine_id + client cert. Token vô hiệu ngay." },
             { n: 5, t: "Heartbeat", d: "Agent gửi heartbeat mỗi 45–75s (jitter) → máy Online trên dashboard realtime." },
             { n: 6, t: "Inventory", d: "Gửi cấu hình đầy đủ lần đầu → chi tiết máy, timeline bật/tắt, cảnh báo." },
@@ -676,7 +678,7 @@ export default function TokensPage() {
       {/* Modal: token vừa sinh */}
       <Modal
         open={created !== null}
-        onClose={() => setCreated(null)}
+        onClose={() => { setCreated(null); setCreatedOs("windows"); }}
         title={
           <span className="inline-flex items-center gap-2">
             <KeyRound className="size-4 text-emerald-600" /> Token đã sinh
@@ -684,7 +686,7 @@ export default function TokensPage() {
         }
         wide
         footer={
-          <Button variant="secondary" onClick={() => setCreated(null)}>
+          <Button variant="secondary" onClick={() => { setCreated(null); setCreatedOs("windows"); }}>
             Xong
           </Button>
         }
@@ -704,67 +706,94 @@ export default function TokensPage() {
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="mb-3 text-sm font-medium text-slate-700">Chọn phương pháp cài đặt</p>
-              <div className="grid gap-3 md:grid-cols-2">
-                {/* Phương pháp A: cài bằng lệnh */}
-                <div className="rounded-lg border border-blue-200 bg-white p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Terminal className="size-4 text-blue-600" />
-                    <span className="text-sm font-semibold text-slate-800">Phương pháp A — Cài bằng lệnh</span>
-                    <Badge className="border-blue-200 bg-blue-50 text-blue-700">Online</Badge>
+              <p className="mb-3 text-sm font-medium text-slate-700">Chọn hệ điều hành máy đích</p>
+              <OsPicker value={createdOs} onChange={setCreatedOs} />
+              <div className="mt-3">
+                {createdOs === "windows" && created.install_command_windows && (
+                  <div className="rounded-lg border border-blue-200 bg-white p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Terminal className="size-4 text-blue-600" />
+                      <span className="text-sm font-semibold text-slate-800">PowerShell — Windows (MSI silent install)</span>
+                      <Badge className="border-blue-200 bg-blue-50 text-blue-700">Online</Badge>
+                    </div>
+                    <p className="mb-2 text-xs text-slate-500">
+                      Chạy trong <b>PowerShell (Run as Administrator)</b>. Script tải MSI, verify SHA256, cài silent bằng msiexec.
+                    </p>
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                      <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
+                        {created.install_command_windows}
+                      </code>
+                    </div>
+                    <div className="mt-2 flex justify-end">
+                      <CopyButton text={created.install_command_windows} label="Copy lệnh" />
+                    </div>
                   </div>
-                  <p className="mb-2 text-xs text-slate-500">
-                    Dùng cho máy có mạng ra server. Một dòng PowerShell.
-                  </p>
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
-                    <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
-                      {created.install_command}
-                    </code>
-                  </div>
-                  <div className="mt-2 flex justify-end">
-                    <CopyButton text={created.install_command} label="Copy lệnh" />
-                  </div>
-                </div>
+                )}
 
-                {/* Phương pháp B: Gói cài 1-Click cho USB */}
-                <div className="rounded-lg border border-amber-200 bg-white p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <HardDriveDownload className="size-4 text-amber-600" />
-                    <span className="text-sm font-semibold text-slate-800">Phương pháp B — Gói Offline USB (1-Click)</span>
-                    <Badge className="border-amber-200 bg-amber-50 text-amber-700">Máy BMNN</Badge>
+                {createdOs === "linux" && created.install_command_linux && (
+                  <div className="rounded-lg border border-amber-200 bg-white p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Terminal className="size-4 text-amber-600" />
+                      <span className="text-sm font-semibold text-slate-800">bash — Linux (.deb / .rpm tự động)</span>
+                      <Badge className="border-amber-200 bg-amber-50 text-amber-700">Ubuntu / Debian / RHEL / Rocky</Badge>
+                    </div>
+                    <p className="mb-2 text-xs text-slate-500">
+                      Chạy trong <b>terminal (sudo)</b>. Script tự phát hiện distro (Ubuntu/Debian/RHEL/Rocky) + architecture, tải package phù hợp, verify SHA256, cài và enable systemd service.
+                    </p>
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                      <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
+                        {created.install_command_linux}
+                      </code>
+                    </div>
+                    <div className="mt-2 flex justify-end">
+                      <CopyButton text={created.install_command_linux} label="Copy lệnh" />
+                    </div>
                   </div>
-                  <p className="mb-2.5 text-xs text-slate-500">
-                    Tải về <b>1 file ZIP duy nhất (không mật khẩu)</b> → giải nén vào USB. Mang sang máy BMNN chỉ cần <b>nháy đúp chuột</b> vào file <code>install-offline.cmd</code>.
-                  </p>
-                  <a
-                    href="/api/downloads/offline-package.zip"
-                    download="offline-package.zip"
-                    className="flex w-full items-center justify-center gap-1.5 rounded-md border border-amber-400 bg-amber-500 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-amber-600 transition"
-                  >
-                    <Download className="size-3.5" /> Tải trọn bộ Gói USB (.zip không mật khẩu)
-                  </a>
-                  <div className="mt-2 rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-800 flex items-start gap-1.5">
-                    <Info className="size-3 mt-0.5 shrink-0" />
-                    <span>
-                      Sau khi USB có kết quả, mở trang{" "}
-                      <Link href="/offline-import" className="font-semibold underline hover:text-blue-900">
-                        Import máy BMNN
-                      </Link>{" "}
-                      — có <b>timeline 3 pha</b> + checklist + xử lý sự cố.
-                    </span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-1 text-[11px] text-slate-400">
-                    <a href="/api/downloads/agent.msi" className="hover:underline flex items-center gap-1">
-                      <HardDriveDownload className="size-2.5" /> Tải lẻ MSI
+                )}
+
+                {createdOs === "offline" && (
+                  <div className="rounded-lg border border-amber-200 bg-white p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <HardDriveDownload className="size-4 text-amber-600" />
+                      <span className="text-sm font-semibold text-slate-800">Gói Offline USB (1-Click) — cho máy cách ly</span>
+                      <Badge className="border-amber-200 bg-amber-50 text-amber-700">Máy BMNN</Badge>
+                    </div>
+                    <p className="mb-2.5 text-xs text-slate-500">
+                      Tải về <b>1 file ZIP duy nhất (không mật khẩu)</b> → giải nén vào USB. Mang sang máy BMNN chỉ cần <b>nháy đúp chuột</b> vào file <code>install-offline.cmd</code> (Windows) hoặc <code>install-offline.sh</code> (Linux).
+                    </p>
+                    <a
+                      href={created.install_offline_url ?? "/api/downloads/offline-package.zip"}
+                      download="offline-package.zip"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-md border border-amber-400 bg-amber-500 px-3 py-2 text-xs font-bold text-white shadow-sm hover:bg-amber-600 transition"
+                    >
+                      <Download className="size-3.5" /> Tải trọn bộ Gói USB (.zip không mật khẩu)
                     </a>
-                    <a href="/api/downloads/server_public_key.pem" className="hover:underline flex items-center gap-1">
-                      <ShieldCheck className="size-2.5" /> Tải lẻ Server Key
-                    </a>
+                    <div className="mt-2 rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-800 flex items-start gap-1.5">
+                      <Info className="size-3 mt-0.5 shrink-0" />
+                      <span>
+                        Sau khi USB có kết quả, mở trang{" "}
+                        <Link href="/offline-import" className="font-semibold underline hover:text-blue-900">
+                          Import máy BMNN
+                        </Link>{" "}
+                        — có <b>timeline 3 pha</b> + checklist + xử lý sự cố.
+                      </span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] text-slate-400">
+                      <a href="/api/downloads/agent.msi" className="hover:underline flex items-center gap-1">
+                        <HardDriveDownload className="size-2.5" /> Tải lẻ MSI
+                      </a>
+                      <a href="/api/downloads/orginventory-agent_1.1.0_amd64.deb" className="hover:underline flex items-center gap-1">
+                        <Download className="size-2.5" /> Tải lẻ .deb
+                      </a>
+                      <a href="/api/downloads/server_public_key.pem" className="hover:underline flex items-center gap-1">
+                        <ShieldCheck className="size-2.5" /> Server Key
+                      </a>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
               <p className="mt-3 text-xs text-slate-500">
-                <b>Trải nghiệm 1-Click cho máy BMNN:</b> Giải nén file zip vào USB → cắm vào máy BMNN và nháy đúp <code>install-offline.cmd</code>. Kết quả thu thập sẽ tự động xuất ra file <code>INVENTORY_...zip</code> đã ký số và mã hóa trên USB để nạp vào trang{" "}
+                <b>Trải nghiệm 1-Click cho máy BMNN:</b> Giải nén file zip vào USB → cắm vào máy BMNN và nháy đúp <code>install-offline.cmd</code> / <code>install-offline.sh</code>. Kết quả thu thập sẽ tự động xuất ra file <code>INVENTORY_...zip</code> đã ký số và mã hóa trên USB để nạp vào trang{" "}
                 <Link href="/offline-import" className="font-semibold text-blue-600 hover:underline">
                   Import máy BMNN
                 </Link>.
