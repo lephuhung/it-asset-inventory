@@ -33,6 +33,7 @@ COMPOSE_DEFAULTS = {
 
 # Docker template values intentionally differ from the native-app defaults.
 DOCKER_TEMPLATE_OVERRIDES = {
+    "redis_url": "redis://localhost:6381/0",
     "portal_url": "http://localhost:3003",
     "cors_origins": '["http://localhost:3003","http://10.10.0.241:3003"]',
 }

@@ -18,7 +18,8 @@ from alembic import op
 revision = "g8h9j0k1l2m3"
 down_revision = "f4a6c8e2b1d0"
 branch_labels = None
-depends_on = None
+# machine_current is created on the sibling stats-schema branch.
+depends_on = "d7e8f9a0b1c2"
 
 
 def upgrade() -> None:
