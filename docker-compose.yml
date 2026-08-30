@@ -64,9 +64,31 @@ services:
       redis: { condition: service_healthy }
     networks: [inventory-net]
 
+  portal:
+    build:
+      context: ./portal
+      dockerfile: Dockerfile.dev
+    environment:
+      API_BASE: http://api:8000
+      PORT: 3003
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "${PORTAL_PORT:-3003}:3003"
+    volumes:
+      - ./portal:/app:ro
+      - portal_node_modules:/app/node_modules
+      - portal_next:/app/.next
+    working_dir: /app
+    command: pnpm dev
+    depends_on:
+      - api
+    networks: [inventory-net]
+
 volumes:
   pgdata:
   redisdata:
+  portal_node_modules:
+  portal_next:
 
 networks:
   inventory-net:
