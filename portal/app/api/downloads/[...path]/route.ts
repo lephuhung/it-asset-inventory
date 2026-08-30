@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { API_BASE } from "@/lib/backend";
+import { API_BASE, forwardedIpHeaders } from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ async function handle(request: Request, segments: string[]): Promise<Response> {
   const upstream = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     cache: "no-store",
+    headers: forwardedIpHeaders(request),
     // Không kèm Authorization — endpoint upstream public.
   });
 

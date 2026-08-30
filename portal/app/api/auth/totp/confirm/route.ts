@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { API_BASE, clearSessionTokens, getSessionTokens, setSessionTokens } from "@/lib/backend";
+import { API_BASE, clearSessionTokens, forwardedIpHeaders, getSessionTokens, setSessionTokens } from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,7 +16,11 @@ export async function POST(request: Request) {
   const { access } = await getSessionTokens();
   const upstream = await fetch(`${API_BASE}/api/auth/totp/confirm`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${access ?? ""}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${access ?? ""}`,
+      "Content-Type": "application/json",
+      ...forwardedIpHeaders(request),
+    },
     body: JSON.stringify(body),
     cache: "no-store",
   });

@@ -54,6 +54,24 @@ export function clearSessionTokens(res: NextResponse) {
   res.cookies.set(REFRESH_COOKIE, "", { ...cookieOptions(), maxAge: 0 });
 }
 
+/**
+ * Trích xuất headers IP của client từ incoming request, để forward xuống upstream.
+ *
+ * Backend (FastAPI) sẽ kiểm tra peer (request gửi từ đâu) có thuộc trusted_proxy_cidrs không
+ * — mặc định portal + backend cùng host (127.0.0.1/10.10.0.241) → trusted → backend dùng IP
+ * từ X-Forwarded-For. Nếu peer không trusted, backend BỎ QUA header (chống spoof).
+ *
+ * Trả về object rỗng nếu không có header nào (backend sẽ dùng peer IP).
+ */
+export function forwardedIpHeaders(request: Request): Record<string, string> {
+  const out: Record<string, string> = {};
+  const xff = request.headers.get("x-forwarded-for");
+  const xri = request.headers.get("x-real-ip");
+  if (xff) out["X-Forwarded-For"] = xff;
+  if (xri) out["X-Real-IP"] = xri;
+  return out;
+}
+
 /** Gọi upstream FastAPI; trả Response gốc (chưa xử lý refresh). */
 export async function fetchUpstream(
   path: string,
@@ -61,6 +79,7 @@ export async function fetchUpstream(
   accessToken: string | null,
   body?: BodyInit,
   contentType?: string | null,
+  extraHeaders?: Record<string, string>,
 ) {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -69,6 +88,7 @@ export async function fetchUpstream(
   } else if (body !== undefined && typeof body === "string") {
     headers["Content-Type"] = "application/json";
   }
+  if (extraHeaders) Object.assign(headers, extraHeaders);
 
   return fetch(`${API_BASE}${path}`, {
     method,
@@ -107,15 +127,25 @@ export async function proxyRequest(
   body?: BodyInit,
   contentType?: string | null,
 ): Promise<NextResponse> {
+  // Forward client IP headers — backend dùng để ghi audit log đúng IP user
+  // (không phải IP loopback của portal BFF). Backend chỉ tin header nếu peer
+  // (chính portal server) thuộc trusted_proxy_cidrs — mặc định đã OK vì
+  // Portal + Backend cùng host (10.10.0.241 / 127.0.0.1).
+  const extraHeaders: Record<string, string> = {};
+  const xff = request.headers.get("x-forwarded-for");
+  const xri = request.headers.get("x-real-ip");
+  if (xff) extraHeaders["X-Forwarded-For"] = xff;
+  if (xri) extraHeaders["X-Real-IP"] = xri;
+
   const { access, refresh } = await getSessionTokens();
-  let res = await fetchUpstream(path, method, access, body, contentType);
+  let res = await fetchUpstream(path, method, access, body, contentType, extraHeaders);
   let newPair: { access: string; refresh: string } | null = null;
 
   // Access hết hạn → thử refresh một lần, retry request gốc.
   if (res.status === 401 && refresh) {
     newPair = await refreshTokens(refresh);
     if (newPair) {
-      res = await fetchUpstream(path, method, newPair.access, body, contentType);
+      res = await fetchUpstream(path, method, newPair.access, body, contentType, extraHeaders);
     }
   }
 
@@ -150,6 +180,31 @@ export async function fetchJsonWithAuth<T>(path: string): Promise<{ status: numb
   if (res.status === 401 && refresh) {
     const newPair = await refreshTokens(refresh);
     if (newPair) res = await fetchUpstream(path, "GET", newPair.access);
+  }
+  const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
+  if (!isJson) return { status: res.status, data: null };
+  const data = (await res.json()) as T;
+  if (res.ok) return { status: res.status, data };
+  const detail = typeof (data as { detail?: unknown }).detail === "string"
+    ? ((data as { detail: string }).detail)
+    : undefined;
+  return { status: res.status, data: null, detail };
+}
+
+/**
+ * Variant của `fetchJsonWithAuth` có kèm forwarded IP headers — dùng cho các route
+ * handler có `request` để truyền IP user xuống backend (ghi audit log).
+ */
+export async function fetchJsonWithAuthAndIp<T>(
+  path: string,
+  request: Request,
+): Promise<{ status: number; data: T | null; detail?: string }> {
+  const { access, refresh } = await getSessionTokens();
+  const extra = forwardedIpHeaders(request);
+  let res = await fetchUpstream(path, "GET", access, undefined, undefined, extra);
+  if (res.status === 401 && refresh) {
+    const newPair = await refreshTokens(refresh);
+    if (newPair) res = await fetchUpstream(path, "GET", newPair.access, undefined, undefined, extra);
   }
   const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
   if (!isJson) return { status: res.status, data: null };

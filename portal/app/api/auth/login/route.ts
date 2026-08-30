@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { API_BASE, setSessionTokens } from "@/lib/backend";
+import { API_BASE, forwardedIpHeaders, setSessionTokens } from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
 
   const upstream = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...forwardedIpHeaders(request) },
     body: JSON.stringify(body),
     cache: "no-store",
   });

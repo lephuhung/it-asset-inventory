@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { API_BASE, getSessionTokens, setSessionTokens } from "@/lib/backend";
+import { API_BASE, forwardedIpHeaders, getSessionTokens, setSessionTokens } from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** POST /api/auth/refresh — dùng refresh cookie (httpOnly) để lấy cặp JWT mới (rotation). */
-export async function POST() {
+export async function POST(request: Request) {
   const { refresh } = await getSessionTokens();
   if (!refresh) {
     return NextResponse.json({ detail: "Chưa đăng nhập" }, { status: 401 });
@@ -13,7 +13,7 @@ export async function POST() {
 
   const upstream = await fetch(`${API_BASE}/api/auth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...forwardedIpHeaders(request) },
     body: JSON.stringify({ refresh_token: refresh }),
     cache: "no-store",
   });

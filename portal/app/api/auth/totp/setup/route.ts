@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
-import { API_BASE, getSessionTokens } from "@/lib/backend";
+import { API_BASE, forwardedIpHeaders, getSessionTokens } from "@/lib/backend";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** POST /api/auth/totp/setup — proxy sang backend (admin only). */
-export async function POST() {
+export async function POST(request: Request) {
   const { access } = await getSessionTokens();
   const upstream = await fetch(`${API_BASE}/api/auth/totp/setup`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${access ?? ""}` },
+    headers: { Authorization: `Bearer ${access ?? ""}`, ...forwardedIpHeaders(request) },
     cache: "no-store",
   });
   const data = await upstream.json().catch(() => ({}));
