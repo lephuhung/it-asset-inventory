@@ -18,6 +18,7 @@ from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.db.models import (
+    DfirInvestigation,
     EnrollToken,
     Heartbeat,
     Machine,
@@ -33,6 +34,8 @@ from app.schemas import (
     AssignUserRequest,
     AssignUserResponse,
     BulkTagRequest,
+    DfirInvestigationListOut,
+    DfirInvestigationOut,
     MachineDecision,
     MachineDetail,
     MachineLifecycleUpdate,
@@ -365,6 +368,96 @@ async def _get_machine_in_scope(db: AsyncSession, machine_id: uuid.UUID, user: U
     if str(machine.org_id) not in visible:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền thao tác máy này")
     return machine
+
+
+def _inv_to_out(inv: DfirInvestigation, machine: Machine | None) -> DfirInvestigationOut:
+    """Convert ORM → Out schema (shared helper — copy từ llm_dfir.py)."""
+    return DfirInvestigationOut(
+        id=inv.id,
+        machine_id=inv.machine_id,
+        machine_hostname=machine.hostname if machine else None,
+        status=inv.status,
+        artifacts=list(inv.artifacts or []),
+        llm_provider=inv.llm_provider,
+        llm_model=inv.llm_model,
+        severity=inv.severity,
+        findings_count=inv.findings_count,
+        findings=inv.findings,
+        iocs=inv.iocs,
+        input_tokens=inv.input_tokens,
+        output_tokens=inv.output_tokens,
+        estimated_cost_usd=float(inv.estimated_cost_usd) if inv.estimated_cost_usd is not None else None,
+        error=inv.error,
+        report_markdown=inv.report_markdown,
+        custom_instructions=inv.custom_instructions,
+        external_orchestrator=inv.external_orchestrator,
+        external_job_id=inv.external_job_id,
+        external_polled_at=inv.external_polled_at,
+        hermes_status=inv.hermes_status,
+        created_at=inv.created_at,
+        started_at=inv.started_at,
+        completed_at=inv.completed_at,
+        callback_received_at=inv.callback_received_at,
+        requested_by=inv.requested_by,
+    )
+
+
+@router.get("/{machine_id}/investigations", response_model=DfirInvestigationListOut)
+async def list_machine_investigations(
+    machine_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin()),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, le=100),
+    status_filter: str | None = Query(None, alias="status"),
+):
+    """Investigations của 1 máy cụ thể — dùng cho panel 'Lịch sử điều tra AI' trong trang máy.
+
+    Hỗ trợ phân trang. Cho phép user thường (admin_org, viewer) truy cập
+    (chỉ super_admin mới tạo được, nhưng tất cả admin đều đọc được).
+    """
+    from sqlalchemy import func as sa_func
+
+    # Validate machine_id (dùng str để tránh 422)
+    try:
+        machine_uuid = uuid.UUID(machine_id)
+    except (ValueError, TypeError):
+        raise HTTPException(404, f"Machine ID không hợp lệ: {machine_id!r}")
+
+    # Check máy tồn tại (không cần scope check vì require_admin đủ)
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == machine_uuid))
+    ).scalar_one_or_none()
+    if machine is None:
+        raise HTTPException(404, "Máy không tồn tại")
+
+    # Build query
+    base_stmt = select(DfirInvestigation).where(DfirInvestigation.machine_id == machine_uuid)
+    count_stmt = select(sa_func.count()).select_from(DfirInvestigation).where(
+        DfirInvestigation.machine_id == machine_uuid
+    )
+    if status_filter:
+        base_stmt = base_stmt.where(DfirInvestigation.status == status_filter)
+        count_stmt = count_stmt.where(DfirInvestigation.status == status_filter)
+
+    # Total + page
+    total = (await db.execute(count_stmt)).scalar() or 0
+    offset = (page - 1) * limit
+    rows = (
+        await db.execute(
+            base_stmt.order_by(DfirInvestigation.created_at.desc())
+            .limit(limit).offset(offset)
+        )
+    ).scalars().all()
+
+    items = [_inv_to_out(inv, machine) for inv in rows]
+    return DfirInvestigationListOut(
+        items=items,
+        total=total,
+        page=page,
+        limit=limit,
+        has_more=(offset + len(rows)) < total,
+    )
 
 
 @router.patch("/{machine_id}/lifecycle", response_model=dict)
