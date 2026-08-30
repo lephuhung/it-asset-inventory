@@ -21,6 +21,7 @@ from app.db.models import AlertEvent, AlertRule, Machine, MachineStatus
 from app.db.session import AsyncSessionLocal
 from app.services.partition import ensure_heartbeat_partitions
 from app.services.realtime import publish_machine_event
+from app.services import dfir_investigation
 
 logger = logging.getLogger("monitor")
 
@@ -33,6 +34,7 @@ ALERT_SCAN_SECONDS = 60        # mỗi phút quét alert rules
 LOST_SCAN_SECONDS = 3600       # mỗi giờ quét máy mất kết nối lâu ngày
 MACHINE_NEW_WINDOW_MINUTES = 30
 VELOCIRAPTOR_SYNC_SECONDS = settings.velociraptor_sync_interval_seconds  # 5 phút — sync hostname ↔ client_id
+LLM_DFIR_WORKER_SECONDS = settings.llm_investigation_interval_seconds  # 30 giây — poll LLM-DFIR job
 
 
 async def _sweep_offline() -> None:
@@ -266,6 +268,7 @@ async def monitor_loop() -> None:
     last_schedule_check = -DFIR_SCHEDULE_SCAN_SECONDS
     last_lost_check = -LOST_SCAN_SECONDS
     last_velociraptor_check = -VELOCIRAPTOR_SYNC_SECONDS
+    last_llm_dfir_check = -LLM_DFIR_WORKER_SECONDS
     while True:
         try:
             await _sweep_offline()
@@ -286,6 +289,14 @@ async def monitor_loop() -> None:
                 # Full on-demand — admin trigger qua POST /sync (manual).
                 # Sync function kept in app.services.velociraptor_sync for manual use.
                 last_velociraptor_check = now
+
+            # LLM-DFIR investigation worker — poll job pending/running/collecting/analyzing
+            if now - last_llm_dfir_check >= LLM_DFIR_WORKER_SECONDS:
+                try:
+                    await dfir_investigation.run_pending_investigations()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("LLM-DFIR worker error: %s", exc)
+                last_llm_dfir_check = now
 
             # NOTE: DFIR schedules + alerts NO LONGER auto-run on cron.
             # User yêu cầu full on-demand — admin trigger qua portal endpoints:
