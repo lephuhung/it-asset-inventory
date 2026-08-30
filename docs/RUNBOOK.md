@@ -261,3 +261,64 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
 - Không upload agent lên VirusTotal (phát tán mẫu → ML vendor học theo).
 - Không thay đổi agent thành công cụ giám sát (screenshot/keylog/remote shell) — mục 6.6 tài liệu gốc.
 - Không tắt mTLS/verify để "cho nhanh".
+
+## 10. Cài đặt và vận hành agent Linux
+
+### Cài đặt từ package (.deb / .rpm)
+
+```bash
+# Debian/Ubuntu
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ./orginventory-agent_1.1.0_amd64.deb
+
+# RHEL/Rocky/Alma
+sudo dnf install -y ./orginventory-agent-1.1.0-1.x86_64.rpm
+```
+
+Package tạo user `orginventory`, directory `/var/lib/orginventory`, `/var/log/orginventory`, `/etc/orginventory`, `/run/orginventory`. Helper socket listening tại `/run/orginventory/helper.sock` (group `orginventory`).
+
+### One-liner online install
+
+```bash
+curl -fsSL https://agent.example.gov.vn/i/t_Ab3xK9mQ2vR8nL4p | sudo bash
+```
+
+Verify SHA256 từ `/download/linux/{token}/pkg.sha256` trước khi cài. Cấu hình enroll ghi vào `/etc/orginventory/config.json` (mode 0640, group `orginventory`).
+
+### Enroll thủ công
+
+```bash
+sudo /opt/orginventory/OrgInventoryAgent \
+  --data-dir /var/lib/orginventory \
+  --config /etc/orginventory/config.json \
+  --endpoint https://agent.example.gov.vn \
+  --enroll-token t_xxx
+sudo systemctl enable --now orginventory-agent.service
+sudo systemctl status orginventory-agent.service
+```
+
+### Kiểm tra helper
+
+```bash
+ls -la /run/orginventory/helper.sock
+systemctl status orginventory-helper.socket
+echo '{"operation":"dmi","args":{"field":"bios_version"}}' | sudo /opt/orginventory/orginventory-helper
+```
+
+### Pilot checklist
+
+- [ ] 5+ máy Linux cài thành công qua .deb + .rpm
+- [ ] Service `orginventory-agent` chạy bằng user `orginventory` (không root)
+- [ ] Helper socket tồn tại, group `orginventory` đọc được
+- [ ] Inventory gửi về server (kiểm tra `/var/log/orginventory/agent.log`)
+- [ ] Portal hiển thị `platform=linux`, badge Linux, SecuritySection thích ứng
+- [ ] SSH/LUKS/Update status hiển thị đúng
+- [ ] Bundle offline Linux → import → server (qua `/api/offline/import`)
+
+### Build package từ source
+
+```bash
+cd agent
+bash installer/linux/build-deb.sh linux-x64
+# hoặc
+bash installer/linux/build-rpm.sh linux-x64
+```
