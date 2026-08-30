@@ -1,0 +1,13 @@
+[Unit]
+Description=OrgInventory Helper (privileged operations socket)
+Before=orginventory-agent.service
+
+[Socket]
+ListenStream=/run/orginventory/helper.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=orginventory
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

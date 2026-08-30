@@ -1,0 +1,24 @@
+[Unit]
+Description=OrgInventory Agent (IT Asset Inventory)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orginventory
+Group=orginventory
+ExecStart=/opt/orginventory/OrgInventoryAgent --data-dir /var/lib/orginventory --config /etc/orginventory/config.json
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
+AmbientCapabilities=
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

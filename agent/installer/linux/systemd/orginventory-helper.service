@@ -1,0 +1,19 @@
+[Unit]
+Description=OrgInventory Helper (privileged operations)
+After=orginventory-helper.socket
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/orginventory/orginventory-helper
+StandardInput=socket
+StandardOutput=socket
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

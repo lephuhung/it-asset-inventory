@@ -1,0 +1,8 @@
+#!/bin/bash
+set -e
+if [ "$1" = "remove" ]; then
+    systemctl stop orginventory-agent.service || true
+    systemctl stop orginventory-helper.socket || true
+fi
+#DEBHELPER#
+exit 0

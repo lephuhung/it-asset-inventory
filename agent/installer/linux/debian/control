@@ -1,0 +1,9 @@
+Package: orginventory-agent
+Version: 1.1.0
+Architecture: amd64
+Maintainer: Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh
+Description: OrgInventory Agent — IT Asset Inventory for Linux (Debian/Ubuntu, RHEL/Rocky)
+Section: net
+Priority: optional
+Depends: libc6, adduser, systemd
+Recommends: smartmontools
