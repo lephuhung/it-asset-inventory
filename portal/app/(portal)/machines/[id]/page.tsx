@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   AlertTriangle,
+  Brain,
   CheckCircle2,
   ChevronRight,
   Cpu,
@@ -23,7 +24,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { DfirHunt, MachineClassification, MachineDetail, NetworkInterface, Tag, VelociraptorClientMetadata, VelociraptorConfig, VelociraptorLink, VelociraptorLookup } from "@/lib/types";
+import type { DfirHunt, DfirInvestigation, MachineClassification, MachineDetail, NetworkInterface, Tag, VelociraptorClientMetadata, VelociraptorConfig, VelociraptorLink, VelociraptorLookup } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
 import {
   Badge,
@@ -53,6 +54,7 @@ import {
 import { EOL_STATUS_META, getWindowsEol } from "@/lib/eol";
 import { MachineTimelineSection } from "@/components/machine-timeline";
 import { VeloLogDrawer, VelociraptorLiveCard } from "@/components/velociraptor-live";
+import { MachineInvestigationPanel } from "@/components/machine-investigation-panel";
 
 /** "—" nếu rỗng; object → JSON. */
 function kv(value: unknown): string {
@@ -336,9 +338,14 @@ export default function MachineDetailPage() {
   const [veloLiveLoading, setVeloLiveLoading] = useState(false);
   const [veloLiveError, setVeloLiveError] = useState<string | null>(null);
   const [showCollectModal, setShowCollectModal] = useState(false);
+  // LLM-DFIR investigation
+  const [llmBusy, setLlmBusy] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
+  const [llmInvestigationId, setLlmInvestigationId] = useState<string | null>(null);
   const [collectArtifact, setCollectArtifact] = useState("");
   // ── Panel log Velociraptor (trượt vào từ bên phải, đẩy nội dung sang trái) ──
   const [showVeloLog, setShowVeloLog] = useState(false);
+  const [showInvestigationPanel, setShowInvestigationPanel] = useState(false);
 
   // ── Luôn khóa chiều cao card "Phần mềm đã cài" theo card "Trạng thái bảo mật" cùng hàng ──
   const securityCardRef = useRef<HTMLElement | null>(null);
@@ -573,6 +580,29 @@ export default function MachineDetailPage() {
     }
   };
 
+  /** Trigger LLM-DFIR investigation cho máy này.
+   *  Tự động thu thập 10 artifact Velociraptor mặc định + gọi LLM phân tích.
+   *  Background worker xử lý; chuyển trang sang chi tiết investigation.
+   */
+  const investigateWithAI = async () => {
+    if (!machine) return;
+    setLlmBusy(true);
+    setLlmError(null);
+    try {
+      const inv = await api.post<DfirInvestigation>("/admin/llm-dfir/investigations", {
+        machine_id: machine.id,
+        artifacts: null, // dùng default
+      });
+      setLlmInvestigationId(inv.id);
+      // Chuyển trang sau khi tạo xong
+      window.location.href = `/admin/llm-dfir/investigations/${inv.id}`;
+    } catch (e) {
+      setLlmError(e instanceof Error ? e.message : "Tạo investigation thất bại");
+    } finally {
+      setLlmBusy(false);
+    }
+  };
+
   const saveLifecycle = async () => {
     if (!machine || !lifecycle) return;
     setActionBusy("lifecycle");
@@ -743,11 +773,9 @@ export default function MachineDetailPage() {
             }
             onRefresh={() => void loadVeloLive()}
             onOpenLogs={() => setShowVeloLog(true)}
-            onCollect={() => {
-              setVeloError(null);
-              setVeloResult(null);
-              setShowCollectModal(true);
-            }}
+            onShowHistory={() => setShowInvestigationPanel(true)}
+            onInvestigateAI={() => void investigateWithAI()}
+            llmBusy={llmBusy}
           />
         </div>
       ) : (
@@ -1012,6 +1040,11 @@ export default function MachineDetailPage() {
       >
         <div className="space-y-4">
           {veloError && <ErrorBanner message={veloError} />}
+          {llmError && (
+            <div className="mb-2">
+              <ErrorBanner message={`LLM-DFIR: ${llmError}`} onRetry={() => setLlmError(null)} />
+            </div>
+          )}
 
           <Field
             label="Artifact"
@@ -1196,6 +1229,14 @@ export default function MachineDetailPage() {
         }
         clientId={veloLink?.client_id ?? null}
         allowlist={veloConfig?.allowlist ?? []}
+      />
+
+      {/* Panel lịch sử investigations — mở từ nút "Lịch sử điều tra" trên card Velociraptor */}
+      <MachineInvestigationPanel
+        machineId={machine.id}
+        machineHostname={machine.hostname}
+        open={showInvestigationPanel}
+        onClose={() => setShowInvestigationPanel(false)}
       />
 
     </div>

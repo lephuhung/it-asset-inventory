@@ -17,9 +17,12 @@ import {
   HardDriveDownload,
   KeyRound,
   LayoutDashboard,
+  MessageCircle,
   Monitor,
+  ListTree,
   ScrollText,
   Search,
+  Brain,
   ServerCog,
   ShieldCheck,
   Tags,
@@ -34,6 +37,9 @@ import { LogoMark } from "@/components/logo";
 
 const ADMIN_ROLES: UserRole[] = ["super_admin", "org_admin", "admin_global", "admin_org"];
 const SUPER_ADMIN_ROLES: UserRole[] = ["super_admin", "admin_global"];
+const ALL_ROLES: UserRole[] = [
+  "super_admin", "admin_global", "org_admin", "admin_org", "viewer",
+];
 
 interface NavItem {
   href: string;
@@ -87,6 +93,8 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     items: [
       { href: "/reports", label: "Xuất báo cáo", icon: FileSpreadsheet },
       { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
+      { href: "/llm-dfir/stats", label: "Thống kê điều tra AI", icon: Brain, roles: ADMIN_ROLES },
+      { href: "/llm-dfir/investigations", label: "Danh sách điều tra AI", icon: ListTree, roles: ADMIN_ROLES },
       { href: "/eol", label: "Windows EOL", icon: CalendarClock },
       { href: "/diff", label: "So sánh máy (Diff)", icon: GitCompareArrows },
       {
@@ -101,6 +109,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     group: "Vận hành",
     items: [
       {
+        href: "/notifications",
+        label: "Thông báo",
+        icon: Bell,
+        roles: ALL_ROLES,
+      },
+      {
         href: "/alerts",
         label: "Alerts",
         icon: Bell,
@@ -111,6 +125,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         label: "DFIR",
         icon: Search,
         roles: ADMIN_ROLES,
+      },
+      {
+        href: "/admin/llm-dfir",
+        label: "AI Điều tra",
+        icon: Brain,
+        roles: SUPER_ADMIN_ROLES,
       },
       {
         href: "/audit",
@@ -147,6 +167,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         label: "User Access",
         icon: ShieldCheck,
         roles: ADMIN_ROLES,
+      },
+      {
+        href: "/me/telegram",
+        label: "Liên kết Telegram",
+        icon: MessageCircle,
+        roles: ALL_ROLES,
       },
       { href: "/compliance", label: "Thông báo tuân thủ", icon: FileText },
     ],
