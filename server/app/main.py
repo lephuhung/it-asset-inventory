@@ -37,6 +37,9 @@ from app.api.routes import (
     users,
     velociraptor,
     ws,
+    llm_dfir,
+    llm_dfir_external,
+    notifications,
 )
 from app.core.config import settings
 
@@ -155,6 +158,13 @@ app.include_router(downloads.router)
 app.include_router(ws.router)
 app.include_router(users.router)
 app.include_router(velociraptor.router)
+app.include_router(llm_dfir.router)
+app.include_router(llm_dfir_external.router)
+app.include_router(notifications.router)
+app.include_router(notifications.admin_router)
+app.include_router(notifications.ext_router)
+app.include_router(notifications.me_router)
+app.include_router(notifications.tg_router)
 
 
 @app.get("/health")

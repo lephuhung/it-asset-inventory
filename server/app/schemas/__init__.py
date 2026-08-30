@@ -1092,3 +1092,243 @@ class DfirAlertOut(BaseModel):
     message: str
     resolved: bool
     created_at: datetime
+
+
+# ── LLM-DFIR ──────────────────────────────────────────────────────
+
+
+class LlmConfigOut(BaseModel):
+    enabled: bool
+    provider: str
+    base_url: str
+    api_key_masked: str
+    model: str
+    fallback_model: str | None
+    system_prompt: str | None
+    max_tokens: int
+    temperature: float
+    request_timeout: int
+    max_context_chars: int
+    allow_cloud: bool
+    external_orchestrator: str = ""  # "" = local LLM | "hermes" = đợi Hermes push kết quả
+    daily_token_budget: int | None
+    tokens_used_today: int
+    test_status: str | None
+    test_error: str | None
+    test_at: datetime | None
+    updated_at: datetime
+    available_models: list[str] = []
+
+
+class LlmConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    fallback_model: str | None = None
+    system_prompt: str | None = None
+    max_tokens: int | None = None
+    temperature: float | None = None
+    request_timeout: int | None = None
+    max_context_chars: int | None = None
+    allow_cloud: bool | None = None
+    external_orchestrator: str | None = None
+    daily_token_budget: int | None = None
+
+
+class LlmTestConnectionOut(BaseModel):
+    ok: bool
+    latency_ms: int
+    models: list[str]
+    error: str | None = None
+
+
+class DfirInvestigationCreate(BaseModel):
+    machine_id: uuid.UUID
+    artifacts: list[str] | None = None
+    custom_instructions: str | None = None
+    # True nếu muốn orchestrator chỉ thu thập data rồi đợi external (Hermes) push kết quả
+    # (override config LlmConfig.external_orchestrator nếu cần)
+    use_external_orchestrator: bool | None = None
+
+
+class DfirInvestigationOut(BaseModel):
+    id: uuid.UUID
+    machine_id: uuid.UUID
+    machine_hostname: str | None = None
+    status: str
+    artifacts: list[str]
+    llm_provider: str | None
+    llm_model: str | None
+    severity: str | None
+    findings_count: int | None
+    findings: list | None = None
+    iocs: list | None = None
+    input_tokens: int | None
+    output_tokens: int | None
+    estimated_cost_usd: float | None
+    error: str | None
+    report_markdown: str | None
+    custom_instructions: str | None = None
+    external_orchestrator: str | None = None
+    external_job_id: str | None = None
+    external_polled_at: datetime | None = None
+    hermes_status: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    callback_received_at: datetime | None = None
+    requested_by: uuid.UUID
+    requested_by_name: str | None = None
+
+
+class ExternalInvestigationResultIn(BaseModel):
+    """Body Hermes gửi về khi xong investigation.
+
+    Idempotent qua X-Idempotency-Key header.
+    """
+    report_markdown: str
+    severity: str | None = "info"  # critical|high|medium|low|info
+    findings_count: int | None = None
+    findings: list | None = None  # [{id, title, mitre_id, severity, evidence, recommendation}]
+    iocs: list | None = None  # [{type, value, source}]
+    llm_provider: str | None = None  # vd "hermes-agent"
+    llm_model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    error: str | None = None  # nếu set → status=failed
+    external_job_id: str | None = None  # correl với job_id phía Hermes
+    raw_response: dict | None = None  # full response để audit
+
+
+class ExternalInvestigationPendingOut(BaseModel):
+    """Item trong list pending — Hermes consume."""
+    id: uuid.UUID
+    machine_id: uuid.UUID
+    velociraptor_client_id: str | None
+    machine_hostname: str | None
+    machine_fqdn: str | None
+    machine_os: str | None
+    artifacts: list[str]
+    custom_instructions: str | None
+    created_at: datetime
+    callback_url: str  # URL Hermes gọi POST result về
+
+
+class ExternalInvestigationAckOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    message: str
+    notification_id: str | None = None  # notification đã gửi cho admin
+
+
+class DfirInvestigationMessageOut(BaseModel):
+    id: uuid.UUID
+    role: str
+    content: str
+    tokens: int | None
+    created_at: datetime
+
+
+class DfirInvestigationChatIn(BaseModel):
+    message: str
+
+
+# ── Notifications ───────────────────────────────────────────────
+
+
+class NotificationOut(BaseModel):
+    id: uuid.UUID
+    source: str
+    category: str
+    severity: str
+    title: str
+    body: str | None
+    link: str | None
+    entity_type: str | None
+    entity_id: str | None
+    read_at: datetime | None
+    created_at: datetime
+    sender_name: str | None = None
+
+
+class NotificationUnreadCountOut(BaseModel):
+    total: int
+    by_severity: dict[str, int] = {}
+
+
+class NotificationMarkAllReadOut(BaseModel):
+    marked: int
+
+
+class AdminSendNotificationIn(BaseModel):
+    recipient_ids: list[uuid.UUID] | None = None
+    recipient_filter: dict | None = None  # {role, org_id, broadcast, exclude_user_id}
+    category: str = "message"
+    severity: str = "info"
+    title: str
+    body: str | None = None
+    link: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    data: dict | None = None
+
+
+class AdminSendNotificationOut(BaseModel):
+    delivered_to: int
+    recipient_ids: list[str]
+    notification_ids: list[str]
+
+
+class ExternalNotificationIn(BaseModel):
+    recipients: dict  # {type: "role"|"user"|"broadcast", role?, user_ids?, broadcast?}
+    category: str = "investigation"
+    severity: str = "info"
+    title: str
+    body: str | None = None
+    link: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    data: dict | None = None
+
+
+class TelegramLinkStartOut(BaseModel):
+    """Trả về deep-link để user mở Telegram bot."""
+    bot_url: str
+    linking_token: str
+    expires_at: datetime
+
+
+class TelegramLinkStatusOut(BaseModel):
+    linked: bool
+    telegram_chat_id: str | None = None
+    linked_at: datetime | None = None
+
+
+# ── LLM-DFIR Statistics ──────────────────────────────────────────
+
+
+class DfirInvestigationListOut(BaseModel):
+    """Paginated list investigations."""
+    items: list  # list[DfirInvestigationOut]
+    total: int
+    page: int
+    limit: int
+    has_more: bool
+
+
+class DfirInvestigationStatsOut(BaseModel):
+    """Thống kê investigations — cho dashboard báo cáo."""
+    total: int
+    by_status: dict[str, int]  # {"pending": 5, "completed": 30, "failed": 3, ...}
+    by_severity: dict[str, int]  # {"critical": 2, "high": 5, "info": 30, ...}
+    by_machine: list[dict]  # [{"machine_id": "...", "hostname": "...", "count": 5, "critical": 1}, ...]
+    recent_24h: int  # số investigation tạo trong 24h qua
+    recent_7d: int
+    avg_duration_seconds: float | None  # thời gian xử lý trung bình
+    # Series theo ngày (30 ngày gần nhất) — cho chart
+    daily_counts: list[dict]  # [{"date": "2026-08-30", "total": 5, "critical": 1}, ...]
+    # Top findings
+    top_findings: list[dict]  # [{"mitre_id": "T1059.001", "title": "...", "count": 3}, ...]

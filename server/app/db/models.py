@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -182,6 +183,9 @@ class User(Base):
     backup_codes: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # hash bcrypt, dùng 1 lần
     is_2fa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Telegram bot linking (mỗi user link 1 chat_id với account)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    telegram_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
     org: Mapped[Organization] = relationship()
@@ -672,3 +676,189 @@ class DfirAlert(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+# ── LLM-DFIR (AI Assistant) ──────────────────────────────────────
+
+
+class LlmConfig(Base):
+    """Cấu hình LLM backend — singleton (id=1), Super Admin cấu hình trên portal.
+
+    Mặc định: Ollama local (http://127.0.0.1:11434/v1) — privacy-first.
+    Hỗ trợ: Ollama, LocalAI, vLLM, OpenAI, Qwen/DashScope, DeepSeek (tất cả
+    OpenAI-compatible). `api_key_encrypted` AES-256-GCM (None nếu Ollama local).
+    """
+
+    __tablename__ = "llm_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider: Mapped[str] = mapped_column(String(32), default="ollama")
+    base_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    fallback_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=4096)
+    temperature: Mapped[float] = mapped_column(Numeric(3, 2), default=0.0)
+    request_timeout: Mapped[int] = mapped_column(Integer, default=120)
+    max_context_chars: Mapped[int] = mapped_column(Integer, default=200_000)
+    allow_cloud: Mapped[bool] = mapped_column(Boolean, default=False)
+    # External orchestrator: "" (default, dùng local LLM) | "hermes" (đợi Hermes push kết quả)
+    external_orchestrator: Mapped[str] = mapped_column(String(32), default="")
+    daily_token_budget: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_used_today: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    test_status: Mapped[str | None] = mapped_column(String(32), nullable=True)  # ok|error|untested
+    test_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC)
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class DfirInvestigation(Base):
+    """Mỗi lần admin trigger 'Điều tra AI' 1 máy → 1 row.
+
+    Lifecycle: pending → running → collecting → analyzing → completed (| failed).
+    - `artifacts`: list artifact Velociraptor đã collect
+    - `report_markdown`: báo cáo cuối cùng từ LLM (tiếng Việt)
+    - `severity`: critical|high|medium|low|info — LLM tự đánh giá
+    - `raw_artifacts`: JSON thu thập từ Velociraptor (audit + cho Q&A tiếp)
+    """
+
+    __tablename__ = "dfir_investigations"
+    __table_args__ = (
+        Index("ix_dfir_investigations_machine_id", "machine_id"),
+        Index("ix_dfir_investigations_status", "status"),
+        Index("ix_dfir_investigations_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), nullable=False)
+    velociraptor_client_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    hunt_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifacts: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    llm_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    report_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    findings_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_artifacts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    custom_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # External orchestration (P0-P5 extension): "hermes" nếu đợi external service push kết quả
+    external_orchestrator: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    external_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    external_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hermes_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    hermes_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    findings: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # structured findings từ Hermes
+    iocs: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # IoC list từ Hermes
+    callback_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+    )
+
+
+class DfirInvestigationMessage(Base):
+    """Chat Q&A với LLM về 1 cuộc điều tra. ON DELETE CASCADE."""
+
+    __tablename__ = "dfir_investigation_messages"
+    __table_args__ = (Index("ix_dfir_investigation_messages_investigation_id", "investigation_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    investigation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dfir_investigations.id", ondelete="CASCADE"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # system|user|assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+    )
+
+
+# ── Notifications (P0-P5) ───────────────────────────────────────
+
+
+class Notification(Base):
+    """Notification gửi tới user — 4 nguồn: user (admin gửi), system, hermes, velociraptor.
+
+    WebSocket push real-time qua Redis pub/sub `notification:user:{id}`.
+    REST polling fallback khi WS không khả dụng.
+    """
+    __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_recipient_unread", "recipient_id", "created_at",
+              postgresql_where=text("read_at IS NULL")),
+        Index("ix_notifications_recipient_created", "recipient_id", "created_at"),
+        Index("ix_notifications_entity", "entity_type", "entity_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    recipient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    sender_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    # Nguồn & loại
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    # "user" | "system" | "hermes" | "velociraptor" | "agent"
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    # "investigation" | "alert" | "system" | "machine" | "security" | "message"
+    severity: Mapped[str] = mapped_column(String(16), default="info", nullable=False)
+    # "info" | "success" | "warning" | "error" | "critical"
+
+    # Nội dung
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Deep-link & entity reference
+    link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    entity_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Audit (cho external call)
+    api_key_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Read tracking
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+    )
+
+
+class NotificationDelivery(Base):
+    """Tracking gửi qua các channel ngoài (Telegram, email, webhook).
+
+    Mỗi notification có thể gửi qua nhiều channel; 1 row / channel.
+    Cho phép retry, audit, debug khi user báo không nhận được.
+    """
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        Index("ix_notification_deliveries_notif", "notification_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    notification_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False
+    )
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    # "in_app" (đã push WS + lưu DB) | "telegram" | "email" | "webhook"
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    # "pending" | "delivered" | "failed" | "skipped"
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+    )

@@ -398,6 +398,50 @@ class VelociraptorClient:
             f"/GetFlowDetails?client_id={client_id}&flow_id={flow_id}"
         )
 
+    async def get_flow_status(self, client_id: str, flow_id: str) -> dict:
+        """Trạng thái flow (dạng dễ dùng cho orchestrator).
+
+        Returns:
+            {"state": "RUNNING"|"FINISHED"|"ERROR", "is_running": bool,
+             "error": str|None, "raw": <full GetFlowDetails response>}
+        """
+        details = await self.get_flow_details(client_id, flow_id)
+        ctx = details.get("context") or {}
+        state = str(ctx.get("state") or "").upper()
+        is_running = state in ("RUNNING", "PENDING", "IN_PROGRESS", "")
+        err: str | None = None
+        if state == "ERROR":
+            err = str(ctx.get("status") or "flow kết thúc với trạng thái ERROR")
+        return {"state": state, "is_running": is_running, "error": err, "raw": details}
+
+    async def get_flow_results(
+        self,
+        client_id: str,
+        flow_id: str,
+        artifact: str | None = None,
+        max_rows: int = 5000,
+    ) -> list[dict]:
+        """Lấy kết quả flow — wrapper quanh get_table.
+
+        Args:
+            client_id: Velociraptor client_id
+            flow_id: Velociraptor flow_id
+            artifact: tên artifact (None = lấy artifact đầu tiên trong flow request)
+            max_rows: số rows tối đa (default 5000, cap cứng trong Velociraptor)
+
+        Returns:
+            list[dict] — rows từ GetTable (mỗi row là dict theo schema artifact)
+        """
+        if not artifact:
+            # Lấy artifact đầu tiên từ flow details
+            details = await self.get_flow_details(client_id, flow_id)
+            request = (details.get("context") or {}).get("request") or {}
+            artifacts = request.get("artifacts") or []
+            if not artifacts:
+                return []
+            artifact = str(artifacts[0])
+        return await self.get_table(client_id, flow_id, artifact, rows=max_rows)
+
     async def get_table(
         self,
         client_id: str,
