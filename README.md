@@ -6,38 +6,74 @@
 Mô hình Agent – Server, dữ liệu sống realtime, định danh đa nguồn, bảo mật mTLS, agent Windows read-only zero-GUI.
 Căn cứ thiết kế: [`KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md`](KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md) v1.2 · [`PLAN_THUC_HIEN.md`](PLAN_THUC_HIEN.md) v1.3 · hợp đồng API: [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) · vận hành: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
+## Phát triển với Docker
+
+Repo hỗ trợ chạy toàn bộ stack (postgres + redis + api + portal) bằng Docker Compose.
+Stack dev có hot reload — sửa code trong `server/app/` hoặc `portal/app/` sẽ tự refresh.
+
+### Yêu cầu
+
+- Docker Engine ≥ 24, Docker Compose v2 (`docker compose`, không phải `docker-compose`)
+
+### Setup lần đầu
+
+```bash
+cp .env.example .env
+# Sửa SECRET_KEY, DATA_ENCRYPTION_KEY, SEED_ADMIN_PASSWORD (xem comment trong file)
+
+docker compose up -d --build
+docker compose logs -f api portal
+```
+
+Sau khi healthy:
+- Portal: http://localhost:3003
+- API docs: http://localhost:8000/docs
+
+### Commands
+
+```bash
+docker compose up -d              # khởi động
+docker compose down               # dừng (giữ DB)
+docker compose down -v            # reset sạch (mất DB)
+docker compose logs -f api        # log api
+docker compose exec api bash      # shell vào api container
+```
+
+### Cấu trúc service
+
+| Service | Host port | Container port | Mục đích |
+|---|---|---|---|
+| postgres | 5432 | 5432 | DB chính |
+| redis | 6381 | 6379 | Cache + pub/sub |
+| api | 8000 | 8000 | FastAPI backend |
+| portal | 3003 | 3003 | Next.js frontend |
+
+### Tách biệt
+
+- **Velociraptor** (DFIR) — `deploy/velociraptor/` (sau này chạy máy khác)
+- **step-ca** — `deploy/step-ca/` (prod/proper mTLS; dev dùng `CA_MODE=local`)
+- **Agent C#** — `agent/`, build riêng trên Windows rồi copy `OrgInventoryAgent.msi` vào `server/agent_dist/`
+- **Nginx** — không có service trong Docker dev stack; deploy thật dùng Nginx Proxy Manager bên ngoài. Cấu hình cũ ở `server/deploy/nginx/nginx.conf` được giữ làm tài liệu tham khảo.
+
+### Build native (fallback)
+
+Nếu không dùng Docker:
+
+```bash
+./build-all.sh    # build server + agent + portal native
+```
+
 ## Cấu trúc repo (mono)
 
 | Thư mục | Thành phần | Công nghệ | Trạng thái |
 |---|---|---|---|
-| `server/` | API Server + nginx + step-ca | FastAPI (Python 3.12), PostgreSQL 16, Redis 7 | ✅ Hoàn chỉnh — 68/68 test |
+| `server/` | API Server | FastAPI (Python 3.12), PostgreSQL 16, Redis 7 | ✅ Hoàn chỉnh — 68/68 test |
 | `portal/` | Portal quản trị | Next.js 16 (App Router, TypeScript, Tailwind), BFF proxy | ✅ Hoàn chỉnh — build xanh |
 | `agent/` | Agent Windows | C# .NET 8 Windows Service | ✅ Hoàn chỉnh — build 0 lỗi, e2e với schema server thật |
 | `deploy/` | Helper dev (cert, step-ca, env, velociraptor) | — | ✅ |
 | `docs/` | API contract, runbook | — | ✅ |
 
-> **Compose canonical nằm ở `server/deploy/docker-compose.yml`** (postgres :5432, redis :6381, api :8000, nginx :443/:9443). Nginx 2 server block: agent mTLS (9443) + portal (443) — xem `server/deploy/nginx/nginx.conf`.
-
-## Chạy nhanh (dev)
-
-```bash
-# 1. Khởi động hạ tầng (PostgreSQL + Redis + API)
-cd server && cp .env.example .env   # sửa secret trước khi chạy
-cd server/deploy && docker compose up -d postgres redis   # DB :5432, Redis :6381
-
-# 2. Migration + chạy API
-cd server && .venv/bin/pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload        # → http://127.0.0.1:8000/docs
-
-# 3. Portal
-cd portal && pnpm install && pnpm dev   # → http://localhost:3003
-
-# 4. Tạo chứng chỉ dev tạm (nếu cần mTLS demo)
-bash deploy/certs/gen-dev-certs.sh
-```
-
-Tài khoản seed mặc định: `admin@example.gov.vn` (xem `server/.env` → `SEED_ADMIN_*`).
+> Compose dev canonical nằm ở `docker-compose.yml` tại root (postgres :5432, redis :6381, api :8000, portal :3003); không có service Nginx, step-ca hoặc Velociraptor.
 
 ## Đồng bộ GitHub & CI
 
