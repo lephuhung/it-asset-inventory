@@ -1,4 +1,6 @@
 using System.Net.NetworkInformation;
+using OrgInventoryAgent.Core.Collectors.Schema;
+using ListeningPortInfo = OrgInventoryAgent.Core.Collectors.Schema.ListeningPortInfo;
 
 namespace OrgInventoryAgent.Collectors;
 

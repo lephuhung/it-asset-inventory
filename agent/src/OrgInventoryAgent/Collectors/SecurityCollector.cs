@@ -1,6 +1,11 @@
 using System.Management;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
+using OrgInventoryAgent.Core.Collectors.Schema;
+using AntivirusInfo = OrgInventoryAgent.Core.Collectors.Schema.AntivirusInfo;
+using LocalAccountInfo = OrgInventoryAgent.Core.Collectors.Schema.LocalAccountInfo;
+using WeakProtocolsInfo = OrgInventoryAgent.Core.Collectors.Schema.WeakProtocolsInfo;
+using SecurityPosture = OrgInventoryAgent.Core.Collectors.Schema.SecurityPostureV4;
 
 namespace OrgInventoryAgent.Collectors;
 

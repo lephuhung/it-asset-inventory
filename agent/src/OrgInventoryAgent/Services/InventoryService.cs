@@ -4,6 +4,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
 using OrgInventoryAgent.Core.Net;
+using OrgInventoryAgent.Core.Collectors.Schema;
+using InventorySnapshot = OrgInventoryAgent.Core.Collectors.Schema.InventorySnapshot;
 
 namespace OrgInventoryAgent.Services;
 

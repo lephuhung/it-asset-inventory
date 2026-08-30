@@ -32,6 +32,10 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\OrgInventoryAgent.Core\OrgInventoryAgent.Core.csproj" />
+  </ItemGroup>
+
   <!-- Publish profile cho Linux self-contained single-file.
        Cấu hình chống Antivirus / Defender False Positive (tương thích cơ chế Windows):
        - TẮT nén (EnableCompressionInSingleFile=false): tránh bị nhận nhầm là packer/crypter.

@@ -265,3 +265,82 @@ public sealed class WeakProtocolsInfo
     [JsonPropertyName("ssl3_disabled")]
     public bool Ssl3Disabled { get; set; } = true;
 }
+
+// ── Flat hardware DTOs (legacy schema, used by InventorySnapshot on Windows + Linux) ──
+
+public sealed class CpuInfo
+{
+    [JsonPropertyName("model")] public string? Model { get; set; }
+    [JsonPropertyName("cores")] public int? Cores { get; set; }
+}
+
+public sealed class DiskInfo
+{
+    [JsonPropertyName("model")] public string? Model { get; set; }
+    [JsonPropertyName("serial")] public string? Serial { get; set; }
+    [JsonPropertyName("size_bytes")] public long? SizeBytes { get; set; }
+    [JsonPropertyName("size")] public long? Size => SizeBytes;
+    [JsonPropertyName("size_gb")] public double? SizeGb { get; set; }
+    [JsonPropertyName("type")] public string? Type { get; set; } // SSD | HDD | NVMe
+}
+
+public sealed class GpuInfo
+{
+    [JsonPropertyName("model")] public string? Model { get; set; }
+}
+
+public sealed class MainboardInfo
+{
+    [JsonPropertyName("model")] public string? Model { get; set; }
+    [JsonPropertyName("serial")] public string? Serial { get; set; }
+}
+
+public sealed class BiosInfo
+{
+    [JsonPropertyName("version")] public string? Version { get; set; }
+}
+
+public sealed class NetworkInterfaceInfo
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("ip")] public string? Ip { get; set; }
+    [JsonPropertyName("mac")] public string? Mac { get; set; }
+    [JsonPropertyName("is_dual_homed")] public bool IsDualHomed { get; set; }
+}
+
+public sealed class SoftwareInfo
+{
+    [JsonPropertyName("display_name")] public string? DisplayName { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("version")] public string? Version { get; set; }
+    [JsonPropertyName("publisher")] public string? Publisher { get; set; }
+    [JsonPropertyName("install_date")] public string? InstallDate { get; set; }
+    [JsonPropertyName("uninstall_string")] public string? UninstallString { get; set; }
+    [JsonPropertyName("is_per_user")] public bool IsPerUser { get; set; }
+}
+
+/// <summary>
+/// Flat inventory snapshot (legacy schema v1/v2/v3) — Windows agent currently
+/// sends this. Linux agent will populate the same shape, plus the v4 envelope fields.
+/// </summary>
+public sealed class InventorySnapshot
+{
+    [JsonPropertyName("os_name")] public string? OsName { get; set; }
+    [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
+    [JsonPropertyName("os_build")] public string? OsBuild { get; set; }
+    [JsonPropertyName("os_arch")] public string? OsArch { get; set; }
+    [JsonPropertyName("os_installed_at")] public string? OsInstalledAt { get; set; }
+    [JsonPropertyName("activation_status")] public string? ActivationStatus { get; set; }
+    [JsonPropertyName("cpu")] public CpuInfo? Cpu { get; set; }
+    [JsonPropertyName("ram_gb")] public double? RamGb { get; set; }
+    [JsonPropertyName("disks")] public List<DiskInfo>? Disks { get; set; }
+    [JsonPropertyName("gpu")] public GpuInfo? Gpu { get; set; }
+    [JsonPropertyName("mainboard")] public MainboardInfo? Mainboard { get; set; }
+    [JsonPropertyName("bios")] public BiosInfo? Bios { get; set; }
+    [JsonPropertyName("network")] public List<NetworkInterfaceInfo>? Network { get; set; }
+    [JsonPropertyName("logged_user")] public string? LoggedUser { get; set; }
+    [JsonPropertyName("installed_software")] public List<SoftwareInfo>? InstalledSoftware { get; set; }
+    [JsonPropertyName("security")] public SecurityPostureV4? Security { get; set; }
+    [JsonPropertyName("is_vm")] public bool? IsVm { get; set; }
+    [JsonPropertyName("config_hash")] public string? ConfigHash { get; set; }
+}

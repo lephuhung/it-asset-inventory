@@ -1,4 +1,6 @@
 using Microsoft.Win32;
+using OrgInventoryAgent.Core.Collectors.Schema;
+using StartupProgramInfo = OrgInventoryAgent.Core.Collectors.Schema.StartupProgramInfo;
 
 namespace OrgInventoryAgent.Collectors;
 

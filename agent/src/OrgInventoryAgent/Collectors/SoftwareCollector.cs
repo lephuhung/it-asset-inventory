@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Core.Collectors.Schema;
+using SoftwareInfo = OrgInventoryAgent.Core.Collectors.Schema.SoftwareInfo;
 
 namespace OrgInventoryAgent.Collectors;
 
