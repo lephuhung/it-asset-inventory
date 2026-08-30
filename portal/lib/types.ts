@@ -164,6 +164,7 @@ export interface TokenCreateResponse {
   install_command_windows?: string; // PowerShell -EncodedCommand — MSI silent install
   install_command_linux?: string; // curl | bash one-liner — auto-detect .deb / .rpm
   install_offline_url?: string; // gói USB .zip cho máy cách ly (chế độ 2)
+  install_url_warnings?: string[]; // cảnh báo khi portal/agent URL chưa public (localhost)
   expires_at: string;
 }
 

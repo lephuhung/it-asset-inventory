@@ -48,6 +48,11 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
 
     Dùng `-EncodedCommand` (base64 UTF-16LE) — paste vào cmd hay PowerShell đều
     chạy đúng, tránh shell bóc dấu nháy. Giữ logic giống tokens._install_command.
+
+    LƯU Ý: `portal_url` dùng để tải MSI (Portal proxy `/api/downloads/*` về FastAPI
+    `/download/*`) — phải là URL public mà user từ xa truy cập được. KHÔNG dùng
+    `http://localhost:3003` khi user ở xa. Admin phải cấu hình trong Cấu hình agent
+    trước khi sinh token.
     """
     import base64
 
@@ -63,6 +68,11 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -EncodedCommand {encoded}"
+
+
+def _install_command_linux(token: str, portal_url: str, agent_server_url: str) -> str:
+    """One-liner cho Linux: `curl -fsSL <portal>/i/<token> | sudo bash`."""
+    return f"curl -fsSL {portal_url}/i/{token} | sudo bash"
 
 
 # ── Admin: quản lý link ─────────────────────────────────────────
@@ -209,8 +219,16 @@ async def claim(
     )
     await db.commit()
     agent_cfg = await effective_agent_config(db)
+    from app.api.routes.tokens import _validate_install_urls
+    warnings = _validate_install_urls(agent_cfg["portal_url"], agent_cfg["agent_server_url"])
+    cmd_win = _install_command(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"])
+    cmd_linux = _install_command_linux(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"])
     return TokenCreateResponse(
         token=token,
-        install_command=_install_command(token, agent_cfg["portal_url"], agent_cfg["agent_server_url"]),
+        install_command=cmd_win,
+        install_command_windows=cmd_win,
+        install_command_linux=cmd_linux,
+        install_offline_url=f"{agent_cfg['portal_url']}/download/offline-package.zip",
+        install_url_warnings=warnings,
         expires_at=row.expires_at,
     )

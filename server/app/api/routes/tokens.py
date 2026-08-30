@@ -36,14 +36,21 @@ def _install_command_linux(token: str, portal_url: str, agent_server_url: str) -
     Tự detect distro + architecture → tải .deb hoặc .rpm phù hợp → verify SHA256
     → cài package → ghi /etc/orginventory/config.json → enable systemd service.
 
-    KHÔNG tự fetch token từ URL (giống Windows): token đã có sẵn, không lộ
-    qua URL — vẫn gửi qua HTTPS nhưng tránh log URL ở proxy.
+    Lưu ý: URL dùng cho download script là portal_url (Portal có route /i/<token>
+    render install-online.sh động). portal_url phải là URL mà user từ xa truy cập
+    được (KHÔNG phải localhost).
     """
     return f"curl -fsSL {portal_url}/i/{token} | sudo bash"
 
 
 def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """Lệnh cài 1 dòng: tải MSI → verify SHA256 → msiexec silent.
+
+    QUAN TRỌNG — URL dùng để tải MSI là `portal_url` (Portal Next.js proxy `/api/downloads/*`
+    về FastAPI `/download/*`). portal_url phải là URL public — user copy lệnh và chạy
+    trên máy từ xa, browser/PowerShell từ máy đó phải truy cập được. KHÔNG dùng
+    `http://localhost:3003` khi user từ xa — phải là IP LAN (vd `http://10.10.0.241:3003`)
+    hoặc domain thật.
 
     KHÔNG dùng pattern `powershell -EP Bypass -c "irm ... | iex"` — Defender ML
     gắn cờ pattern download-and-execute (Trojan:Win32/Commando.A!ml).
@@ -66,6 +73,27 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -EncodedCommand {encoded}"
+
+
+def _validate_install_urls(portal_url: str, agent_server_url: str) -> list[str]:
+    """Cảnh báo khi URL dùng cho install command chưa public.
+
+    Trả về danh sách cảnh báo (text). Mỗi phần tử là 1 vấn đề. Empty list = OK.
+    Frontend sẽ hiển thị banner cảnh báo cho admin.
+    """
+    warnings: list[str] = []
+    if not portal_url or portal_url.startswith("http://localhost") or "127.0.0.1" in portal_url:
+        warnings.append(
+            f"Portal URL hiện tại là '{portal_url}'. Script cài sẽ fail trên máy user ở xa. "
+            "Cập nhật Portal URL trong Cấu hình agent (vd 'http://10.10.0.241:3003' cho LAN, "
+            "hoặc 'https://portal.example.gov.vn' cho production)."
+        )
+    if not agent_server_url or agent_server_url.startswith("http://localhost") or "127.0.0.1" in agent_server_url:
+        warnings.append(
+            f"Agent server URL hiện tại là '{agent_server_url}'. Sau khi cài, agent sẽ không "
+            "gửi heartbeat/inventory được. Cập nhật Agent server URL trong Cấu hình agent."
+        )
+    return warnings
 
 
 @router.post("/bulk", response_model=BulkTokenResponse)
@@ -105,6 +133,7 @@ async def create_tokens_bulk(
         cmd_win = _install_command(token, portal_url, agent_cfg["agent_server_url"])
         cmd_linux = _install_command_linux(token, portal_url, agent_cfg["agent_server_url"])
         offline_url = f"{portal_url}/download/offline-package.zip"
+        warnings = _validate_install_urls(portal_url, agent_cfg["agent_server_url"])
         tokens_out.append(
             TokenCreateResponse(
                 token=token,
@@ -112,6 +141,7 @@ async def create_tokens_bulk(
                 install_command_windows=cmd_win,
                 install_command_linux=cmd_linux,
                 install_offline_url=offline_url,
+                install_url_warnings=warnings,
                 expires_at=expires,
             )
         )
@@ -173,12 +203,14 @@ async def create_token(
     cmd_win = _install_command(token, portal_url, agent_cfg["agent_server_url"])
     cmd_linux = _install_command_linux(token, portal_url, agent_cfg["agent_server_url"])
     offline_url = f"{portal_url}/download/offline-package.zip"
+    warnings = _validate_install_urls(portal_url, agent_cfg["agent_server_url"])
     return TokenCreateResponse(
         token=token,
         install_command=cmd_win,
         install_command_windows=cmd_win,
         install_command_linux=cmd_linux,
         install_offline_url=offline_url,
+        install_url_warnings=warnings,
         expires_at=expires,
     )
 

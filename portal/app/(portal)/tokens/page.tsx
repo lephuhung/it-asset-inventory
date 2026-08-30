@@ -693,6 +693,24 @@ export default function TokensPage() {
       >
         {created && (
           <div className="space-y-4">
+            {(created.install_url_warnings?.length ?? 0) > 0 && (
+              <div className="rounded-xl border-2 border-rose-300 bg-rose-50 p-3 space-y-2">
+                <p className="text-sm font-bold text-rose-800 flex items-center gap-1.5">
+                  <span aria-hidden>⚠️</span> Script cài sẽ KHÔNG chạy được trên máy user ở xa
+                </p>
+                <ul className="space-y-1 text-xs text-rose-700 list-disc pl-5">
+                  {created.install_url_warnings!.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+                <Link
+                  href="/agent-config"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-rose-900 underline hover:text-rose-700"
+                >
+                  → Sửa ngay trong Cấu hình agent
+                </Link>
+              </div>
+            )}
             <div>
               <p className="mb-1 text-sm font-medium text-slate-700">Token (dạng base62, dùng 1 lần)</p>
               <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">

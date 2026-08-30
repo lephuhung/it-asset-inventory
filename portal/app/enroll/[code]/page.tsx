@@ -119,6 +119,21 @@ export default function EnrollPage() {
           </Card>
         ) : result ? (
           <Card>
+            {(result.install_url_warnings?.length ?? 0) > 0 && (
+              <div className="mb-4 rounded-lg border-2 border-rose-300 bg-rose-50 p-3">
+                <p className="text-sm font-bold text-rose-800 flex items-center gap-1.5">
+                  <span aria-hidden>⚠️</span> Lệnh cài có thể KHÔNG chạy được
+                </p>
+                <ul className="mt-1.5 space-y-1 text-xs text-rose-700 list-disc pl-5">
+                  {result.install_url_warnings!.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-rose-700">
+                  Liên hệ quản trị viên để cấu hình URL cài đặt trước khi chạy lệnh.
+                </p>
+              </div>
+            )}
             <div className="mb-4 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
               <Check className="mt-0.5 size-5 shrink-0 text-emerald-600" />
               <div className="text-sm text-emerald-800">

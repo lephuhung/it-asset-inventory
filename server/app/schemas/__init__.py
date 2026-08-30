@@ -333,6 +333,7 @@ class TokenCreateResponse(BaseModel):
     install_command_windows: str | None = None  # PowerShell -EncodedCommand — MSI silent install
     install_command_linux: str | None = None  # curl | bash one-liner (.deb / .rpm auto-detect)
     install_offline_url: str | None = None  # gói USB .zip cho máy cách ly (chế độ 2)
+    install_url_warnings: list[str] = []  # cảnh báo khi portal/agent URL chưa public (localhost)
     expires_at: datetime
 
 
