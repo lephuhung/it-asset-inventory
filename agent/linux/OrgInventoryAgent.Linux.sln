@@ -1,0 +1,35 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{53F9E0B1-481E-4583-A38E-FC1EDACBC5D6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.Linux", "src\OrgInventoryAgent.Linux\OrgInventoryAgent.Linux.csproj", "{03EFA96E-FA50-4F00-B2AD-6EE950F40361}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{83B7E9F2-23A4-4458-9A7B-3DFB5F0E5D62}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.Linux.Tests", "tests\OrgInventoryAgent.Linux.Tests\OrgInventoryAgent.Linux.Tests.csproj", "{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{03EFA96E-FA50-4F00-B2AD-6EE950F40361}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{03EFA96E-FA50-4F00-B2AD-6EE950F40361}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{03EFA96E-FA50-4F00-B2AD-6EE950F40361}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{03EFA96E-FA50-4F00-B2AD-6EE950F40361}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{03EFA96E-FA50-4F00-B2AD-6EE950F40361} = {53F9E0B1-481E-4583-A38E-FC1EDACBC5D6}
+		{7A1B2C3E-4E5F-6A7B-8C9D-0E1F2A3B4C6E} = {83B7E9F2-23A4-4458-9A7B-3DFB5F0E5D62}
+	EndGlobalSection
+EndGlobal
