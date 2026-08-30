@@ -35,7 +35,7 @@ services:
       DOCKER_STEPCA_INIT_NAME: "Asset Inventory Internal CA"
 
   api:
-    build: .
+    image: asset-inventory-api:latest
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://inventory:inventory@postgres:5432/inventory

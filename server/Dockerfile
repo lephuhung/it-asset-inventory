@@ -24,7 +24,11 @@ RUN pip install --no-cache-dir \
     "cryptography>=42.0.0" \
     "pyotp>=2.9.0" \
     "jinja2>=3.1.0" \
-    "slowapi>=0.1.9"
+    "slowapi>=0.1.9" \
+    "httpx>=0.27.0" \
+    "openpyxl>=3.1.0" \
+    "pyyaml>=6.0.0" \
+    "docker>=7.0.0"
 
 COPY . .
 
