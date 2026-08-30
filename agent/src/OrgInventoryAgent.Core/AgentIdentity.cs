@@ -1,4 +1,6 @@
-namespace OrgInventoryAgent;
+using OrgInventoryAgent.Core.Crypto;
+
+namespace OrgInventoryAgent.Core;
 
 /// <summary>Trạng thái enrollment để phân biệt các case xử lý khác nhau.</summary>
 public enum EnrollStatus
@@ -36,7 +38,7 @@ public static class AgentIdentity
     /// Kiểm tra đầy đủ bao gồm xác nhận cert còn tồn tại trong store (có private key).
     /// Dùng khi cần chắc chắn có thể gửi mTLS request.
     /// </summary>
-    public static bool HasUsableCertificate(AgentConfig config, Crypto.KeyStore keyStore)
+    public static bool HasUsableCertificate(AgentConfig config, IKeyStore keyStore)
     {
         if (!IsEnrolled(config)) return false;
         using var cert = keyStore.FindClientCertificate(config);
@@ -47,7 +49,7 @@ public static class AgentIdentity
     /// Validate đầy đủ trạng thái enrollment. Phân biệt "chưa enroll" vs "cert mất".
     /// Gọi định kỳ (ví dụ mỗi 10 chu kỳ heartbeat) để phát hiện sớm.
     /// </summary>
-    public static EnrollStatus Validate(AgentConfig config, Crypto.KeyStore keyStore)
+    public static EnrollStatus Validate(AgentConfig config, IKeyStore keyStore)
     {
         if (!IsEnrolled(config)) return EnrollStatus.NotEnrolled;
         using var cert = keyStore.FindClientCertificate(config);

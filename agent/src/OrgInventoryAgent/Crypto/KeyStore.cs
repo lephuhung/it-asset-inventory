@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Crypto;
 
 namespace OrgInventoryAgent.Crypto;
 
@@ -11,7 +13,7 @@ namespace OrgInventoryAgent.Crypto;
 /// - Linux (dev/test): lưu PEM file trong data dir.
 /// Định danh cert: cấu hình lưu ClientCertThumbprint + CertStoreLocation.
 /// </summary>
-public sealed class KeyStore
+public sealed class KeyStore : IKeyStore
 {
     private readonly ILogger<KeyStore> _logger;
 

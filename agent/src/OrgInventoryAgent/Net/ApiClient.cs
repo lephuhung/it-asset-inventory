@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;

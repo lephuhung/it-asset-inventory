@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using Microsoft.Extensions.Logging;
 
 namespace OrgInventoryAgent.Net;

@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace OrgInventoryAgent;
+namespace OrgInventoryAgent.Core;
 
 /// <summary>
 /// Cấu hình agent — config-driven. Thứ tự ưu tiên:

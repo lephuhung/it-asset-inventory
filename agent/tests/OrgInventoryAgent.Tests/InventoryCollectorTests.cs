@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrgInventoryAgent.Collectors;

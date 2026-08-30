@@ -1,4 +1,4 @@
-namespace OrgInventoryAgent;
+namespace OrgInventoryAgent.Core;
 
 /// <summary>
 /// Đường dẫn dữ liệu agent. Windows: %ProgramData%\OrgInventory.

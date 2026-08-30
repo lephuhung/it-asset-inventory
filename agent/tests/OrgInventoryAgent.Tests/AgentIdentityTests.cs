@@ -1,4 +1,4 @@
-using OrgInventoryAgent;
+using OrgInventoryAgent.Core;
 using Xunit;
 
 namespace OrgInventoryAgent.Tests;

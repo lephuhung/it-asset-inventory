@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using System.Net;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;

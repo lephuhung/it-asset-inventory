@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;

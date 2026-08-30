@@ -121,6 +121,9 @@ public sealed class SecurityPostureV4
     [JsonPropertyName("remote_access")]
     public RemoteAccessStatus RemoteAccess { get; set; } = new();
 
+    [JsonPropertyName("endpoint_protection")]
+    public List<AntivirusInfo>? EndpointProtection { get; set; }
+
     [JsonPropertyName("privilege_control")]
     public PrivilegeControlStatus PrivilegeControl { get; set; } = new();
 }

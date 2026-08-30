@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;

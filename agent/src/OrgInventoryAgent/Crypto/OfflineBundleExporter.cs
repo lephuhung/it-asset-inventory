@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;

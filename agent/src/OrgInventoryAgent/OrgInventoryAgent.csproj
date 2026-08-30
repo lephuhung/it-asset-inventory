@@ -36,6 +36,10 @@
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\OrgInventoryAgent.Core\OrgInventoryAgent.Core.csproj" />
+  </ItemGroup>
+
   <!-- Publish profile cho Windows self-contained single-file (chạy trên Windows khi đóng MSI).
        Hỗ trợ cả 64-bit (win-x64) và 32-bit (win-x86) cho các máy Windows cũ.
        Cấu hình chống Antivirus / Defender False Positive (!ml):

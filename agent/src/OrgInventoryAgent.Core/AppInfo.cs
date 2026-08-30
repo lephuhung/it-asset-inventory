@@ -1,4 +1,4 @@
-namespace OrgInventoryAgent;
+namespace OrgInventoryAgent.Core;
 
 /// <summary>
 /// Thông tin định danh, đơn vị phát triển, mục đích và tính năng của OrgInventory Agent.
