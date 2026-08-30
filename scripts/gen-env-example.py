@@ -31,6 +31,12 @@ COMPOSE_DEFAULTS = {
     "portal_port": 3003,
 }
 
+# Docker template values intentionally differ from the native-app defaults.
+DOCKER_TEMPLATE_OVERRIDES = {
+    "portal_url": "http://localhost:3003",
+    "cors_origins": '["http://localhost:3003","http://10.10.0.241:3003"]',
+}
+
 # Sections trong output (group theo comment trong Settings)
 SECTIONS = [
     ("COMPOSE / NETWORK (chỉ docker-compose.yml đọc)", [
@@ -105,6 +111,7 @@ def main() -> None:
             values[fname] = attr if attr is not None else ""
         else:
             values[fname] = field.default
+    values.update(DOCKER_TEMPLATE_OVERRIDES)
 
     # In theo sections
     printed = set()
