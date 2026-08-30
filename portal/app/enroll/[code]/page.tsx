@@ -147,34 +147,30 @@ export default function EnrollPage() {
             <div className="mt-3">
               {resultOs === "windows" && result.install_command_windows && (
                 <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-3">
-                  <div className="mb-2 flex items-center gap-1.5">
-                    <Terminal className="size-3.5 text-blue-600" />
-                    <p className="text-xs font-semibold text-slate-700">
-                      PowerShell (Run as Administrator):
-                    </p>
-                  </div>
-                  <code className="block break-all rounded-md border border-emerald-200 bg-emerald-50 p-2 font-mono text-[11px] leading-relaxed text-emerald-900">
-                    {result.install_command_windows}
-                  </code>
-                  <div className="mt-2 flex justify-end">
-                    <CopyButton text={result.install_command_windows} label="Copy lệnh Windows" />
+                  <p className="mb-2 text-xs text-slate-700">
+                    Mở <b>PowerShell (Run as Administrator)</b>, nhấn <b>Copy lệnh</b> rồi dán và paste vào cửa sổ PowerShell.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-xs text-slate-600">
+                      <span className="font-semibold">Lệnh cài (1 dòng):</span>{" "}
+                      <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px]">powershell -NoProfile -EncodedCommand …</code>
+                    </span>
+                    <CopyButton text={result.install_command_windows} label="📋 Copy lệnh Windows" />
                   </div>
                 </div>
               )}
 
               {resultOs === "linux" && result.install_command_linux && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-3">
-                  <div className="mb-2 flex items-center gap-1.5">
-                    <Terminal className="size-3.5 text-amber-600" />
-                    <p className="text-xs font-semibold text-slate-700">
-                      Terminal (sudo) — Ubuntu / Debian / RHEL / Rocky:
-                    </p>
-                  </div>
-                  <code className="block break-all rounded-md border border-emerald-200 bg-emerald-50 p-2 font-mono text-[11px] leading-relaxed text-emerald-900">
-                    {result.install_command_linux}
-                  </code>
-                  <div className="mt-2 flex justify-end">
-                    <CopyButton text={result.install_command_linux} label="Copy lệnh Linux" />
+                  <p className="mb-2 text-xs text-slate-700">
+                    Mở <b>terminal</b>, nhấn <b>Copy lệnh</b> rồi dán và chạy.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2">
+                    <span className="text-xs text-slate-600">
+                      <span className="font-semibold">Lệnh cài (1 dòng):</span>{" "}
+                      <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px]">curl -fsSL &lt;portal&gt;/i/&lt;token&gt; | sudo bash</code>
+                    </span>
+                    <CopyButton text={result.install_command_linux} label="📋 Copy lệnh Linux" />
                   </div>
                 </div>
               )}

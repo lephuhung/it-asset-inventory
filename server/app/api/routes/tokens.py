@@ -295,3 +295,84 @@ async def revoke_token(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/{token_id}/reissue", response_model=TokenCreateResponse)
+async def reissue_token(
+    token_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tái sinh install command khi Portal/Agent URL đã thay đổi.
+
+    Lý do: install_command sinh tại thời điểm tạo token, không lưu DB. Nếu admin
+    đổi Portal/Agent URL sau khi token đã phát cho user, script cũ vẫn trỏ
+    về URL cũ → user chạy fail. Endpoint này:
+    1. Tạo token MỚI (giữ nguyên full_name/department/etc) — user copy lệnh mới.
+    2. Mark token cũ là 'superseded' (không revoke — vẫn dùng được nếu user đã nhận).
+    3. Trả về install command dựng lại từ URL cấu hình hiện tại.
+
+    Bảo mật: chỉ admin trong phạm vi org mới tái sinh được.
+    """
+    old = (await db.execute(select(EnrollToken).where(EnrollToken.id == token_id))).scalar_one_or_none()
+    if old is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Token không tồn tại")
+    visible = await visible_org_ids(db, admin)
+    if str(old.org_id) not in visible:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền thao tác token này")
+    if old.status in (TokenStatus.USED.value, TokenStatus.REVOKED.value):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Token đã {old.status} — không tái sinh được. Sinh token mới.",
+        )
+
+    # Tạo token mới với cùng metadata; expires tính lại từ giờ.
+    from datetime import UTC, timedelta
+    agent_cfg = await effective_agent_config(db)
+    portal_url = agent_cfg["portal_url"]
+
+    new_token = generate_enroll_token()
+    new_row = EnrollToken(
+        token_hash=hash_token(new_token),
+        org_id=old.org_id,
+        created_by=admin.id,
+        full_name=old.full_name,
+        department=old.department,
+        position=old.position,
+        email=old.email,
+        phone_encrypted=old.phone_encrypted,
+        note=(old.note or "") + " [reissue]",
+        expires_at=datetime.now(UTC) + timedelta(hours=72),
+        status=TokenStatus.PENDING.value,
+        classification=old.classification,
+        purpose_tags=old.purpose_tags or [],
+    )
+    db.add(new_row)
+
+    # Mark token cũ là 'superseded' (1 token cũ 1 token mới). KHÔNG revoke — nếu user
+    # đã nhận token cũ và cấu hình URL mới chưa được apply, họ vẫn dùng được token cũ
+    # (chỉ fail nếu URL cũ đã chết). Khi token cũ expire unused → tự động cleanup.
+    old.note = (old.note or "") + f" [superseded by {new_row.id}]"
+
+    await db.flush()  # lấy new_row.id
+
+    await append_audit(
+        db, action="token.reissue", actor=str(admin.id), target=str(new_row.id),
+        ip=get_client_ip(request),
+    )
+    await db.commit()
+
+    cmd_win = _install_command(new_token, portal_url, agent_cfg["agent_server_url"])
+    cmd_linux = _install_command_linux(new_token, portal_url, agent_cfg["agent_server_url"])
+    offline_url = f"{portal_url}/download/offline-package.zip"
+    warnings = _validate_install_urls(portal_url, agent_cfg["agent_server_url"])
+    return TokenCreateResponse(
+        token=new_token,
+        install_command=cmd_win,
+        install_command_windows=cmd_win,
+        install_command_linux=cmd_linux,
+        install_offline_url=offline_url,
+        install_url_warnings=warnings,
+        expires_at=new_row.expires_at,
+    )

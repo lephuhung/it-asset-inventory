@@ -129,6 +129,7 @@ export default function TokensPage() {
   const [createdOs, setCreatedOs] = useState<OsId>("windows");
   const [revoking, setRevoking] = useState<TokenListItem | null>(null);
   const [revokeBusy, setRevokeBusy] = useState(false);
+  const [reissuingId, setReissuingId] = useState<string | null>(null);
 
   // Chế độ B — link tự khai báo
   const [links, setLinks] = useState<SelfServiceLink[]>([]);
@@ -341,6 +342,24 @@ export default function TokensPage() {
     }
   };
 
+  const reissue = async (t: TokenListItem) => {
+    setReissuingId(t.id);
+    setFormError(null);
+    try {
+      const res = await api.post<TokenCreateResponse>(`/tokens/${t.id}/reissue`);
+      // Lưu lệnh mới vào sessionStorage để nút Copy hoạt động cho row mới.
+      if (res.install_command) saveCommand(res.expires_at, res.install_command);
+      setCreated(res);
+      setCreatedOs("windows");
+      // Reload để cập nhật trạng thái superseded (note có "[superseded by ...]").
+      await loadTokens(true);
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.detail : "Không tái sinh được token");
+    } finally {
+      setReissuingId(null);
+    }
+  };
+
   const commands = loadCommands();
 
   return (
@@ -466,6 +485,18 @@ export default function TokensPage() {
                             ) : t.status === "pending" ? (
                               <span className="text-[11px] text-slate-300">Lệnh hiện 1 lần lúc sinh</span>
                             ) : null}
+                            {t.status === "pending" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void reissue(t)}
+                                disabled={reissuingId === t.id}
+                                title="Tái sinh install command với URL Portal/Agent hiện tại (token cũ bị superseded)"
+                              >
+                                <RefreshCw className={`size-3 ${reissuingId === t.id ? "animate-spin" : ""}`} />
+                                Tái sinh
+                              </Button>
+                            )}
                             {t.status === "pending" && (
                               <Button
                                 variant="outline"
@@ -735,15 +766,14 @@ export default function TokensPage() {
                       <Badge className="border-blue-200 bg-blue-50 text-blue-700">Online</Badge>
                     </div>
                     <p className="mb-2 text-xs text-slate-500">
-                      Chạy trong <b>PowerShell (Run as Administrator)</b>. Script tải MSI, verify SHA256, cài silent bằng msiexec.
+                      Mở <b>PowerShell (Run as Administrator)</b>, nhấn <b>Copy lệnh</b> rồi dán và paste vào cửa sổ. Script sẽ tự tải MSI, verify SHA256, cài silent bằng msiexec.
                     </p>
-                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
-                      <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
-                        {created.install_command_windows}
-                      </code>
-                    </div>
-                    <div className="mt-2 flex justify-end">
-                      <CopyButton text={created.install_command_windows} label="Copy lệnh" />
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                      <span className="text-xs text-slate-600">
+                        <span className="font-semibold">Lệnh cài (1 dòng):</span>{" "}
+                        <code className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">powershell -NoProfile -EncodedCommand …</code>
+                      </span>
+                      <CopyButton text={created.install_command_windows} label="📋 Copy lệnh Windows" />
                     </div>
                   </div>
                 )}
@@ -756,15 +786,14 @@ export default function TokensPage() {
                       <Badge className="border-amber-200 bg-amber-50 text-amber-700">Ubuntu / Debian / RHEL / Rocky</Badge>
                     </div>
                     <p className="mb-2 text-xs text-slate-500">
-                      Chạy trong <b>terminal (sudo)</b>. Script tự phát hiện distro (Ubuntu/Debian/RHEL/Rocky) + architecture, tải package phù hợp, verify SHA256, cài và enable systemd service.
+                      Mở <b>terminal</b>, nhấn <b>Copy lệnh</b> rồi dán và chạy. Script tự phát hiện distro (Ubuntu/Debian/RHEL/Rocky) + architecture, tải package phù hợp, verify SHA256, cài và enable systemd service.
                     </p>
-                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
-                      <code className="block break-all font-mono text-[11px] leading-relaxed text-emerald-900">
-                        {created.install_command_linux}
-                      </code>
-                    </div>
-                    <div className="mt-2 flex justify-end">
-                      <CopyButton text={created.install_command_linux} label="Copy lệnh" />
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                      <span className="text-xs text-slate-600">
+                        <span className="font-semibold">Lệnh cài (1 dòng):</span>{" "}
+                        <code className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">curl -fsSL &lt;portal&gt;/i/&lt;token&gt; | sudo bash</code>
+                      </span>
+                      <CopyButton text={created.install_command_linux} label="📋 Copy lệnh Linux" />
                     </div>
                   </div>
                 )}
