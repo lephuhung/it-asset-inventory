@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Monitor, RefreshCw, Search } from "lucide-react";
+import { ChevronRight, ClipboardCheck, Monitor, RefreshCw, Search } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineListItem, MachineStatus, Organization, Tag } from "@/lib/types";
 import { useRealtime } from "@/components/realtime-context";
@@ -60,6 +60,7 @@ export default function MachinesPage() {
   const [orgId, setOrgId] = useState("");
   const [tag, setTag] = useState("");
   const [offset, setOffset] = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const load = useCallback(
     async (silent = false, overrideOffset?: number) => {
@@ -75,6 +76,13 @@ export default function MachinesPage() {
         });
         setMachines(data.items);
         setPage(data);
+        // Ẩn máy "pending" khỏi Assets — máy chờ duyệt chỉ hiện ở trang /approvals.
+        const pending = data.items.filter((m) => m.status === "pending").length;
+        setPendingCount(pending);
+        if (status === "") {
+          // Default: chỉ hiện máy đã duyệt. Khi user chọn filter cụ thể, tôn trọng lựa chọn.
+          setMachines(data.items.filter((m) => m.status !== "pending"));
+        }
         setError(null);
       } catch (e) {
         if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách máy");
@@ -199,6 +207,23 @@ export default function MachinesPage() {
       </Card>
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+
+      {pendingCount > 0 && status === "" && (
+        <Link
+          href="/approvals"
+          className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm transition hover:bg-amber-100"
+        >
+          <span className="flex items-center gap-2 text-amber-800">
+            <ClipboardCheck className="size-4" />
+            <span>
+              Có <b>{pendingCount}</b> máy đang chờ duyệt (đã ẩn khỏi Assets để tránh đếm trùng).
+            </span>
+          </span>
+          <span className="text-xs font-semibold text-amber-700 underline">
+            Đi tới Chờ duyệt →
+          </span>
+        </Link>
+      )}
 
       {loading && (machines?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải danh sách máy…" />

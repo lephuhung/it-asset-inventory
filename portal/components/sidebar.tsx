@@ -186,7 +186,9 @@ interface MachineStats {
 }
 
 const NAV_BADGES: Record<string, (s: MachineStats) => number> = {
-  "/machines": (s) => s.total,
+  // Assets — chỉ đếm máy đã duyệt (online/offline/lost/decommissioned); máy pending
+  // đã có badge riêng ở "Chờ duyệt", tránh đếm trùng.
+  "/machines": (s) => s.total - (s.by_status.pending ?? 0),
   "/approvals": (s) => s.by_status.pending ?? 0,
   "/ghost-machines": (s) => s.by_status.lost ?? 0,
 };
