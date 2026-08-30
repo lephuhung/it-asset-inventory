@@ -80,6 +80,8 @@ User hiện chạy cả 2 service **trực tiếp trên máy** (xem `uvicorn.log
 | D19 | API `--reload-dir` | `/app/app` | Chỉ watch code dir, bỏ qua `.venv`, `.pytest_cache`, `*.log` |
 | D20 | Portal `HOSTNAME` env | `"0.0.0.0"` | `next dev` bind đúng interface trong container |
 | D21 | `agent_dist` mount | `./server/agent_dist:/data/artifacts:ro` | Phục vụ `/download/...` endpoint của FastAPI |
+| D22 | `.env.example` completeness | Bao gồm **TẤT CẢ** settings từ `Settings` class, không chỉ vars có trong `server/.env.example` cũ | Phát hiện khi review: `.env.example` cũ thiếu ~12 vars (`LOST_AFTER_DAYS`, `ONLINE_TTL_SECONDS`, `TRUSTED_PROXY_CIDRS`, `AGENT_MSI_DIR`, `SERVER_*_KEY_PATH`, `REQUIRE_AGENT_MTLS_HEADER`, `VELOCIRAPTOR_DEFAULT_URL`, `LLM_EXTERNAL_ORCHESTRATOR`, `SMTP_*`, `TELEGRAM_*`, `ZALO_OA_TOKEN`); copy thiếu sẽ mất giá trị user đang dùng |
+| D23 | Cách generate `.env.example` | Introspect `Settings` class (pydantic-settings) | Tự động sync với code, không bị trôi khi thêm settings mới |
 
 ---
 
@@ -403,101 +405,29 @@ tsconfig.tsbuildinfo
 
 ### 6.7. `/.env.example` (template — commit vào git)
 
-```bash
-# ════════════════════════════════════════════════════════════════
-# Copy thành .env rồi sửa các CHANGE_ME_*
-# ════════════════════════════════════════════════════════════════
+Template phải bao gồm **TẤT CẢ settings trong `server/app/core/config.py::Settings`** với giá trị mặc định từ code, **không chỉ các biến có trong `server/.env.example` cũ**. Lý do: `server/.env.example` hiện thiếu nhiều biến (`LOST_AFTER_DAYS`, `ONLINE_TTL_SECONDS`, `TRUSTED_PROXY_CIDRS`, `AGENT_MSI_DIR`, `SERVER_PRIVATE_KEY_PATH`, `SERVER_PUBLIC_KEY_PATH`, `REQUIRE_AGENT_MTLS_HEADER`, `LLM_EXTERNAL_ORCHESTRATOR`, `SMTP_*`, `TELEGRAM_*`, `ZALO_OA_TOKEN`, `VELOCIRAPTOR_DEFAULT_URL` default `""`...) — copy `.env.example` cũ sẽ mất các giá trị user đang dùng.
 
-# ─── COMPOSE / NETWORK ────────────────────────────────────────
-POSTGRES_USER=inventory
-POSTGRES_PASSWORD=inventory
-POSTGRES_DB=inventory
-POSTGRES_PORT=5432
+**Cách đảm bảo đầy đủ:** Implementation Task 1 sẽ generate `.env.example` bằng cách introspect class `Settings` (dùng `pydantic-settings` introspection hoặc viết script đơn giản), rồi ghi ra file với:
+- Tên biến UPPER_SNAKE_CASE
+- Giá trị mặc định từ `Field(default=...)` hoặc class attribute
+- Comment ngắn cho từng nhóm
+- `SECRET_KEY` / `DATA_ENCRYPTION_KEY` / `STEP_CA_PROVISIONER_PASSWORD` thay bằng placeholder `CHANGE_ME_*`
 
-REDIS_PORT=6381
-
-API_PORT=8000
-PORTAL_PORT=3003
-
-# ─── SERVER APP (FastAPI) ────────────────────────────────────
-APP_ENV=dev
-DEBUG=true
-HOST=0.0.0.0
-PORT=8000
-
-# DATABASE_URL + REDIS_URL bị compose override (docker DNS)
-DATABASE_URL=postgresql+asyncpg://inventory:inventory@localhost:5432/inventory
-REDIS_URL=redis://localhost:6381/0
-DB_ECHO=false
-# ONLINE_TTL_SECONDS=180
-
-# Agent heartbeat / inventory
-HEARTBEAT_INTERVAL_SECONDS=30
-HEARTBEAT_JITTER_SECONDS=8
-INVENTORY_INTERVAL_HOURS=24
-AGENT_SERVER_URL=https://agent.example.gov.vn
-
-# JWT
-SECRET_KEY=CHANGE_ME_generate_with_secrets_token_urlsafe_64
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-REFRESH_TOKEN_EXPIRE_DAYS=7
-
-# CA
-CA_MODE=local
-STEP_CA_URL=https://ca.internal:8443
-STEP_CA_PROVISIONER=admin
-STEP_CA_PROVISIONER_PASSWORD=CHANGE_ME
-CLIENT_CERT_VALID_DAYS=365
-
-# Encryption
-DATA_ENCRYPTION_KEY=CHANGE_ME_32_byte_hex_key_00000000000000
-
-# Admin seed (chạy 1 lần lúc khởi tạo DB)
-SEED_ADMIN_EMAIL=admin@example.gov.vn
-SEED_ADMIN_PASSWORD=ChangeMe!123
-SEED_ADMIN_FULL_NAME=Quản trị viên hệ thống
-
-# Rate limit
-RATE_LIMIT_ENROLL=30/minute
-RATE_LIMIT_LOGIN=10/minute
-
-# Portal
-PORTAL_URL=http://localhost:3003
-CORS_ORIGINS=["http://localhost:3003", "http://10.10.0.241:3003"]
-
-# ─── VELOCIRAPTOR (DFIR) ─────────────────────────────────────
-VELOCIRAPTOR_ENABLED=false
-VELOCIRAPTOR_DEFAULT_URL=https://velociraptor.example.gov.vn:8889
-VELOCIRAPTOR_DOCKER_CONTAINER=velociraptor
-VELOCIRAPTOR_SYNC_INTERVAL_SECONDS=300
-VELOCIRAPTOR_API_TIMEOUT_SECONDS=30
-VELOCIRAPTOR_DEFAULT_ALLOWLIST=["Generic.Client.Info","Windows.System.Services","Windows.System.Pslist","Windows.Network.Netstat","Windows.Network.NetstatEnriched","Windows.Network.Listeners","Windows.Forensics.Prefetch","Windows.EventLogs.Reboot","Windows.EventLogs.LogFile","Windows.ScheduledTasks.Catalog","Windows.StartupItems.Persist","Windows.Registry.Recursive","Windows.Registry.System","Windows.Registry.User"]
-
-# ─── LLM (DFIR AI Assistant) ────────────────────────────────
-LLM_ENABLED=false
-LLM_DEFAULT_PROVIDER=ollama
-LLM_DEFAULT_BASE_URL=http://127.0.0.1:11434/v1
-LLM_DEFAULT_MODEL=qwen2.5:14b-instruct-q4_K_M
-LLM_API_TIMEOUT_SECONDS=180
-LLM_MAX_CONTEXT_CHARS=200000
-LLM_MAX_TOKENS=4096
-LLM_TEMPERATURE=0.0
-LLM_DAILY_TOKEN_BUDGET=
-LLM_INVESTIGATION_INTERVAL_SECONDS=30
-LLM_COLLECT_POLL_SECONDS=10
-LLM_COLLECT_MAX_WAIT_SECONDS=600
-LLM_DEFAULT_ARTIFACTS=["Windows.System.Pslist","Windows.System.Services","Windows.Network.Netstat","Windows.Network.Listeners","Windows.EventLogs.LogFile","Windows.ScheduledTasks.Catalog","Windows.Persistence.PermanentWMIBackdoor","Windows.Persistence.PermanentRegistry","Windows.Forensics.Prefetch","Windows.Registry.Recursive"]
-```
+Ngoài Settings class, `.env.example` còn thêm các biến **chỉ compose đọc**:
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`
+- `REDIS_PORT`, `API_PORT`, `PORTAL_PORT`
 
 ### 6.8. `/.env` (file thật — không commit)
 
-User tạo bằng `cp .env.example .env` rồi generate secrets:
+User tạo bằng `cp .env.example .env` rồi:
+1. Generate secrets:
+   ```bash
+   python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(64))"
+   python3 -c "import secrets; print('DATA_ENCRYPTION_KEY=' + secrets.token_hex(32))"
+   ```
+2. **Nếu có `server/.env` cũ**, copy các giá trị override đang dùng vào `.env` mới (đặc biệt: `LOST_AFTER_DAYS=15`, `ONLINE_TTL_SECONDS=180`, `AGENT_SERVER_URL=http://10.10.0.241:8000`, `CORS_ORIGINS` mở rộng).
 
-```bash
-python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(64))"
-python3 -c "import secrets; print('DATA_ENCRYPTION_KEY=' + secrets.token_hex(32))"
-```
+Implementation Task 1 sẽ có bước rõ ràng để capture các giá trị này trước khi xoá `server/.env` ở Task 8.
 
 ---
 
