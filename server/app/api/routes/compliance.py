@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.db.models import ComplianceNotice, NoticeStatus, User, UserAcknowledgment
 from app.db.session import get_db
@@ -103,13 +104,13 @@ async def acknowledge(
         UserAcknowledgment(
             user_id=user.id,
             notice_id=notice.id,
-            ip=request.client.host if request.client else None,
+            ip=get_client_ip(request),
             source="portal",
         )
     )
     await append_audit(
         db, action="compliance.acknowledge", actor=str(user.id),
-        target=str(notice.id), ip=request.client.host if request.client else None,
+        target=str(notice.id), ip=get_client_ip(request),
     )
     await db.commit()
     return {"ok": True, "already": False}

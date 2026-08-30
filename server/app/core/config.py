@@ -40,10 +40,15 @@ class Settings(BaseSettings):
     lost_after_days: int = 15
 
     # JWT
-    secret_key: str = Field(default="CHANGE_ME", min_length=16)
+    secret_key: str = Field(default="CHANGE_ME_PLEASE_OVERRIDE_32_CHARS", min_length=16)
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+
+    # Trusted proxy CIDRs — chỉ tin X-Forwarded-For / X-Real-IP từ các IP này.
+    # CSV. Mặc định = các dải private + loopback (an toàn cho dev).
+    # Production: thêm IP của nginx/ALB/CDN trước FastAPI.
+    trusted_proxy_cidrs: str = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
 
     # CA / mTLS
     ca_mode: str = "local"  # stepca | local
@@ -53,7 +58,7 @@ class Settings(BaseSettings):
     client_cert_valid_days: int = 365
 
     # Mã hóa dữ liệu nhạy cảm (AES-256-GCM)
-    data_encryption_key: str = Field(default="CHANGE_ME", min_length=16)
+    data_encryption_key: str = Field(default="CHANGE_ME_32_CHARS_HEX_VALUE", min_length=16)
 
     # Seed admin
     seed_admin_email: str = "admin@example.gov.vn"
@@ -118,6 +123,48 @@ class Settings(BaseSettings):
         "Windows.Registry.User",
     ]
 
+    # ── LLM (DFIR AI Assistant) ──────────────────────────────
+    # Tích hợp Model LLM (Large Language Model) để hỗ trợ phân tích, điều tra
+    # sự cố an ninh mạng qua Velociraptor. Mặc định dùng Ollama local (privacy);
+    # có thể chuyển sang OpenAI/Qwen/LocalAI/vLLM bằng cách đổi base_url.
+    #
+    # - enabled: bật/tắt toàn bộ tính năng LLM-DFIR
+    # - default_provider: gợi ý khi admin chưa cấu hình (vd 'ollama')
+    # - default_base_url: gợi ý URL mặc định
+    # - api_timeout_seconds: timeout mỗi request tới LLM
+    # - max_context_chars: giới hạn dung lượng log đưa vào prompt (tránh OOM LLM)
+    # - daily_token_budget: chặn chi phí cloud (None = unlimited)
+    llm_enabled: bool = False
+    llm_default_provider: str = "ollama"
+    llm_default_base_url: str = "http://127.0.0.1:11434/v1"
+    llm_default_model: str = "qwen2.5:14b-instruct-q4_K_M"
+    llm_api_timeout_seconds: int = 180
+    llm_max_context_chars: int = 200_000
+    llm_max_tokens: int = 4096
+    llm_temperature: float = 0.0
+    llm_daily_token_budget: int | None = None
+    llm_investigation_interval_seconds: int = 30  # background worker poll job
+    # External orchestrator: nếu set, khi investigation collect xong sẽ KHÔNG gọi LLM local,
+    # mà chờ external service (Hermes) push kết quả về.
+    # Giá trị: "" (mặc định, local LLM) | "hermes" (đợi Hermes callback)
+    # API key cần scope `investigation:write` để gọi POST /api/external/llm-dfir/investigations/{id}/result
+    llm_external_orchestrator: str = ""
+    llm_collect_poll_seconds: int = 10  # poll Velociraptor flow mỗi 10s
+    llm_collect_max_wait_seconds: int = 600  # timeout 10 phút cho 1 lần collect
+    llm_default_artifacts: list[str] = [
+        # Read-only forensics artifacts mặc định cho investigation
+        "Windows.System.Pslist",
+        "Windows.System.Services",
+        "Windows.Network.Netstat",
+        "Windows.Network.Listeners",
+        "Windows.EventLogs.LogFile",
+        "Windows.ScheduledTasks.Catalog",
+        "Windows.Persistence.PermanentWMIBackdoor",
+        "Windows.Persistence.PermanentRegistry",
+        "Windows.Forensics.Prefetch",
+        "Windows.Registry.Recursive",
+    ]
+
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)
     smtp_host: str = ""
@@ -127,7 +174,9 @@ class Settings(BaseSettings):
     smtp_from: str = "no-reply@example.gov.vn"
     smtp_use_tls: bool = True
     telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
+    telegram_bot_username: str = ""  # cho deep-link (vd "MyInventoryBot")
+    telegram_chat_id: str = ""  # legacy broadcast, dùng notifications thay thế
+    telegram_webhook_secret: str = ""  # secret để verify webhook từ Telegram
     zalo_oa_token: str = ""
 
     @property

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.db.models import Machine, MachineSpec, User
 from app.db.session import get_db
@@ -262,7 +263,7 @@ async def import_offline(
         action="offline.import_zip" if is_decrypted else "offline.import",
         actor=str(admin.id),
         target=str(machine.id),
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
         machine_id=machine.id,
     )
     await db.commit()

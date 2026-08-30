@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import generate_enroll_token, hash_token
@@ -204,7 +205,7 @@ async def claim(
         action="token.create",
         actor=f"self-service:{code}",
         target=str(row.id),
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     agent_cfg = await effective_agent_config(db)

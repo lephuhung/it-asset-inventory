@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, is_super_admin, require_admin, visible_org_ids
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.db.models import Organization, OrgType, User
 from app.db.session import get_db
@@ -103,7 +104,7 @@ async def create_org(
         action="org.create",
         actor=str(admin.id),
         target=str(org.id),
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     return _to_node(org)

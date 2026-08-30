@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import generate_enroll_token, hash_token
@@ -101,7 +102,7 @@ async def create_tokens_bulk(
         action="token.bulk_create",
         actor=str(admin.id),
         target=f"org:{body.org_id}:{len(tokens_out)}",
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     return BulkTokenResponse(created=len(tokens_out), tokens=tokens_out)
@@ -143,7 +144,7 @@ async def create_token(
         action="token.create",
         actor=str(admin.id),
         target=str(row.id),
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
 
@@ -230,7 +231,7 @@ async def revoke_token(
     row.status = TokenStatus.REVOKED.value
     await append_audit(
         db, action="token.revoke", actor=str(admin.id), target=str(row.id),
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     return {"ok": True}

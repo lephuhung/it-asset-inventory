@@ -9,6 +9,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import hash_token
@@ -173,7 +174,7 @@ async def enroll(
     Enroll xảy ra TRƯỚC khi agent có client cert → dùng token auth (không phải mTLS).
     Sau enroll, heartbeat/inventory mới dùng mTLS (header từ nginx).
     """
-    ip = request.client.host if request.client else None
+    ip = get_client_ip(request)
     fp_dict = body.fingerprint.model_dump(exclude_none=True)
 
     machine, is_new, token_row = await perform_enroll(

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_machine_id
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.db.models import Heartbeat, Machine, MachineStatus
 from app.db.session import get_db
@@ -46,7 +47,7 @@ async def heartbeat(
     hb = Heartbeat(
         machine_id=machine.id,
         ts=now,
-        ip=request.client.host if request.client else body.ip,
+        ip=get_client_ip(request) or body.ip,
         logged_user=body.logged_user,
         uptime_sec=body.uptime_sec,
     )

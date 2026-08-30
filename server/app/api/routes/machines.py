@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin, visible_org_ids
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.db.models import (
@@ -462,7 +463,7 @@ async def set_machine_tags_route(
             action="machine.tag.set",
             actor=str(admin.id),
             target=str(machine.id),
-            ip=request.client.host if request.client else None,
+            ip=get_client_ip(request),
             machine_id=machine.id,
         )
     await db.commit()
@@ -512,7 +513,7 @@ async def set_machine_tags_bulk(
         action="machine.tag.bulk",
         actor=str(admin.id),
         target=f"machines:{len(allowed)}",
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     return {"ok": True, "updated": len(allowed)}
@@ -590,7 +591,7 @@ async def assign_user(
         action="machine.assign_user",
         actor=str(admin.id),
         target=f"{machine.id}|new={user.id}|email={user.email}|created={was_created}"[:255],
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
         machine_id=machine.id,
     )
     await db.commit()
@@ -624,7 +625,7 @@ async def unassign_user(
         action="machine.unassign_user",
         actor=str(admin.id),
         target=f"{machine.id}|old={old_user_id}",
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
         machine_id=machine.id,
     )
     await db.commit()

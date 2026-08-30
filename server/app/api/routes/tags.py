@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_super_admin
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.db.models import Tag, TagKind, User
 from app.db.session import get_db
@@ -87,7 +88,7 @@ async def create_tag(
         action="tag.create",
         actor=str(admin.id),
         target=f"{key}:{body.label.strip()}",
-        ip=request.client.host if request.client else None,
+        ip=get_client_ip(request),
     )
     await db.commit()
     await db.refresh(tag)

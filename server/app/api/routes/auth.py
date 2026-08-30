@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
+from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import (
@@ -51,12 +52,12 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
     user = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
     if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
         await append_audit(db, action="auth.login_failed", actor=str(user.id) if user else None,
-                           ip=request.client.host if request.client else None)
+                           ip=get_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Sai email hoặc mật khẩu")
     if not user.is_active:
         await append_audit(db, action="auth.login_blocked", actor=str(user.id),
-                           ip=request.client.host if request.client else None)
+                           ip=get_client_ip(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Tài khoản đã bị khóa")
 
@@ -68,12 +69,12 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
             decrypt_aes_gcm(user.totp_secret_encrypted), body.totp_code
         ):
             await append_audit(db, action="auth.totp_failed", actor=str(user.id),
-                               ip=request.client.host if request.client else None)
+                               ip=get_client_ip(request))
             await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Mã 2FA không đúng")
 
     await append_audit(db, action="auth.login", actor=str(user.id),
-                       ip=request.client.host if request.client else None)
+                       ip=get_client_ip(request))
     await db.commit()
     return _issue_tokens(user)
 
