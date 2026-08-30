@@ -6,7 +6,6 @@ CHẠY khi: thêm setting mới vào config.py.
 
 Usage:
     python3 scripts/gen-env-example.py > .env.example
-    python3 scripts/gen-env-example.py --with-secrets > .env  # cho dev local
 """
 from __future__ import annotations
 
