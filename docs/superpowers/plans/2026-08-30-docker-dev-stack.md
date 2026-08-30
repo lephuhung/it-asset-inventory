@@ -900,10 +900,13 @@ sleep 3
 
 - [ ] **Step 3: Trigger api reload (sửa 1 dòng)**
 
-Mở `/home/windowsId/server/app/main.py` (file FastAPI entry point), tìm dòng `app = FastAPI(...)` hoặc tương tự, thêm 1 comment ngắn vô hại:
+Mở `/home/windowsId/server/app/main.py`. Dòng 110 có `app = FastAPI(`. Ngay trước nó, thêm comment:
 
 ```python
 # HOT_RELOAD_TEST
+app = FastAPI(
+    title="Asset Inventory API",
+    ...
 ```
 
 Save file.
