@@ -36,6 +36,11 @@ services:
       # Container port 8000 giữ mặc định Velociraptor — KHI ENROLL CLIENT trên Windows,
       # trỏ URL tới https://<host>:8888 (host port), KHÔNG phải 8000 (container port).
       - "8888:8000"
+      # gRPC API cho api_client (Hermes MCP integration — cho phép Hermes ở máy khác query Velo).
+      # Bind trong server.config.yaml: API.bind_address=0.0.0.0 (port 8001 trong container).
+      # Host port 18001 (đối xứng 8889/8888, port 8001 bị hrag-vllm-ocr chiếm).
+      # Auth: mTLS (cert CN=hermes). Nên giới hạn firewall chỉ cho IP Hermes (10.10.0.229).
+      - "18001:8001"
     volumes:
       # Bind mount để data/config persist qua recreate + admin dễ backup.
       # ⚠️ UID 1000 (non-root trong container) cần quyền ghi — chown trước khi chạy lần đầu:
