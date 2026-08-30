@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.db.models import MachineStatus, TokenStatus
 
@@ -254,6 +254,7 @@ class StartupProgram(BaseModel):
 
 
 class SecurityPosture(BaseModel):
+    model_config = ConfigDict(extra="allow")  # allow v4 envelope fields (update, remote_access, etc.)
     antivirus: list[AntivirusInfo] | None = None
     windows_update_status: str | None = None
     bitlocker: str | None = None
@@ -267,6 +268,12 @@ class SecurityPosture(BaseModel):
     rdp_enabled: bool | None = None
     local_accounts: list[LocalAccountInfo] | None = None
     smarts: list[SmartDeviceInfo] | None = None  # SMART cơ bản
+    # v4 envelope fields (additive optional — server fallback khi thiếu)
+    update: dict | None = None
+    remote_access: dict | None = None
+    disk_encryption: dict | None = None
+    endpoint_protection: list[AntivirusInfo] | None = None
+    privilege_control: dict | None = None
 
 
 class InventoryRequest(BaseModel):
@@ -287,6 +294,10 @@ class InventoryRequest(BaseModel):
     installed_software: list[InstalledSoftware] | None = None
     security: SecurityPosture | None = None
     is_vm: bool | None = None
+    # v4 envelope fields (additive — server fallback khi thiếu)
+    inventory_schema_version: int | None = None
+    agent: dict | None = None
+    os: dict | None = None
     # IP public (WAN) — IPv4 hoặc IPv6. Agent phát hiện qua dịch vụ echo IP public
     # (vd: ipify.org, ifconfig.me) và cache 24h. Null nếu agent không phát hiện được
     # (vd: máy chỉ có IPv6 link-local, NAT không echo được, hoặc offline khi collect).
@@ -353,6 +364,8 @@ class MachineListItem(BaseModel):
     assigned_user_id: uuid.UUID | None
     logged_user: str | None = None  # user Windows đang đăng nhập (từ snapshot mới nhất)
     public_ip: str | None = None  # IP public (WAN) mới nhất agent báo cáo
+    platform: str | None = None  # "windows" | "linux" (từ envelope v4)
+    agent_version: str | None = None  # phiên bản agent (từ envelope v4)
     tags: list[TagOut] = []  # toàn bộ tag máy (classification + purpose)
 
 
@@ -434,6 +447,13 @@ class InventoryStatsResponse(BaseModel):
     by_antivirus: list[StatBucket] = []
     by_bitlocker: list[StatBucket] = []
     top_software: list[TopSoftwareItem] = []
+    # v4 cross-platform buckets
+    by_platform: list[StatBucket] = []
+    by_update_status: list[StatBucket] = []
+    by_disk_encryption: list[StatBucket] = []
+    by_endpoint_protection: list[StatBucket] = []
+    by_ssh_enabled: list[StatBucket] = []
+    by_remote_desktop: list[StatBucket] = []
     generated_at: datetime
 
 

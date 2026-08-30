@@ -16,7 +16,13 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import MachineCurrent, MachineSoftware
-from app.services.inventory_normalize import derive_os_fields, derive_security_fields, software_rows
+from app.services.inventory_normalize import (
+    derive_os_fields,
+    derive_platform_fields,
+    derive_security_fields,
+    derive_v4_security_fields,
+    software_rows,
+)
 
 
 async def upsert_current_and_software(
@@ -43,10 +49,16 @@ async def upsert_current_and_software(
     public_ip: str | None = None,
     collected_at: datetime | None = None,
     config_hash: str | None = None,
+    # v4 envelope (additive optional)
+    agent_meta: dict | None = None,
+    os_meta: dict | None = None,
+    inventory_schema_version: int | None = None,
 ) -> tuple[str | None, str | None, str]:
     """Upsert `machine_current` + replace `machine_software`. Trả (os_product, os_release, os_family)."""
     product, release, family = derive_os_fields(os_name, os_version, os_build)
     sec = derive_security_fields(security)
+    v4 = derive_v4_security_fields(security)
+    platform, agent_version = derive_platform_fields(agent_meta, os_meta)
     ts = collected_at or datetime.now(UTC)
 
     current = await db.get(MachineCurrent, machine_id)
@@ -85,6 +97,17 @@ async def upsert_current_and_software(
     current.secure_boot_enabled = sec["secure_boot_enabled"]
     current.rdp_enabled = sec["rdp_enabled"]
     current.usb_storage_blocked = sec["usb_storage_blocked"]
+    # v4 cross-platform columns
+    current.platform = platform
+    current.agent_version = agent_version
+    current.update_status = v4["update_status"]
+    current.update_enabled = v4["update_enabled"]
+    current.updates_pending = v4["updates_pending"]
+    current.endpoint_protection_enabled = v4["endpoint_protection_enabled"]
+    current.disk_encryption_enabled = v4["disk_encryption_enabled"]
+    current.disk_encryption_technology = v4["disk_encryption_technology"]
+    current.ssh_enabled = v4["ssh_enabled"]
+    current.remote_desktop_enabled = v4["remote_desktop_enabled"]
 
     # Replace toàn bộ app của máy (trong cùng transaction)
     await db.execute(sa_delete(MachineSoftware).where(MachineSoftware.machine_id == machine_id))

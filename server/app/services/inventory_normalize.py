@@ -143,3 +143,81 @@ def software_rows(installed_software: list | None) -> list[dict]:
             }
         )
     return rows
+
+
+def derive_platform_fields(agent_meta: dict | None, os_meta: dict | None) -> tuple[str | None, str | None]:
+    """Trả về (platform, agent_version) từ envelope v4. Fallback qua os_meta."""
+    platform = None
+    agent_version = None
+    if isinstance(agent_meta, dict):
+        platform = agent_meta.get("platform")
+        agent_version = agent_meta.get("version")
+    if not platform and isinstance(os_meta, dict):
+        platform = os_meta.get("platform")
+    return platform, agent_version
+
+
+def derive_v4_security_fields(security) -> dict:
+    """Trả về dict cột trung lập từ schema v4 (security.update, .remote_access,
+    .disk_encryption, .endpoint_protection, .privilege_control). Fallback từ
+    schema phẳng cũ khi thiếu v4 object."""
+    sec_dict = security.model_dump() if hasattr(security, "model_dump") else (security or {})
+    if not isinstance(sec_dict, dict):
+        sec_dict = {}
+
+    update = sec_dict.get("update") or {}
+    if not isinstance(update, dict):
+        update = {}
+    remote = sec_dict.get("remote_access") or {}
+    if not isinstance(remote, dict):
+        remote = {}
+    enc = sec_dict.get("disk_encryption") or {}
+    if not isinstance(enc, dict):
+        enc = {}
+    ep = sec_dict.get("endpoint_protection")
+    priv = sec_dict.get("privilege_control") or {}
+    if not isinstance(priv, dict):
+        priv = {}
+
+    # update.status: fallback từ windows_update_status legacy
+    update_status = update.get("status")
+    if not update_status:
+        legacy = sec_dict.get("windows_update_status")
+        if legacy:
+            lu = legacy.strip().lower()
+            if lu in ("up-to-date", "up to date", "uptodate"):
+                update_status = "up-to-date"
+            elif lu in ("outdated",):
+                update_status = "outdated"
+            else:
+                update_status = "unknown"
+
+    # remote_desktop: fallback rdp_enabled
+    remote_desktop = remote.get("remote_desktop_enabled")
+    if remote_desktop is None:
+        remote_desktop = sec_dict.get("rdp_enabled")
+
+    # disk_encryption: fallback bitlocker
+    enc_enabled = enc.get("enabled")
+    enc_tech = enc.get("technology")
+    if enc_enabled is None and sec_dict.get("bitlocker") is not None:
+        enc_enabled = sec_dict.get("bitlocker") == "on"
+        enc_tech = "bitlocker"
+
+    # endpoint_protection: fallback antivirus list
+    if isinstance(ep, list):
+        ep_enabled = bool(ep)
+    else:
+        legacy_av = sec_dict.get("antivirus")
+        ep_enabled = bool(legacy_av) if isinstance(legacy_av, list) else None
+
+    return {
+        "update_status": update_status,
+        "update_enabled": update.get("enabled"),
+        "updates_pending": update.get("pending_count"),
+        "endpoint_protection_enabled": ep_enabled,
+        "disk_encryption_enabled": enc_enabled,
+        "disk_encryption_technology": enc_tech,
+        "ssh_enabled": remote.get("ssh_enabled"),
+        "remote_desktop_enabled": remote_desktop,
+    }

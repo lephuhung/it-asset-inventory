@@ -67,6 +67,7 @@ async def list_machines(
     status_filter: str | None = None,
     q: str | None = None,
     tag: str | None = None,
+    platform: str | None = Query(default=None, regex="^(windows|linux)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -87,6 +88,11 @@ async def list_machines(
         query = query.join(
             MachineTag, MachineTag.machine_id == Machine.id
         ).join(Tag, Tag.id == MachineTag.tag_id).where(Tag.key == tag)
+    if platform:
+        # Filter theo platform từ machine_current (snapshot mới nhất)
+        query = query.join(
+            MachineCurrent, MachineCurrent.machine_id == Machine.id
+        ).where(MachineCurrent.platform == platform)
 
     # Tổng số record trước khi áp limit/offset (cho frontend tính tổng số trang)
     from sqlalchemy import func as sa_func
@@ -107,12 +113,17 @@ async def list_machines(
     if ids:
         latest_rows = (
             await db.execute(
-                select(MachineCurrent.machine_id, MachineCurrent.logged_user).where(
-                    MachineCurrent.machine_id.in_(ids)
-                )
+                select(
+                    MachineCurrent.machine_id,
+                    MachineCurrent.logged_user,
+                    MachineCurrent.platform,
+                    MachineCurrent.agent_version,
+                ).where(MachineCurrent.machine_id.in_(ids))
             )
         ).all()
-        logged = {str(mid): lu for mid, lu in latest_rows}
+        logged = {str(mid): lu for mid, lu, _plat, _ver in latest_rows}
+        platform_map = {str(mid): plat for mid, _lu, plat, _ver in latest_rows}
+        version_map = {str(mid): ver for mid, _lu, _plat, ver in latest_rows}
         tag_rows = (
             await db.execute(
                 select(MachineTag.machine_id, Tag)
@@ -148,6 +159,8 @@ async def list_machines(
                 assigned_user_id=m.assigned_user_id,
                 logged_user=logged.get(str(m.id)),
                 public_ip=m.public_ip,
+                platform=platform_map.get(str(m.id)),
+                agent_version=version_map.get(str(m.id)),
                 tags=tags_by_machine.get(m.id, []),
             )
             for m in rows

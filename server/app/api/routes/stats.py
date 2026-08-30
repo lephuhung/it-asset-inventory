@@ -183,6 +183,13 @@ async def inventory_stats(
         by_antivirus=await bucket(mc.antivirus_enabled),
         by_bitlocker=await bucket(mc.bitlocker),
         top_software=top_software,
+        # v4 cross-platform buckets
+        by_platform=await bucket(mc.platform),
+        by_update_status=await bucket(mc.update_status),
+        by_disk_encryption=await bucket(mc.disk_encryption_enabled),
+        by_endpoint_protection=await bucket(mc.endpoint_protection_enabled),
+        by_ssh_enabled=await bucket(mc.ssh_enabled),
+        by_remote_desktop=await bucket(mc.remote_desktop_enabled),
         generated_at=datetime.now(UTC),
     )
 

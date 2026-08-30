@@ -98,6 +98,10 @@ async def submit_inventory(
         security=body.security.model_dump() if body.security else None,
         public_ip=body.public_ip,
         config_hash=new_hash,
+        # v4 envelope (additive optional)
+        agent=body.agent,
+        os_metadata=body.os,
+        inventory_schema_version=body.inventory_schema_version,
     )
     if body.is_vm is not None:
         machine.is_vm = body.is_vm
@@ -131,6 +135,9 @@ async def submit_inventory(
         ),
         public_ip=body.public_ip,
         config_hash=new_hash,
+        agent_meta=body.agent,
+        os_meta=body.os,
+        inventory_schema_version=body.inventory_schema_version,
     )
     await db.commit()
     return InventoryResponse(ok=True, config_changed=True)
