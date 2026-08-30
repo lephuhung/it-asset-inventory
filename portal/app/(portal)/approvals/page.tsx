@@ -51,9 +51,17 @@ export default function ApprovalsPage() {
     setBusyId(id);
     try {
       await api.post(`/machines/${id}/${approve ? "approve" : "reject"}`, {});
+      // Thành công: refresh list — máy đã duyệt sẽ biến mất khỏi /approvals.
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Thao tác thất bại");
+      // Approve thất bại có thể vì:
+      //  - Máy đã được duyệt bởi admin khác (status=online → 400)
+      //  - Agent vừa re-enroll với fingerprint match → tự động online
+      //  - Token đã bị revoke, máy bị decommission
+      // Trong mọi trường hợp, refresh list để ẩn máy không còn pending.
+      const msg = e instanceof Error ? e.message : "Thao tác thất bại";
+      setError(`${msg} (đã tải lại danh sách)`);
+      await load();
     } finally {
       setBusyId(null);
     }

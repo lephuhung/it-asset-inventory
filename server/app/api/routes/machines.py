@@ -64,7 +64,7 @@ async def list_machines(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     org_id: uuid.UUID | None = None,
-    status_filter: str | None = None,
+    status: str | None = Query(default=None, alias="status"),
     q: str | None = None,
     tag: str | None = None,
     platform: str | None = Query(default=None, regex="^(windows|linux)$"),
@@ -78,8 +78,8 @@ async def list_machines(
     query = select(Machine).where(Machine.org_id.in_(visible))
     if org_id:
         query = query.where(Machine.org_id == org_id)
-    if status_filter:
-        query = query.where(Machine.status == status_filter)
+    if status:
+        query = query.where(Machine.status == status)
     if q:
         like = f"%{q}%"
         query = query.where(Machine.hostname.ilike(like) | Machine.machine_uuid.ilike(like))
