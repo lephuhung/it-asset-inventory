@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Brain, Settings, ListTree } from "lucide-react";
+import { Brain, Settings } from "lucide-react";
 import { ReactNode } from "react";
 
 /** Layout cho khu vực LLM-DFIR — header + subnav chia 2 trang.
@@ -12,7 +12,6 @@ export default function LlmDfirLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const tabs = [
     { href: "/admin/llm-dfir/settings", label: "Cấu hình LLM", icon: Settings },
-    { href: "/admin/llm-dfir/investigations", label: "Cuộc điều tra", icon: ListTree },
   ];
 
   return (
