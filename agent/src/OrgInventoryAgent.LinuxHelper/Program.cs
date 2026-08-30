@@ -2,6 +2,8 @@ using System.Text.Json;
 using OrgInventoryAgent.LinuxHelper;
 using OrgInventoryAgent.LinuxHelper.Services;
 
+var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
 string? input;
 try
 {
@@ -17,7 +19,7 @@ catch (Exception ex)
 if (string.IsNullOrWhiteSpace(input) || input.Length > 1_000_000) return 2;
 
 HelperRequest? req;
-try { req = JsonSerializer.Deserialize<HelperRequest>(input); }
+try { req = JsonSerializer.Deserialize<HelperRequest>(input, jsonOptions); }
 catch { return 3; }
 
 if (req is null || string.IsNullOrWhiteSpace(req.Operation)) return 4;
@@ -32,5 +34,5 @@ object? data = req.Operation switch
 };
 
 var resp = new HelperResponse { Ok = data is not null, Data = data };
-Console.WriteLine(JsonSerializer.Serialize(resp));
+Console.WriteLine(JsonSerializer.Serialize(resp, jsonOptions));
 return 0;

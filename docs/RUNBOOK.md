@@ -264,6 +264,28 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
 
 ## 10. Cài đặt và vận hành agent Linux
 
+### Quick-start (khuyến nghị)
+
+```bash
+# 1. Cài package
+sudo dpkg -i dist/orginventory-agent_1.1.0_amd64.deb
+# hoặc: sudo dnf install dist/orginventory-agent-1.1.0-1.x86_64.rpm
+
+# 2. Chạy postinstall để verify + enable + start service
+sudo ORGINV_TOKEN="t_Ab3xK9mQ2vR8nL4p" \
+     ORGINV_HOST="https://agent.example.gov.vn" \
+     bash installer/linux/postinstall-enable.sh
+```
+
+Script `postinstall-enable.sh` thực hiện 5 bước:
+1. Verify helper socket `/run/orginventory/helper.sock` (active, owner=root:orginventory, mode 660).
+2. Self-test helper bằng `{"operation":"dmi","args":{"field":"bios_version"}}` — phải trả `{"ok":true,"data":"..."}`.
+3. Ghi `/etc/orginventory/config.json` (mode 0640, group `orginventory`) với token + endpoint.
+4. `systemctl enable --now orginventory-agent.service` + reload daemon.
+5. In trạng thái + hướng dẫn tiếp theo.
+
+Nếu KHÔNG truyền `ORGINV_TOKEN` / `ORGINV_HOST`, script ghi config mẫu với token rỗng — admin sửa file sau rồi `sudo systemctl restart orginventory-agent`.
+
 ### Cài đặt từ package (.deb / .rpm)
 
 ```bash
@@ -274,17 +296,31 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ./orginventory-agent_1.1.
 sudo dnf install -y ./orginventory-agent-1.1.0-1.x86_64.rpm
 ```
 
-Package tạo user `orginventory`, directory `/var/lib/orginventory`, `/var/log/orginventory`, `/etc/orginventory`, `/run/orginventory`. Helper socket listening tại `/run/orginventory/helper.sock` (group `orginventory`).
+Package tự động:
+- Tạo system user + group `orginventory` (UID/GID từ sysusers.d range 100-999).
+- Tạo directories: `/var/lib/orginventory`, `/var/log/orginventory`, `/etc/orginventory`, `/run/orginventory` (mode 0750).
+- Copy binary `/opt/orginventory/OrgInventoryAgent` + helper vào `/opt/orginventory/`.
+- Cài 3 systemd unit: `orginventory-agent.service`, `orginventory-helper.socket`, `orginventory-helper.service`.
+- Enable helper socket (KHÔNG enable agent service — cần enroll trước).
 
-### One-liner online install
+### One-liner online install (online server)
 
 ```bash
 curl -fsSL https://agent.example.gov.vn/i/t_Ab3xK9mQ2vR8nL4p | sudo bash
 ```
 
-Verify SHA256 từ `/download/linux/{token}/pkg.sha256` trước khi cài. Cấu hình enroll ghi vào `/etc/orginventory/config.json` (mode 0640, group `orginventory`).
+Server trả về shell script tự động: phát hiện distro → tải `.deb`/`.rpm` từ `/download/linux/{token}/` → verify SHA256 → cài package → ghi config + enroll token → `systemctl enable --now orginventory-agent.service`.
 
-### Enroll thủ công
+### One-liner offline (USB bundle cho máy cách ly)
+
+```bash
+# Sau khi copy gói offline vào USB
+sudo bash installer/linux/install-offline.sh /media/usb
+```
+
+Script tự detect package trên USB → verify SHA256 (nếu có `.sha256` kèm theo) → cài package.
+
+### Enroll thủ công (không qua postinstall script)
 
 ```bash
 sudo /opt/orginventory/OrgInventoryAgent \
@@ -293,32 +329,61 @@ sudo /opt/orginventory/OrgInventoryAgent \
   --endpoint https://agent.example.gov.vn \
   --enroll-token t_xxx
 sudo systemctl enable --now orginventory-agent.service
-sudo systemctl status orginventory-agent.service
 ```
 
 ### Kiểm tra helper
 
 ```bash
+# Trạng thái socket
 ls -la /run/orginventory/helper.sock
 systemctl status orginventory-helper.socket
+
+# Self-test (chạy trực tiếp, bypass systemd socket)
 echo '{"operation":"dmi","args":{"field":"bios_version"}}' | sudo /opt/orginventory/orginventory-helper
+# Kỳ vọng: {"ok":true,"data":"<bios_version>","error":null}
+
+# Test qua systemd socket
+echo '{"operation":"dmi","args":{"field":"bios_version"}}' | sudo socat - UNIX-CONNECT:/run/orginventory/helper.sock
+
+# Các operation allowlist: smartctl | dmi | luks
+echo '{"operation":"smartctl","args":{"device":"/dev/sda"}}' | sudo /opt/orginventory/orginventory-helper
+echo '{"operation":"luks","args":{"device":"/dev/sda1"}}' | sudo /opt/orginventory/orginventory-helper
 ```
 
 ### Pilot checklist
 
 - [ ] 5+ máy Linux cài thành công qua .deb + .rpm
+- [ ] `postinstall-enable.sh` chạy thành công, tất cả 5 bước PASS
 - [ ] Service `orginventory-agent` chạy bằng user `orginventory` (không root)
 - [ ] Helper socket tồn tại, group `orginventory` đọc được
+- [ ] Helper self-test trả `ok:true` với dữ liệu thật
 - [ ] Inventory gửi về server (kiểm tra `/var/log/orginventory/agent.log`)
-- [ ] Portal hiển thị `platform=linux`, badge Linux, SecuritySection thích ứng
-- [ ] SSH/LUKS/Update status hiển thị đúng
+- [ ] Portal hiển thị `platform=linux`, badge Linux, SecuritySection thích ứng (Update/SSH/LUKS)
 - [ ] Bundle offline Linux → import → server (qua `/api/offline/import`)
 
 ### Build package từ source
 
 ```bash
 cd agent
+# Publish self-contained binaries cho cả x64 + arm64
+bash installer/linux/build-linux.sh
+
+# Đóng gói .deb (Ubuntu/Debian — cần dpkg-deb)
 bash installer/linux/build-deb.sh linux-x64
-# hoặc
+ls dist/*.deb
+
+# Đóng gói .rpm (RHEL/Rocky — cần rpmbuild, chạy trên RHEL)
 bash installer/linux/build-rpm.sh linux-x64
+ls dist/rpm/RPMS/x86_64/*.rpm
 ```
+
+### Troubleshooting
+
+| Lỗi | Nguyên nhân | Cách xử lý |
+|---|---|---|
+| `Service start fail` | Sai token / endpoint trong config.json | Sửa `/etc/orginventory/config.json`, `systemctl restart orginventory-agent` |
+| `Helper socket không tồn tại` | `orginventory-helper.socket` chưa start | `systemctl enable --now orginventory-helper.socket` |
+| `Helper ok:false` | Operation không có trong allowlist hoặc device path không match | Chỉ dùng `/dev/sd*`, `/dev/nvme*`, `/dev/vd*`; chỉ operation `smartctl`/`dmi`/`luks` |
+| `dhelper: end of file` | Input rỗng | Request phải có `{"operation":"..."}` |
+| Agent log spam "enroll retry" | Token hết hạn hoặc sai | Sinh token mới từ Portal, cập nhật config, restart |
+

@@ -12,7 +12,7 @@ Căn cứ thiết kế: [`KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md`](KE_HOACH_HE_TH
 |---|---|---|---|
 | `server/` | API Server + nginx + step-ca | FastAPI (Python 3.12), PostgreSQL 16, Redis 7 | ✅ Hoàn chỉnh — 68/68 test |
 | `portal/` | Portal quản trị | Next.js 16 (App Router, TypeScript, Tailwind), BFF proxy | ✅ Hoàn chỉnh — build xanh |
-| `agent/` | Agent Windows | C# .NET 8 Windows Service | ✅ Hoàn chỉnh — build 0 lỗi, e2e với schema server thật |
+| `agent/` | Agent Windows + Linux | C# .NET 8 Windows Service / Linux systemd | ✅ Hoàn chỉnh — build 0 lỗi, e2e với schema server thật; .deb/.rpm packaging cho Ubuntu/RHEL |
 | `deploy/` | Helper dev (cert, step-ca, env, velociraptor) | — | ✅ |
 | `docs/` | API contract, runbook | — | ✅ |
 
@@ -62,6 +62,16 @@ git push -u origin main
 5. Debug không cần MSI: `OrgInventoryAgent.exe --data-dir C:\temp\at --endpoint https://... --enroll-token ... --once`
 6. Log: `%ProgramData%\OrgInventory\logs\agent.log` · config: `%ProgramData%\OrgInventory\config.json`
 7. Mỗi commit agent → push → job CI "Agent C# (dotnet build)" chạy trên cả Ubuntu lẫn Windows tự xác nhận build xanh.
+
+**Phát triển agent trên Linux (Ubuntu/Debian + RHEL/Rocky):**
+
+1. Clone repo trên máy Linux: `git clone <repo> && cd agent`
+2. Mở `OrgInventoryAgent.sln` (cần .NET 8 SDK) hoặc `dotnet build -c Release`
+3. Build package: `bash installer/linux/build-deb.sh linux-x64` (cần `dpkg-deb`) hoặc `bash installer/linux/build-rpm.sh linux-x64` (cần `rpmbuild`)
+4. Cài thử: `sudo dpkg -i dist/orginventory-agent_1.1.0_amd64.deb` rồi `sudo bash installer/linux/postinstall-enable.sh` (tự verify helper + enable service)
+5. Debug không cần package: `dotnet run --project linux/src/OrgInventoryAgent.Linux -- --data-dir /tmp/at --print-inventory` (xem v4 envelope JSON)
+6. Log: `/var/log/orginventory/agent.log` · config: `/etc/orginventory/config.json` (mode 0640, group `orginventory`)
+7. Mỗi commit agent → push → job CI build cả Windows lẫn Linux tự xác nhận build xanh.
 
 ## Test
 

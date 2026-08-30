@@ -160,3 +160,49 @@ Agent hoàn toàn không dán cứng IP/domain hay tần suất heartbeat trong 
 - **Token 1 lần**: Xóa khỏi config ngay sau enroll thành công.
 - **Gzip & Jitter**: Gzip khi payload > 8KB, User-Agent rõ ràng `OrgInventoryAgent/1.0.0`, heartbeat jitter ±25% chống pattern C2.
 
+
+## Cài đặt Linux (.deb / .rpm)
+
+Xem chi tiết tại [`installer/linux/`](installer/linux/). Quick-start:
+
+```bash
+# 1. Cài package
+sudo dpkg -i dist/orginventory-agent_1.1.0_amd64.deb
+# hoặc: sudo dnf install dist/orginventory-agent-1.1.0-1.x86_64.rpm
+
+# 2. Cấu hình token + endpoint, rồi enable service
+sudo ORGINV_TOKEN="t_Ab3xK9mQ2vR8nL4p" \
+     ORGINV_HOST="https://agent.example.gov.vn" \
+     bash installer/linux/postinstall-enable.sh
+
+# 3. Verify
+systemctl status orginventory-agent.service
+tail -f /var/log/orginventory/agent.log
+```
+
+Service chạy bằng user `orginventory` (không root), dữ liệu tại `/var/lib/orginventory`, log tại `/var/log/orginventory`, helper socket tại `/run/orginventory/helper.sock`.
+
+### One-liner online
+
+```bash
+curl -fsSL https://agent.example.gov.vn/i/t_Ab3xK9mQ2vR8nL4p | sudo bash
+```
+
+### One-liner offline (USB)
+
+```bash
+sudo bash install-offline.sh /media/usb
+```
+
+### Build từ source
+
+```bash
+# Build self-contained binaries cho cả x64 + arm64
+bash installer/linux/build-linux.sh
+
+# Đóng gói .deb (Ubuntu/Debian)
+bash installer/linux/build-deb.sh linux-x64
+
+# Đóng gói .rpm (RHEL/Rocky/Alma)
+bash installer/linux/build-rpm.sh linux-x64
+```
