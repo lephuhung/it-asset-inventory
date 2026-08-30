@@ -317,6 +317,18 @@ class MachineCurrent(Base):
     rdp_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     usb_storage_blocked: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
+    # ── v4 cross-platform columns (added in commit 784b6c4 migration) ──
+    platform: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    agent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    update_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    update_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    updates_pending: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    endpoint_protection_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    disk_encryption_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    disk_encryption_technology: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ssh_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    remote_desktop_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     machine: Mapped[Machine] = relationship(back_populates="current")
 
 
