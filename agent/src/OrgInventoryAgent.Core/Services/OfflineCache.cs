@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace OrgInventoryAgent.Services;
+namespace OrgInventoryAgent.Core.Services;
 
 /// <summary>
 /// Offline cache — SQLite tại %ProgramData%\OrgInventory\cache.db.

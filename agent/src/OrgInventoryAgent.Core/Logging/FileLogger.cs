@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 
-namespace OrgInventoryAgent.Logging;
+namespace OrgInventoryAgent.Core.Logging;
 
 /// <summary>
 /// File logger đơn giản: log xoay vòng tại %ProgramData%\OrgInventory\logs\agent.log

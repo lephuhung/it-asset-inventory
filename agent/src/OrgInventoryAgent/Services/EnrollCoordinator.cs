@@ -1,4 +1,5 @@
 using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Services;
 using OrgInventoryAgent.Core.Crypto;
 using System.Net;
 using Microsoft.Extensions.Logging;

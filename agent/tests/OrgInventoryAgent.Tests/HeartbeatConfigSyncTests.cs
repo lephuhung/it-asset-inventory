@@ -1,6 +1,7 @@
-using OrgInventoryAgent.Core;
 using System.Text.Json;
 using OrgInventoryAgent;
+using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Services;
 using OrgInventoryAgent.Services;
 using Xunit;
 

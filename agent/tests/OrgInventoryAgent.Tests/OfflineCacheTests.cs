@@ -1,6 +1,7 @@
-using OrgInventoryAgent.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using OrgInventoryAgent;
+using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Services;
 using OrgInventoryAgent.Services;
 using Xunit;
 

@@ -5,9 +5,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OrgInventoryAgent.Collectors;
 using OrgInventoryAgent.Crypto;
-using OrgInventoryAgent.Logging;
+using OrgInventoryAgent.Core.Logging;
 using OrgInventoryAgent.Core.Net;
 using OrgInventoryAgent.Services;
+using OrgInventoryAgent.Core.Services;
 
 namespace OrgInventoryAgent;
 
