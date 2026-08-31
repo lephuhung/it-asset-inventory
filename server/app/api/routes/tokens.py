@@ -68,8 +68,10 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """
     import base64
 
-    # Tải script install-both.ps1 thẳng vào memory (ScriptBlock) — KHÔNG ghi file.
-    # Tránh AV quarantine file .ps1 mới tải về + tránh ExecutionPolicy chặn invoke.
+    # Tải script thẳng vào memory (String), strip block comments <# #>
+    # (parser in-memory không chịu & trong comment), tạo ScriptBlock rồi invoke.
+    # Tránh ExecutionPolicy chặn, AV quarantine file .ps1, và parse error từ
+    # ký tự đặc biệt trong comment.
     script = (
         f'$env:ORGINV_ALLOW_UNSIGNED="1";'
         f'$t="{token}";'
@@ -77,10 +79,12 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'$e="{agent_server_url}";'
         f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1 (in-memory)...";'
         f'try {{'
-        f'  $src = irm "$p/download/install-both.ps1" -UseBasicParsing -ErrorAction Stop;'
-        f'  if ($null -eq $src) {{ Write-Host "ERR: irm tra ve null"; exit 1 }};'
-        f'  Write-Host ("Script da tai (" + $src.Length + " bytes). Chay...");'
-        f'  $sb = [ScriptBlock]::Create($src);'
+        f'  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;'
+        f'  $src = (New-Object Net.WebClient).DownloadString("$p/download/install-both.ps1");'
+        f'  if ($null -eq $src -or $src.Length -lt 100) {{ Write-Host "ERR: Download noi dung qua ngan ($($src.Length) bytes)"; exit 1 }};'
+        f'  Write-Host ("Script da tai (" + $src.Length + " bytes). Strip comments + exec...");'
+        f'  $cleaned = [regex]::Replace($src, "<#.*?#>", "", "Singleline");'
+        f'  $sb = [ScriptBlock]::Create($cleaned);'
         f'  & $sb -Token $t -PortalUrl $p -Endpoint $e'
         f'}} catch {{ Write-Host ("ERR: " + $_.Exception.Message); exit 1 }}'
     )
