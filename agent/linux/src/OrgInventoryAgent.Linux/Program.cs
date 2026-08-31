@@ -3,7 +3,6 @@ using OrgInventoryAgent.Core;
 using OrgInventoryAgent.Core.Collectors;
 using OrgInventoryAgent.Core.Collectors.Schema;
 using OrgInventoryAgent.Core.Crypto;
-using OrgInventoryAgent.Core.Crypto;
 using OrgInventoryAgent.Core.Logging;
 using OrgInventoryAgent.Core.Net;
 using OrgInventoryAgent.Linux.Collectors;
