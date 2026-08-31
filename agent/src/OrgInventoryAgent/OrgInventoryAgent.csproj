@@ -16,9 +16,9 @@
     <AssemblyTitle>OrgInventory Agent</AssemblyTitle>
     <Description>Hệ thống Quản lý Tài sản CNTT &amp; Đánh giá An toàn Thông tin - Phát triển bởi Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh. Thu thập thông số phần cứng, phần mềm, kiểm tra an toàn hệ thống ở chế độ chỉ đọc (Read-only), bảo mật mTLS, zero-GUI.</Description>
     <Copyright>Bản quyền (c) 2025-2026 Phòng An ninh mạng và PCTP sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh</Copyright>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <ApplicationIcon>..\..\Assets\agent.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
 

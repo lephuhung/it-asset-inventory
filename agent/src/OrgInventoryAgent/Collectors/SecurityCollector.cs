@@ -20,12 +20,23 @@ public static class SecurityCollector
     {
         if (!OperatingSystem.IsWindows()) return null;
 
+        var av = GetAntivirus(logger);
+        var (wuStatus, lastUpdateDate) = GetWindowsUpdateInfo(logger);
+        var (bitlockerStatus, encryptedVolumes) = GetBitlockerInfo(logger);
+        var rdp = GetRdpEnabled();
+        var ssh = GetSshEnabled();
+
+        var remoteServices = new List<string>();
+        if (rdp is true) remoteServices.Add("rdp");
+        if (ssh is true) remoteServices.Add("ssh");
+
         return new SecurityPosture
         {
-            Antivirus = GetAntivirus(logger),
-            WindowsUpdateStatus = GetWindowsUpdateStatus(logger),
-            Bitlocker = GetBitlockerStatus(logger),
-            RdpEnabled = GetRdpEnabled(),
+            // Trường phẳng legacy (giữ tương thích ngược)
+            Antivirus = av,
+            WindowsUpdateStatus = wuStatus,
+            Bitlocker = bitlockerStatus,
+            RdpEnabled = rdp,
             FirewallEnabled = GetFirewallEnabled(),
             UacEnabled = GetUacEnabled(),
             SecureBootEnabled = GetSecureBootEnabled(),
@@ -34,6 +45,33 @@ public static class SecurityCollector
             ListeningPorts = PortCollector.Collect(),
             StartupPrograms = StartupCollector.Collect(),
             LocalAccounts = GetLocalAccounts(),
+
+            // Schema v4 objects
+            EndpointProtection = av,
+            Update = new UpdateStatus
+            {
+                Status = wuStatus ?? "unknown",
+                Enabled = !string.Equals(wuStatus, "disabled", StringComparison.OrdinalIgnoreCase),
+                LastUpdatedAt = lastUpdateDate?.ToString("o"),
+                RebootRequired = GetRebootRequired(),
+            },
+            DiskEncryption = new DiskEncryptionStatus
+            {
+                Enabled = string.Equals(bitlockerStatus, "on", StringComparison.OrdinalIgnoreCase),
+                Technology = "bitlocker",
+                EncryptedVolumes = encryptedVolumes,
+            },
+            RemoteAccess = new RemoteAccessStatus
+            {
+                RemoteDesktopEnabled = rdp,
+                SshEnabled = ssh,
+                Services = remoteServices.Count > 0 ? remoteServices : null,
+            },
+            PrivilegeControl = new PrivilegeControlStatus
+            {
+                SudoInstalled = GetSudoInstalled(),
+                RootAccountLocked = null,
+            },
         };
     }
 
@@ -72,7 +110,9 @@ public static class SecurityCollector
         }
     }
 
-    public static string? GetWindowsUpdateStatus(ILogger logger)
+    public static string? GetWindowsUpdateStatus(ILogger logger) => GetWindowsUpdateInfo(logger).Status;
+
+    public static (string Status, DateTime? LatestDate) GetWindowsUpdateInfo(ILogger logger)
     {
         try
         {
@@ -104,7 +144,8 @@ public static class SecurityCollector
             if (latest.HasValue)
             {
                 var days = (DateTime.UtcNow - latest.Value.ToUniversalTime()).TotalDays;
-                return days <= 45 ? "up-to-date" : "outdated";
+                var status = days <= 45 ? "up-to-date" : "outdated";
+                return (status, latest);
             }
 
             using var key = Registry.LocalMachine.OpenSubKey(
@@ -113,41 +154,100 @@ public static class SecurityCollector
             if (!string.IsNullOrWhiteSpace(lastSuccess)
                 && DateTime.TryParse(lastSuccess, null, System.Globalization.DateTimeStyles.AssumeLocal, out var dtReg))
             {
-                return (DateTime.UtcNow - dtReg.ToUniversalTime()).TotalDays <= 45
-                    ? "up-to-date"
-                    : "outdated";
+                var days = (DateTime.UtcNow - dtReg.ToUniversalTime()).TotalDays;
+                var status = days <= 45 ? "up-to-date" : "outdated";
+                return (status, dtReg);
             }
         }
         catch (Exception ex)
         {
             logger.LogDebug("Không đọc được Windows Update: {Msg}", ex.Message);
         }
-        return "unknown";
+        return ("unknown", null);
     }
 
-    public static string? GetBitlockerStatus(ILogger logger)
+    public static string? GetBitlockerStatus(ILogger logger) => GetBitlockerInfo(logger).Status;
+
+    public static (string Status, List<string>? Volumes) GetBitlockerInfo(ILogger logger)
     {
         try
         {
+            var volumes = new List<string>();
+            bool cProtected = false;
             using var searcher = new ManagementObjectSearcher(
                 @"root\CIMV2\Security\MicrosoftVolumeEncryption",
-                "SELECT DriveLetter, ProtectionStatus FROM Win32_EncryptableVolume WHERE DriveLetter = 'C:'");
+                "SELECT DriveLetter, ProtectionStatus FROM Win32_EncryptableVolume");
             foreach (ManagementObject o in searcher.Get())
             {
                 using (o)
                 {
+                    var letter = o["DriveLetter"]?.ToString()?.Trim();
                     var status = o["ProtectionStatus"];
-                    if (status is null) continue;
-                    var code = Convert.ToInt32(status);
-                    return code == 1 ? "on" : "off";
+                    if (status is not null && Convert.ToInt32(status) == 1)
+                    {
+                        if (!string.IsNullOrWhiteSpace(letter))
+                            volumes.Add(letter);
+                        if (string.Equals(letter, "C:", StringComparison.OrdinalIgnoreCase))
+                            cProtected = true;
+                    }
                 }
             }
+            var overallStatus = cProtected || volumes.Count > 0 ? "on" : "off";
+            return (overallStatus, volumes.Count > 0 ? volumes : null);
         }
         catch (Exception ex)
         {
             logger.LogDebug("Không đọc được BitLocker WMI: {Msg}", ex.Message);
+            return ("off", null);
         }
-        return "off";
+    }
+
+    public static bool? GetRebootRequired()
+    {
+        try
+        {
+            using var key1 = Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired");
+            if (key1 is not null) return true;
+
+            using var key2 = Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending");
+            if (key2 is not null) return true;
+
+            return false;
+        }
+        catch { }
+        return null;
+    }
+
+    public static bool? GetSshEnabled()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\sshd");
+            if (key is not null)
+            {
+                var start = key.GetValue("Start");
+                if (start is int s && (s == 2 || s == 3)) // 2 = Auto, 3 = Manual
+                    return true;
+            }
+            return false;
+        }
+        catch { }
+        return null;
+    }
+
+    public static bool? GetSudoInstalled()
+    {
+        try
+        {
+            var sysRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            var sudoPath = Path.Combine(sysRoot, "System32", "sudo.exe");
+            if (File.Exists(sudoPath)) return true;
+            return false;
+        }
+        catch { }
+        return null;
     }
 
     public static bool? GetFirewallEnabled()

@@ -7,7 +7,7 @@ namespace OrgInventoryAgent.Core;
 public static class AppInfo
 {
     public static readonly string Version =
-        typeof(AppInfo).Assembly.GetName().Version?.ToString(3) ?? "1.0.0";
+        typeof(AppInfo).Assembly.GetName().Version?.ToString(3) ?? "1.1.0";
 
     public const string Name = "OrgInventory Agent";
     public const string FullTitle = "Hệ thống Quản lý Tài sản Công nghệ Thông tin & Đánh giá An toàn Thông tin";
