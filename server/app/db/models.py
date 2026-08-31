@@ -641,6 +641,44 @@ class DfirHunt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
 
+
+
+
+class DfirInvestigationRequest(Base):
+    """Yêu cầu điều tra DFIR do admin (non-super) tạo → Super Admin duyệt → chạy Velociraptor collect.
+
+    Flow:
+      1. Admin (org_admin, admin_global) vào trang máy, click "Yêu cầu điều tra"
+         → nhập lý do + chọn artifact cần collect.
+      2. Request được lưu với status='pending'.
+      3. Super Admin xem list ở /dfir/requests → duyệt/reject.
+      4. Khi duyệt (status='approved'), hệ thống tự chạy Velociraptor collect_artifact.
+      5. Khi collect xong (Velociraptor trả flow_id), status → 'completed'.
+
+    Mục đích: ẩn chi tiết kỹ thuật (Velociraptor, client_id, GUI URL) khỏi admin.
+    Admin chỉ biết "có tính năng điều tra từ xa" và "yêu cầu điều tra".
+    """
+
+    __tablename__ = "dfir_investigation_requests"
+    __table_args__ = (Index("ix_dfir_requests_status_created", "status", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), nullable=False, index=True)
+    artifact: Mapped[str] = mapped_column(String(255), nullable=False)  # artifact Velociraptor sẽ chạy
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)  # lý do admin yêu cầu điều tra
+    urgency: Mapped[str] = mapped_column(String(16), default="normal")  # "low" | "normal" | "high" | "critical"
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # "pending" (admin vừa tạo) | "approved" (super admin duyệt) | "rejected" | "running" | "completed" | "failed"
+    requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Velociraptor internals - chỉ super admin thấy
+    velociraptor_flow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    velociraptor_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
 class DfirSchedule(Base):
     """Lịch chạy hunt/collect định kỳ qua Velociraptor (cron-like).
 

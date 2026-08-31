@@ -179,13 +179,30 @@ async def sync_velociraptor_links() -> dict:
             container=container,
             timeout=settings.velociraptor_api_timeout_seconds,
         ) as velo:
-            clients = await velo.get_all_clients()
+            # Dùng docker exec (VQL `SELECT * FROM clients()`) thay vì REST SearchClients
+            # — Velociraptor 0.77 không expose REST API đúng cách cho external apps.
+            # docker exec chạy trực tiếp VQL trong Velociraptor container, bypass
+            # HTTPS/gRPC authentication. Container phải accessible từ API container
+            # (cùng Docker network hoặc shared docker socket).
+            try:
+                clients = await velo._vql_query(
+                    "SELECT client_id, os_info.hostname AS hostname, last_seen_at "
+                    "FROM clients() LIMIT 1000",
+                    container=container,
+                )
+            except (VelociraptorError, Exception) as vql_err:
+                # Fallback về REST API (cho trường hợp docker exec fail)
+                logger.warning("VQL docker exec fail (%s), fallback sang REST API", vql_err)
+                clients = await velo.get_all_clients()
             total_count = len(clients)
 
             # Build map hostname → client_id (chọn client có last_seen mới nhất)
+            # VQL `SELECT ... os_info.hostname AS hostname` trả flat — đọc trực tiếp c["hostname"].
             by_hostname: dict[str, dict] = {}
             for c in clients:
-                hostname = hostname_from_velociraptor_client(c)
+                # Đọc hostname từ flat VQL output (đã alias)
+                raw_host = c.get("hostname") or ""
+                hostname = normalize_hostname(raw_host)
                 if not hostname:
                     continue
                 client_id = c.get("client_id") or ""

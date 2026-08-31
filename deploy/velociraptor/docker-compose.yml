@@ -32,10 +32,13 @@ services:
       - "8889:8889"
       # gRPC cho Velociraptor Client (Windows) enroll + nhận hunt.
       # M� port này nếu muốn client từ máy khác kết nối tới. Bỏ qua nếu chỉ dùng API.
-      # Host port 8888 (dối xứng GUI 8889, dễ nhớ "8xxx = Velociraptor").
-      # Container port 8000 giữ mặc định Velociraptor — KHI ENROLL CLIENT trên Windows,
-      # trỏ URL tới https://<host>:8888 (host port), KHÔNG phải 8000 (container port).
-      - "8888:8000"
+      # Host port 8888 (đối xứng GUI 8889, dễ nhớ "8xxx = Velociraptor").
+      # Map 1-1 vào container port 8888 — Velociraptor frontend cũng listen 8888
+      # (xem VELOCIRAPTOR_FRONTEND_PORT bên dưới). Trước đây map 8888→8000 (container
+      # port mặc định) nhưng URL enroll sinh ra lại đúng port 8000, khiến client
+      # ngoài host không connect được vì host không expose 8000 (chỉ expose qua map).
+      # Fix: cho Velociraptor listen 8888 luôn → URL enroll = https://<host>:8888/.
+      - "8888:8888"
       # gRPC API cho api_client (Hermes MCP integration — cho phép Hermes ở máy khác query Velo).
       # Bind trong server.config.yaml: API.bind_address=0.0.0.0 (port 8001 trong container).
       # Host port 18001 (đối xứng 8889/8888, port 8001 bị hrag-vllm-ocr chiếm).
@@ -50,7 +53,7 @@ services:
     # Đọc credentials mặc định từ .env (cùng thư mục).
     environment:
       VELOCIRAPTOR_HOSTNAME: "${VELOCIRAPTOR_HOSTNAME:-velociraptor}"
-      VELOCIRAPTOR_FRONTEND_PORT: "8000"
+      VELOCIRAPTOR_FRONTEND_PORT: "8888"
       VELOCIRAPTOR_GUI_PORT: "8889"
       VELOCIRAPTOR_DATASTORE_PATH: "/datastore"
       VELOCIRAPTOR_CONFIG_PATH: "/etc/velociraptor/server.config.yaml"

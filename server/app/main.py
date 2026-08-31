@@ -20,6 +20,7 @@ from app.api.routes import (
     auth,
     compliance,
     downloads,
+    dfir_requests,
     drifts,
     enroll,
     heartbeat,
@@ -158,6 +159,7 @@ app.include_router(downloads.router)
 app.include_router(ws.router)
 app.include_router(users.router)
 app.include_router(velociraptor.router)
+app.include_router(dfir_requests.router)
 app.include_router(llm_dfir.router)
 app.include_router(llm_dfir_external.router)
 app.include_router(notifications.router)

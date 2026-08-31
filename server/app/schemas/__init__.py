@@ -329,8 +329,9 @@ class TokenCreateRequest(BaseModel):
 
 class TokenCreateResponse(BaseModel):
     token: str  # chỉ hiện 1 lần
-    install_command: str  # back-compat: Windows PowerShell MSI (default)
-    install_command_windows: str | None = None  # PowerShell -EncodedCommand — MSI silent install
+    install_command: str  # back-compat: Windows PowerShell MSI (default = cài CẢ 2)
+    install_command_windows: str | None = None  # PowerShell -EncodedCommand — CẢ 2 (OrgInventory + Velociraptor)
+    install_command_windows_org_only: str | None = None  # PowerShell -EncodedCommand — CHỈ OrgInventory (legacy)
     install_command_linux: str | None = None  # curl | bash one-liner (.deb / .rpm auto-detect)
     install_offline_url: str | None = None  # gói USB .zip cho máy cách ly (chế độ 2)
     install_url_warnings: list[str] = []  # cảnh báo khi portal/agent URL chưa public (localhost)
@@ -371,6 +372,8 @@ class MachineListItem(BaseModel):
     platform: str | None = None  # "windows" | "linux" (từ envelope v4)
     agent_version: str | None = None  # phiên bản agent (từ envelope v4)
     tags: list[TagOut] = []  # toàn bộ tag máy (classification + purpose)
+    velociraptor_client_id: str | None = None  # Velociraptor client_id (NULL = chưa enroll Velociraptor)
+    velociraptor_last_seen_at: datetime | None = None  # lần cuối Velociraptor gửi data về server
 
 
 class MachineDetail(MachineListItem):
@@ -995,6 +998,47 @@ class DfirHuntOut(BaseModel):
     # Số client tham gia (lấy từ Velociraptor nếu là hunt, =1 nếu là single)
     client_count: int | None = None
 
+
+
+
+class DfirInvestigationRequestCreate(BaseModel):
+    """Form Admin gửi yêu cầu điều tra DFIR."""
+    machine_id: uuid.UUID
+    artifact: str = Field(..., min_length=1, max_length=255)
+    reason: str | None = Field(default=None, max_length=2000)
+    urgency: str = Field(default="normal", pattern="^(low|normal|high|critical)$")
+
+
+class DfirInvestigationRequestReview(BaseModel):
+    """Super Admin duyệt/reject request."""
+    action: str = Field(..., pattern="^(approve|reject|complete|fail)$")
+    notes: str | None = Field(default=None, max_length=2000)
+    velociraptor_flow_id: str | None = None  # khi complete: flow_id từ Velociraptor
+
+
+class DfirInvestigationRequestOut(BaseModel):
+    """Out cho Admin (ẩn chi tiết Velociraptor)."""
+    id: uuid.UUID
+    machine_id: uuid.UUID
+    machine_hostname: str | None = None
+    artifact: str
+    reason: str | None
+    urgency: str
+    status: str
+    requested_by: str | None = None  # user name
+    requested_at: datetime
+    review_notes: str | None = None
+    completed_at: datetime | None = None
+    # CHỈ super_admin mới thấy các field Velociraptor:
+    velociraptor_flow_id: str | None = None
+    velociraptor_url: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+
+
+class DfirInvestigationRequestDetail(DfirInvestigationRequestOut):
+    """Detail cho Super Admin (có thêm thông tin nội bộ)."""
+    pass
 
 class VelociraptorClientFlowOut(BaseModel):
     """Flow (hunt/collection/interrogation) của 1 Velociraptor client."""

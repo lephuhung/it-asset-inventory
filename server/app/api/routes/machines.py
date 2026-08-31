@@ -144,6 +144,24 @@ async def list_machines(
                     is_system=tag_obj.is_system,
                 )
             )
+
+        # Velociraptor link (machine_id -> client_id + last_seen) cho badge DFIR
+        velo_map: dict[str, tuple[str, object | None]] = {}
+        if ids:
+            from app.db.models import VelociraptorLink as _VeloLink
+            velo_rows = (
+                await db.execute(
+                    select(
+                        _VeloLink.machine_id,
+                        _VeloLink.client_id,
+                        _VeloLink.last_seen_at,
+                    ).where(_VeloLink.machine_id.in_(ids))
+                )
+            ).all()
+            velo_map = {
+                str(mid): (cid, ls)
+                for mid, cid, ls in velo_rows
+            }
     return Page[MachineListItem](
         items=[
             MachineListItem(
@@ -162,6 +180,8 @@ async def list_machines(
                 platform=platform_map.get(str(m.id)),
                 agent_version=version_map.get(str(m.id)),
                 tags=tags_by_machine.get(m.id, []),
+                velociraptor_client_id=velo_map.get(str(m.id), (None, None))[0],
+                velociraptor_last_seen_at=velo_map.get(str(m.id), (None, None))[1],
             )
             for m in rows
         ],

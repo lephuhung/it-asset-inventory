@@ -762,19 +762,40 @@ export default function TokensPage() {
                   <div className="rounded-lg border border-blue-200 bg-white p-3">
                     <div className="mb-2 flex items-center gap-2">
                       <Terminal className="size-4 text-blue-600" />
-                      <span className="text-sm font-semibold text-slate-800">PowerShell — Windows (MSI silent install)</span>
+                      <span className="text-sm font-semibold text-slate-800">PowerShell — Windows (cài cả 2 agent)</span>
                       <Badge className="border-blue-200 bg-blue-50 text-blue-700">Online</Badge>
+                      <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">OrgInventory + Velociraptor</Badge>
                     </div>
                     <p className="mb-2 text-xs text-slate-500">
-                      Mở <b>PowerShell (Run as Administrator)</b>, nhấn <b>Copy lệnh</b> rồi dán và paste vào cửa sổ. Script sẽ tự tải MSI, verify SHA256, cài silent bằng msiexec.
+                      Mở <b>PowerShell (Run as Administrator)</b>, nhấn <b>Copy lệnh</b> rồi dán và paste vào cửa sổ.
+                      Script tự tải <code className="rounded bg-slate-100 px-1">install-both.ps1</code> từ Portal,
+                      download cả 2 MSI, verify SHA256 + Authenticode, cài silent bằng msiexec.
                     </p>
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
                       <span className="text-xs text-slate-600">
                         <span className="font-semibold">Lệnh cài (1 dòng):</span>{" "}
                         <code className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">powershell -NoProfile -EncodedCommand …</code>
                       </span>
-                      <CopyButton text={created.install_command_windows} label="📋 Copy lệnh Windows" />
+                      <CopyButton text={created.install_command_windows} label="📋 Copy lệnh Windows (cài cả 2)" />
                     </div>
+                    {created.install_command_windows_org_only && (
+                      <details className="mt-2 rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+                        <summary className="cursor-pointer text-[11px] font-medium text-slate-600 hover:text-slate-900">
+                          ⚙️ Chỉ cài OrgInventory (không Velociraptor)
+                        </summary>
+                        <div className="mt-2">
+                          <p className="mb-1.5 text-[11px] text-slate-500">
+                            Dùng cho máy không cần giám sát DFIR (vd kiosk, máy công cộng).
+                          </p>
+                          <div className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-white px-2 py-1.5">
+                            <code className="truncate font-mono text-[10px] text-slate-700">
+                              powershell -NoProfile -EncodedCommand …
+                            </code>
+                            <CopyButton text={created.install_command_windows_org_only} label="📋 Copy (chỉ OrgInventory)" />
+                          </div>
+                        </div>
+                      </details>
+                    )}
                   </div>
                 )}
 

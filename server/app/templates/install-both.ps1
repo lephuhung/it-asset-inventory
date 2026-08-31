@@ -1,30 +1,31 @@
-<#
+﻿<#
 .SYNOPSIS
   Cai dat CUNG LUC 2 agent bang 1 lenh:
-    1) OrgInventory Agent  - kiem ke tai san CNTT & ATTT (MSI -> Windows Service "OrgInventoryAgent")
-    2) Velociraptor Client - DFIR (MSI -> service "Velociraptor" / "Velociraptor Service")
+    1) OrgInventory Agent  - kiem ke tai san CNTT & ATTT
+    2) Velociraptor Client - DFIR
 
 .DESCRIPTION
   Lenh 1-cham (one-liner) - chay tu server /download/install-both.ps1:
     powershell -NoProfile -ExecutionPolicy Bypass -Command '$env:ORGINVENTORY_TOKEN="t_xxx";$env:ORGINVENTORY_PORTAL_URL="https://portal.gov.vn";irm https://portal.gov.vn/download/install-both.ps1|iex'
-  (nho dung nhay DON cho -Command de PowerShell ngoai khong expand $env truoc)
 
-  Hoac chay truc tiep file nay (param hoac env):
+  Hoac chay truc tiep (param hoac env):
     .\install-both.ps1 -Token t_xxx -PortalUrl https://portal.gov.vn -Endpoint https://agent.gov.vn
 
-  Luong xu ly:
-    [1] Kiem tra quyen Administrator (tu dong nang quyen UAC neu chay tu file)
-    [2] Exclusion Defender (chong false-positive)
-    [3] Tai + verify OrgInventoryAgent.msi (SHA256 + chu ky Authenticode) -> msiexec /qn
-    [4] Tai Velociraptor MSI + client.config.yaml -> msiexec /qn -> ghi de config -> restart service
-    [5] Verify ca 2 service
+  PHILOSOPHY: KHONG GO MSI neu khong can thiet.
 
-.NOTES
-  - Velociraptor MSI mac dinh la bản stock (placeholder config) -> script tu dong tai
-    client.config.yaml tu server va ghi de len cau hinh MSI, giong install-velociraptor.bat.
-    Neu admin da dung artifact Server.Utils.CreateMSI de tao MSI da nhung config san,
-    chi can truyen -VelociraptorMsiUrl vao MSI do (bo qua -VelociraptorConfigUrl).
-  - MSI chua ky chi duoc phep cai khi env ORGINV_ALLOW_UNSIGNED=1 (chi dung TEST).
+    - Neu OrgInventory chua cai → cai MSI moi
+    - Neu OrgInventory da cai → chi UPDATE config.json (token, endpoints) + restart service
+      (Agent doc truc tiep config.json → khong can go MSI de doi token)
+    - Tuong tu cho Velociraptor → chi UPDATE client.config.yaml
+
+    ForceReinstall (optional): go + cai lai MSI (chi dung khi MSI bi loi)
+
+  Luong xu ly:
+    [1] Kiem tra quyen Administrator
+    [2] Detect trang thai 2 agent (Installed? Service Running?)
+    [3] OrgInventory: neu chua cai → cai MSI; neu da cai → update config.json
+    [4] Velociraptor: neu chua cai → cai MSI; neu da cai → update client.config.yaml
+    [5] Verify ca 2 service Running + enrollment status
 #>
 [CmdletBinding()]
 param(
@@ -34,15 +35,19 @@ param(
     [string]$OrgInventoryMsiUrl = $env:ORGINVENTORY_MSI_URL,
     [string]$VelociraptorMsiUrl = $env:VELOCIRAPTOR_MSI_URL,
     [string]$VelociraptorConfigUrl = $env:VELOCIRAPTOR_CONFIG_URL,
+    [string]$VelociraptorConfigOnlyZipUrl = $env:VELOCIRAPTOR_CONFIG_ONLY_ZIP_URL,
     [switch]$SkipOrgInventory,
-    [switch]$SkipVelociraptor
+    [switch]$SkipVelociraptor,
+    [switch]$ForceReinstall  # GO MSI + cai lai (chi dung khi MSI loi)
 )
 
 $ErrorActionPreference = "Stop"
 
 function Write-Step([string]$Msg) { Write-Host $Msg -ForegroundColor Cyan }
 function Write-Ok([string]$Msg)   { Write-Host "      [OK] $Msg" -ForegroundColor Green }
-function Write-Fail([string]$Msg) { Write-Host "      [LOI] $Msg" -ForegroundColor Red }
+function Write-Warn([string]$Msg) { Write-Host "      [WARN] $Msg" -ForegroundColor Yellow }
+function Write-Fail([string]$Msg) { Write-Host "      [FAIL] $Msg" -ForegroundColor Red }
+function Write-Info([string]$Msg) { Write-Host "      [INFO] $Msg" -ForegroundColor Gray }
 
 # ── 0. Kiem tra tham so ────────────────────────────────────────────────
 if ($null -eq $PortalUrl) { $PortalUrl = "" }
@@ -62,10 +67,11 @@ if (-not $Endpoint) { $Endpoint = $PortalUrl }
 if (-not $OrgInventoryMsiUrl)    { $OrgInventoryMsiUrl = "$PortalUrl/download/agent.msi" }
 if (-not $VelociraptorMsiUrl)    { $VelociraptorMsiUrl = "$PortalUrl/download/velociraptor-windows-amd64.msi" }
 if (-not $VelociraptorConfigUrl) { $VelociraptorConfigUrl = "$PortalUrl/download/velociraptor-client.config.yaml" }
+if (-not $VelociraptorConfigOnlyZipUrl) { $VelociraptorConfigOnlyZipUrl = "$PortalUrl/download/velociraptor-config-only.zip" }
 
 Write-Host ""
 Write-Host "==========================================================================" -ForegroundColor Cyan
-Write-Host "  CAI DAT DONG THOI 2 AGENT" -ForegroundColor Cyan
+Write-Host "  CAI DAT DONG THOI 2 AGENT (Smart Update)" -ForegroundColor Cyan
 Write-Host "    1. OrgInventory Agent (kiem ke)  -> service: OrgInventoryAgent" -ForegroundColor White
 Write-Host "    2. Velociraptor Client (DFIR)    -> service: Velociraptor" -ForegroundColor White
 Write-Host "==========================================================================" -ForegroundColor Cyan
@@ -84,12 +90,51 @@ if (-not $isAdmin) {
         Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Token `"$Token`" -PortalUrl `"$PortalUrl`" -Endpoint `"$Endpoint`"" 
         exit 0
     }
-    Write-Host "[LOI] Can chay PowerShell voi quyen Administrator." -ForegroundColor Red
-    Write-Host "      Chuot phai -> Run as administrator, hoac chay lai trong session da nang quyen." -ForegroundColor Yellow
+    Write-Fail "Can chay PowerShell voi quyen Administrator."
     exit 1
 }
 
-# ── 2. Exclusion Defender (chong false-positive giong install.ps1) ─────
+# ── 2. Detect trang thai 2 agent ────────────────────────────────────────
+Write-Step "[1/5] Kiem tra trang thai agent hien tai..."
+
+$oiInstalled = $false
+$oiSvc = $null
+if (-not $SkipOrgInventory) {
+    $oiExisting = Get-WmiObject -Class Win32_Product -Filter "Name='OrgInventory Agent'" -ErrorAction SilentlyContinue
+    if ($oiExisting) {
+        $oiInstalled = $true
+        $oiSvc = Get-Service -Name "OrgInventoryAgent" -ErrorAction SilentlyContinue
+        Write-Info "OrgInventory Agent da cai (v$($oiExisting.Version))"
+        if ($oiSvc) {
+            Write-Info "  Service: $($oiSvc.Status)"
+        } else {
+            Write-Warn "  Service khong chay (se khoi dong lai)"
+        }
+    } else {
+        Write-Info "OrgInventory Agent chua duoc cai"
+    }
+}
+
+$vrInstalled = $false
+$vrSvc = $null
+if (-not $SkipVelociraptor) {
+    $vrExisting = Get-WmiObject -Class Win32_Product -Filter "Name='Velociraptor Service Installer'" -ErrorAction SilentlyContinue
+    if ($vrExisting) {
+        $vrInstalled = $true
+        $vrSvc = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
+        if (-not $vrSvc) { $vrSvc = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
+        Write-Info "Velociraptor da cai (v$($vrExisting.Version))"
+        if ($vrSvc) {
+            Write-Info "  Service: $($vrSvc.Status)"
+        } else {
+            Write-Warn "  Service khong chay (se khoi dong lai)"
+        }
+    } else {
+        Write-Info "Velociraptor chua duoc cai"
+    }
+}
+
+# ── 3. Exclusion Defender ──────────────────────────────────────────────
 try {
     Add-MpPreference -ExclusionPath "$env:ProgramFiles\OrgInventory" -ErrorAction SilentlyContinue
     Add-MpPreference -ExclusionPath "$env:ProgramFiles\Velociraptor" -ErrorAction SilentlyContinue
@@ -102,119 +147,286 @@ New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
 $InstallLog = Join-Path $env:TEMP "install-both.log"
 
 function Download-File([string]$Url, [string]$OutPath, [string]$Label) {
-    Write-Host "      Tai $Label ..." -ForegroundColor Gray
+    Write-Info "Tai $Label tu $Url ..."
     Invoke-WebRequest -Uri $Url -OutFile $OutPath -UseBasicParsing -TimeoutSec 120
     Unblock-File -Path $OutPath -ErrorAction SilentlyContinue
-    Write-Ok "$Label da tai ($((Get-Item $OutPath).Length / 1MB) MB)"
+    $size = [math]::Round((Get-Item $OutPath).Length / 1MB, 2)
+    Write-Ok "$Label da tai ($size MB)"
 }
 
-function Invoke-Msiexec([string]$MsiPath, [string[]]$Props, [string]$Label) {
-    $argsList = @('/i', "`"$MsiPath`"", '/qn', '/norestart') + $Props + @('/L*V', "`"$InstallLog`"")
-    $p = Start-Process msiexec.exe -ArgumentList $argsList -Wait -PassThru
-    if ($p.ExitCode -ne 0) {
-        Write-Fail "$Label that bai (exit code: $($p.ExitCode)). Xem log: $InstallLog"
-        exit $p.ExitCode
-    }
-    Write-Ok "$Label da cai dat thanh cong"
-}
-
-# ── 3. OrgInventory Agent ──────────────────────────────────────────────
+# ── 4. OrgInventory Agent ──────────────────────────────────────────────
 if (-not $SkipOrgInventory) {
-    Write-Step "[1/4] Cai dat OrgInventory Agent ..."
-    $msiPath = Join-Path $TmpDir "OrgInventoryAgent.msi"
-    try { Download-File $OrgInventoryMsiUrl $msiPath "OrgInventoryAgent.msi" } catch {
-        Write-Fail "Khong tai duoc OrgInventory MSI: $($_.Exception.Message)"; exit 1
-    }
+    Write-Step "[2/5] Cai dat / cap nhat OrgInventory Agent..."
 
-    # Verify SHA256 tu server
-    try {
-        $expected = (Invoke-WebRequest -Uri "$PortalUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
-        $actual = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
-        if ($expected.ToLower() -ne $actual) {
-            Write-Fail "SHA256 khong khop (server: $expected, file: $actual) — dung cai dat."
+    # === Case 1: Chua cai → cai MSI moi ===
+    if (-not $oiInstalled -or $ForceReinstall) {
+        if ($ForceReinstall -and $oiInstalled) {
+            Write-Info "ForceReinstall = true → go MSI cu truoc..."
+            try {
+                $oiExisting.Uninstall() | Out-Null
+                Start-Sleep -Seconds 5
+                Write-Ok "Đã gỡ OrgInventory Agent cũ"
+            } catch {
+                Write-Warn "Loi khi go: $($_.Exception.Message)"
+            }
+        }
+
+        $msiPath = Join-Path $TmpDir "OrgInventoryAgent.msi"
+        try { Download-File $OrgInventoryMsiUrl $msiPath "OrgInventoryAgent.msi" } catch {
+            Write-Fail "Khong tai duoc MSI: $($_.Exception.Message)"; exit 1
+        }
+
+        # Verify SHA256
+        try {
+            $expected = (Invoke-WebRequest -Uri "$PortalUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
+            $actual = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
+            if ($expected.ToLower() -ne $actual) {
+                Write-Fail "SHA256 khong khop (server: $expected, file: $actual) — dung cai dat."
+                exit 1
+            }
+            Write-Ok "SHA256 khop"
+        } catch {
+            Write-Warn "Khong verify duoc SHA256: $($_.Exception.Message)"
+        }
+
+        # Verify chu ky Authenticode
+        $sig = Get-AuthenticodeSignature -FilePath $msiPath
+        $allowUnsigned = ($env:ORGINV_ALLOW_UNSIGNED -eq '1')
+        if ($sig.Status -ne 'Valid' -and -not $allowUnsigned) {
+            Write-Fail "Chu ky so khong hop le (Status: $($sig.Status))"
+            Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
             exit 1
         }
-        Write-Ok "SHA256 khop"
-    } catch {
-        Write-Host "      [WARN] Khong verify duoc SHA256: $($_.Exception.Message)" -ForegroundColor Yellow
+        if ($sig.Status -eq 'Valid') { Write-Ok "Chu ky hop le: $($sig.SignerCertificate.Subject)" }
+        else { Write-Warn "MSI khong ky Authenticode — bo qua vi ORGINV_ALLOW_UNSIGNED=1 (TEST mode)" }
+
+        # msiexec
+        Write-Info "Chay msiexec /qn (silent install, ENROLL_TOKEN + ENDPOINTS)..."
+        $argsList = @('/i', "`"$msiPath`"", '/qn', '/norestart', "ENROLL_TOKEN=$Token", "TOKEN=$Token", "ENDPOINTS=$Endpoint", '/L*V', "`"$InstallLog`"")
+        $p = Start-Process msiexec.exe -ArgumentList $argsList -Wait -PassThru
+        if ($p.ExitCode -ne 0) {
+            Write-Fail "msiexec that bai (exit=$($p.ExitCode)). Log: $InstallLog"
+            Get-Content $InstallLog -Tail 30 | ForEach-Object { Write-Host "        $_" -ForegroundColor DarkYellow }
+            exit $p.ExitCode
+        }
+        Write-Ok "MSI da cai dat thanh cong"
     }
 
-    # Verify chu ky Authenticode (MSI chua ky chi khi ORGINV_ALLOW_UNSIGNED=1)
-    $sig = Get-AuthenticodeSignature -FilePath $msiPath
-    $allowUnsigned = ($env:ORGINV_ALLOW_UNSIGNED -eq '1')
-    if ($sig.Status -ne 'Valid' -and -not $allowUnsigned) {
-        Write-Fail "Chu ky so khong hop le (Status: $($sig.Status)). Da dung cai dat."
-        Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
-        exit 1
-    }
-    if ($sig.Status -eq 'Valid') { Write-Ok "Chu ky hop le: $($sig.SignerCertificate.Subject)" }
-    else { Write-Host "      [WARN] MSI khong ky Authenticode — bo qua vi ORGINV_ALLOW_UNSIGNED=1 (CHI DUNG TEST)" -ForegroundColor Yellow }
+    # === Case 2: Da cai → chi UPDATE config.json ===
+    else {
+        Write-Info "OrgInventory Agent da cai → chi UPDATE config.json (KHONG go MSI)"
+        $cfgPath = "$env:ProgramData\OrgInventory\config.json"
+        if (-not (Test-Path $cfgPath)) {
+            # Tao moi neu chua co
+            $cfgDir = Split-Path $cfgPath
+            if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null }
+        }
 
-    Invoke-Msiexec $msiPath @("ENROLL_TOKEN=$Token", "TOKEN=$Token", "ENDPOINTS=$Endpoint") "OrgInventory Agent"
-    Start-Sleep -Seconds 2
+        # Đọc config cũ (nếu có)
+        $cfg = @{}
+        if (Test-Path $cfgPath) {
+            try { $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json } catch { $cfg = @{} }
+        }
+        $oldToken = $cfg.token
+        $oldEndpoints = $cfg.endpoints
+        Write-Info "Config cu: token=$($oldToken.Substring(0, [Math]::Min(8, $oldToken.Length)))..., endpoints=$oldEndpoints"
+
+        # Update config.json
+        $cfg.token = $Token
+        $cfg.endpoints = @($Endpoint)
+        $cfg.configVersion = 2  # Bump version de agent biet config da thay doi
+
+        $cfgJson = $cfg | ConvertTo-Json -Depth 5
+        $cfgJson | Set-Content -Path $cfgPath -Encoding UTF8 -Force
+        Write-Ok "Config da update: token moi, endpoints=$Endpoint"
+
+        # Restart service de agent doc config moi
+        if (-not $oiSvc) {
+            $oiSvc = Get-Service -Name "OrgInventoryAgent" -ErrorAction SilentlyContinue
+        }
+        if ($oiSvc) {
+            Write-Info "Restart service OrgInventoryAgent de doc config moi..."
+            try {
+                Stop-Service -Name "OrgInventoryAgent" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+                Start-Service -Name "OrgInventoryAgent" -ErrorAction Stop
+                Start-Sleep -Seconds 2
+                $oiSvc.Refresh()
+                Write-Ok "Service da restart: $($oiSvc.Status)"
+            } catch {
+                Write-Warn "Khong the restart service: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Fail "Khong tim thay service OrgInventoryAgent sau khi update config"
+            exit 1
+        }
+    }
 }
 
-# ── 4. Velociraptor Client ─────────────────────────────────────────────
+# ── 5. Velociraptor Client ─────────────────────────────────────────────
 if (-not $SkipVelociraptor) {
-    Write-Step "[2/4] Cai dat Velociraptor Client ..."
-    $vrMsi = Join-Path $TmpDir "velociraptor-windows-amd64.msi"
-    $vrCfg = Join-Path $TmpDir "client.config.yaml"
-    try {
-        Download-File $VelociraptorMsiUrl $vrMsi "Velociraptor MSI"
-        Download-File $VelociraptorConfigUrl $vrCfg "client.config.yaml"
-    } catch {
-        Write-Fail "Khong tai duoc Velociraptor package: $($_.Exception.Message)"; exit 1
+    Write-Step "[3/5] Cai dat / cap nhat Velociraptor Client..."
+
+    # === Case 1: Chua cai → cai MSI moi ===
+    if (-not $vrInstalled -or $ForceReinstall) {
+        if ($ForceReinstall -and $vrInstalled) {
+            Write-Info "ForceReinstall = true → go MSI cu truoc..."
+            try {
+                $vrExisting.Uninstall() | Out-Null
+                Start-Sleep -Seconds 3
+                Write-Ok "Đã g� Velociraptor cũ"
+            } catch {
+                Write-Warn "Loi khi go: $($_.Exception.Message)"
+            }
+        }
+
+        $vrMsi = Join-Path $TmpDir "velociraptor-windows-amd64.msi"
+        try { Download-File $VelociraptorMsiUrl $vrMsi "Velociraptor MSI" } catch {
+            Write-Fail "Khong tai duoc MSI: $($_.Exception.Message)"; exit 1
+        }
+
+        # msiexec
+        Write-Info "Chay msiexec /qn..."
+        $argsList = @('/i', "`"$vrMsi`"", '/qn', '/norestart', '/L*V', "`"$InstallLog`"")
+        $p = Start-Process msiexec.exe -ArgumentList $argsList -Wait -PassThru
+        if ($p.ExitCode -ne 0) {
+            Write-Fail "msiexec that bai (exit=$($p.ExitCode)). Log: $InstallLog"
+            exit $p.ExitCode
+        }
+        Write-Ok "MSI da cai dat thanh cong"
     }
 
-    Invoke-Msiexec $vrMsi @() "Velociraptor Client"
-
-    # Ghi de config (MSI stock dung placeholder config)
+    # === Case 2: Da cai → chi UPDATE client.config.yaml ===
     $vrDir = Join-Path $env:ProgramFiles "Velociraptor"
     $cfgDst = Join-Path $vrDir "client.config.yaml"
-    if (Test-Path $vrDir) {
-        Copy-Item -Path $vrCfg -Destination $cfgDst -Force
-        Write-Ok "Config da ghi de: $cfgDst"
-    } else {
-        Write-Host "      [WARN] Khong thay thu muc $vrDir — bo qua ghi de config" -ForegroundColor Yellow
+    if (-not (Test-Path $vrDir)) {
+        Write-Fail "Khong thay thu muc $vrDir (Velociraptor MSI loi?)"
+        exit 1
     }
 
-    # Restart service (service name "Velociraptor", display name "Velociraptor Service")
-    $svc = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
-    if (-not $svc) { $svc = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
-    if ($svc) {
-        Stop-Service -Name $svc.Name -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        Start-Service -Name $svc.Name -ErrorAction SilentlyContinue
-        Write-Ok "Da khoi dong lai service: $($svc.Name)"
+    if ($vrInstalled -and -not $ForceReinstall) {
+        Write-Info "Velociraptor da cai → chi UPDATE client.config.yaml (KHONG go MSI)"
+        $oldCfg = Get-Content $cfgDst -Raw -ErrorAction SilentlyContinue
+        if ($oldCfg -match "server_urls:") {
+            $oldUrls = ($oldCfg -split "`n" | Select-String -Pattern "server_urls:" -Context 0,2).ToString()
+            Write-Info "Config cu co server_urls"
+        }
+    }
+
+    # Smart Update: dùng ZIP config-only (~2KB) thay vì URL riêng
+    if ($vrUseConfigOnly) {
+        $vrZip = Join-Path $TmpDir "velociraptor-config.zip"
+        try { Download-File $VelociraptorConfigOnlyZipUrl $vrZip "Velociraptor config (2KB)" } catch {
+            # Fallback URL riêng nếu ZIP fail
+            Write-Warn "Config-only ZIP fail, fallback download URL rieng"
+            $vrCfg = Join-Path $TmpDir "client.config.yaml"
+            try { Download-File $VelociraptorConfigUrl $vrCfg "client.config.yaml" } catch {
+                Write-Fail "Khong tai duoc config: $($_.Exception.Message)"; exit 1
+            }
+            Copy-Item -Path $vrCfg -Destination $cfgDst -Force
+            Write-Ok "Config da ghi de: $cfgDst"
+            $vrZip = $null
+        }
+        if ($vrZip -and (Test-Path $vrZip)) {
+            # Extract client.config.yaml từ ZIP
+            $shell = New-Object -ComObject Shell.Application
+            $zipNs = $shell.NameSpace((Resolve-Path $vrZip).Path)
+            $cfgItem = $zipNs.Items() | Where-Object { $_.Name -eq "client.config.yaml" }
+            if ($cfgItem) {
+                $extractDir = Join-Path $TmpDir "extracted"
+                New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+                $zipNs.CopyHere($cfgItem, 0x14)  # 0x14 = silent + overwrite
+                $extractedCfg = Join-Path $extractDir "client.config.yaml"
+                if (Test-Path $extractedCfg) {
+                    Copy-Item -Path $extractedCfg -Destination $cfgDst -Force
+                    Write-Ok "Config (tu ZIP) da ghi de: $cfgDst"
+                } else {
+                    Write-Fail "Khong extract duoc client.config.yaml tu ZIP"
+                    exit 1
+                }
+            } else {
+                Write-Fail "ZIP khong chua client.config.yaml"
+                exit 1
+            }
+        }
     } else {
-        Write-Host "      [WARN] Khong tim thay service Velociraptor" -ForegroundColor Yellow
+        # First install: dùng URL riêng
+        $vrCfg = Join-Path $TmpDir "client.config.yaml"
+        try { Download-File $VelociraptorConfigUrl $vrCfg "client.config.yaml" } catch {
+            Write-Fail "Khong tai duoc config: $($_.Exception.Message)"; exit 1
+        }
+        Copy-Item -Path $vrCfg -Destination $cfgDst -Force
+        Write-Ok "Config da ghi de: $cfgDst"
+    }
+
+    # Restart service de Velociraptor doc config moi (server_urls)
+    if (-not $vrSvc) {
+        $vrSvc = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
+        if (-not $vrSvc) { $vrSvc = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
+    }
+    if ($vrSvc) {
+        Write-Info "Restart service Velociraptor de doc config moi..."
+        try {
+            Stop-Service -Name $vrSvc.Name -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+            Start-Service -Name $vrSvc.Name -ErrorAction Stop
+            Start-Sleep -Seconds 3
+            $vrSvc.Refresh()
+            Write-Ok "Service da restart: $($vrSvc.Status)"
+        } catch {
+            Write-Warn "Khong the restart service: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Fail "Khong tim thay service Velociraptor"
+        exit 1
     }
 }
 
-# ── 5. Verify ──────────────────────────────────────────────────────────
-Write-Step "[3/4] Kiem tra dich vu ..."
-Start-Sleep -Seconds 2
+# ── 6. Verify cuoi cung ─────────────────────────────────────────────────
+Write-Step "[4/5] Verify cuoi cung..."
+Start-Sleep -Seconds 5
+
+$allOk = $true
 if (-not $SkipOrgInventory) {
     $oi = Get-Service -Name "OrgInventoryAgent" -ErrorAction SilentlyContinue
-    if ($oi) { Write-Ok "OrgInventoryAgent: $($oi.Status)" } else { Write-Fail "Khong thay service OrgInventoryAgent" }
+    if ($oi -and $oi.Status -eq "Running") {
+        Write-Ok "OrgInventoryAgent: $($oi.Status)"
+    } else {
+        Write-Fail "OrgInventoryAgent: $($oi.Status)"
+        $allOk = $false
+    }
 }
 if (-not $SkipVelociraptor) {
     $vr = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
     if (-not $vr) { $vr = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
-    if ($vr) { Write-Ok "Velociraptor ($($vr.Name)): $($vr.Status)" } else { Write-Fail "Khong thay service Velociraptor" }
+    if ($vr -and $vr.Status -eq "Running") {
+        Write-Ok "Velociraptor ($($vr.Name)): $($vr.Status)"
+    } else {
+        Write-Fail "Velociraptor: $($vr.Status)"
+        $allOk = $false
+    }
 }
 
-# ── 6. Hoan tat ────────────────────────────────────────────────────────
-Write-Step "[4/4] Hoan tat!"
+# ── 7. Hoan tat ────────────────────────────────────────────────────────
+Write-Step "[5/5] Hoan tat"
 Write-Host ""
-Write-Host "==========================================================" -ForegroundColor Green
-Write-Host "  CA 2 AGENT DA DUOC CAI DAT!" -ForegroundColor Green
-Write-Host "==========================================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "  - OrgInventory: service 'OrgInventoryAgent', log: $env:ProgramData\OrgInventory\logs\agent.log" -ForegroundColor White
-Write-Host "  - Velociraptor: service 'Velociraptor',    log: $env:ProgramFiles\Velociraptor\logs\velociraptor.log" -ForegroundColor White
-Write-Host "  - Verify enroll Velociraptor: mo GUI https://<velociraptor-host>:8889 -> tab Clients (~30s)" -ForegroundColor Gray
-Write-Host "  - Mapping sang portal /dfir sau toi da ~5 phut" -ForegroundColor Gray
-Write-Host ""
-Write-Host "Theo doi log OrgInventory: Get-Content '$env:ProgramData\OrgInventory\logs\agent.log' -Wait -Tail 30" -ForegroundColor Yellow
+if ($allOk) {
+    Write-Host "==========================================================" -ForegroundColor Green
+    Write-Host "  TAT CA AGENT DANG CHAY THANH CONG!" -ForegroundColor Green
+    Write-Host "==========================================================" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  - OrgInventory: log: $env:ProgramData\OrgInventory\logs\agent.log" -ForegroundColor White
+    Write-Host "  - Velociraptor:  log: $env:ProgramFiles\Velociraptor\logs\velociraptor.log" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Verify enroll (~30s):" -ForegroundColor Yellow
+    Write-Host "  Portal:    Tab Machines → may moi sau ~1 phut" -ForegroundColor Gray
+    Write-Host "  Velociraptor GUI: https://10.10.0.241:8889 → tab Clients" -ForegroundColor Gray
+    exit 0
+} else {
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host "  CAI DAT HOAN TAT NHUNG CO LOI O 1 SO SERVICE" -ForegroundColor Yellow
+    Write-Host "==========================================================" -ForegroundColor Yellow
+    Write-Host "  Kiem tra log va service de biet them chi tiet" -ForegroundColor Yellow
+    exit 1
+}
 Write-Host ""

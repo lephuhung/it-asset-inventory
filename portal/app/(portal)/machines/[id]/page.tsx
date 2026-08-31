@@ -327,7 +327,7 @@ export default function MachineDetailPage() {
   const classificationOptions = allTags.filter((t) => t.kind === "classification");
   const purposeOptions = allTags.filter((t) => t.kind === "purpose");
 
-  // ── Velociraptor (DFIR) ──
+  // ── DFIR ──
   const [veloConfig, setVeloConfig] = useState<VelociraptorConfig | null>(null);
   const [veloLink, setVeloLink] = useState<VelociraptorLink | null>(null);
   const [veloBusy, setVeloBusy] = useState(false);
@@ -492,7 +492,7 @@ export default function MachineDetailPage() {
         }
       }
     } catch {
-      // Velociraptor chưa cấu hình / unreachable — section hiện "chưa cấu hình"
+      // DFIR chưa cấu hình / unreachable — section hiện "chưa cấu hình"
     }
   }, [id, machine?.hostname]);
 
@@ -537,6 +537,7 @@ export default function MachineDetailPage() {
   }, [showVeloLog]);
 
   const isAdmin = user?.role === "super_admin" || user?.role === "org_admin" || user?.role === "admin_global" || user?.role === "admin_org";
+  const isSuperAdmin = user?.role === "super_admin";
 
   const runAction = async (action: string, body?: unknown) => {
     if (!machine) return;
@@ -567,7 +568,7 @@ export default function MachineDetailPage() {
       });
       setVeloResult({
         ok: true,
-        message: `Đã gửi Velociraptor — flow_id ${res.hunt_id ?? res.id}. Xem kết quả ở GUI.`,
+        message: `Đã gửi yêu cầu điều tra — flow_id ${res.hunt_id ?? res.id}. Xem kết quả ở GUI.`,
         url: res.velociraptor_url,
       });
       setShowCollectModal(false);
@@ -746,7 +747,7 @@ export default function MachineDetailPage() {
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
 
-      {/* Heatmap 3/5 trái + Velociraptor — Live data 2/5 phải (nếu máy đã link Velociraptor) */}
+      {/* Heatmap 3/5 trái + Phân tích sự cố (DFIR) — Live data 2/5 phải (nếu máy đã link) */}
       {veloLink ? (
         <div className="mb-5 grid items-stretch gap-5 lg:grid-cols-5">
           <MachineTimelineSection machineId={machine.id} className="h-full lg:col-span-3" />
@@ -1021,11 +1022,11 @@ export default function MachineDetailPage() {
         {/* Velociraptor Live Data — card đã tách sang cột 2/5 cạnh heatmap (VelociraptorLiveCard) */}
       </div>
 
-      {/* Modal: Collect Artifact qua Velociraptor */}
+      {/* Modal: Collect Artifact qua hệ thống phân tích sự cố */}
       <Modal
         open={showCollectModal}
         onClose={() => setShowCollectModal(false)}
-        title={`Collect Artifact qua Velociraptor — ${machine?.hostname ?? machine?.id ?? ""}`}
+        title={`Thu thập bằng chứng từ xa — ${machine?.hostname ?? machine?.id ?? ""}`}
         footer={
           <div className="flex items-center justify-end gap-2">
             <Button variant="secondary" onClick={() => setShowCollectModal(false)} disabled={veloBusy}>
@@ -1033,7 +1034,7 @@ export default function MachineDetailPage() {
             </Button>
             <Button onClick={collectArtifactOnMachine} disabled={veloBusy || !collectArtifact}>
               {veloBusy ? <Loader2 className="size-3.5 animate-spin" /> : <PlayCircle className="size-3.5" />}
-              Gửi Velociraptor
+              Gửi yêu cầu điều tra
             </Button>
           </div>
         }
@@ -1061,11 +1062,11 @@ export default function MachineDetailPage() {
 
           <div className="rounded-md bg-slate-50 p-3 text-xs leading-relaxed text-slate-600 ring-1 ring-inset ring-slate-200">
             <Search className="mr-1 inline size-3.5 align-text-top text-violet-600" />
-            Velociraptor sẽ chạy artifact trên client_id{" "}
+            Hệ thống sẽ thu thập bằng chứng trên client_id{" "}
             <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">
               {veloLink?.client_id?.slice(0, 16)}…
             </code>
-            . Kết quả lưu trên Velociraptor Server — click <em>Mở Velociraptor GUI</em> sau khi gửi để xem notebook.
+            . Kết quả lưu kết quả trên server — click <em>Mở GUI</em> sau khi gửi để xem notebook.
           </div>
         </div>
       </Modal>

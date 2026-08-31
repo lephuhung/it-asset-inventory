@@ -21,6 +21,8 @@ Build (chỉ trên Windows, cần WiX):
 """
 from __future__ import annotations
 
+import hashlib
+
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,6 +42,7 @@ VELOCIRAPTOR_ZIP_FILENAME = "velociraptor-agent-windows.zip"
 VELOCIRAPTOR_MSI_FILENAME = "velociraptor-windows-amd64.msi"
 VELOCIRAPTOR_CONFIG_FILENAME = "velociraptor-client.config.yaml"
 VELOCIRAPTOR_INSTALL_BAT = "install-velociraptor.bat"
+VELOCIRAPTOR_CONFIG_ONLY_ZIP = "velociraptor-config-only.zip"
 VELOCIRAPTOR_DEB_FILENAME = "velociraptor_client_amd64.deb"
 VELOCIRAPTOR_RPM_FILENAME = "velociraptor_client_amd64.rpm"
 INSTALL_BOTH_PS1 = "install-both.ps1"
@@ -112,12 +115,15 @@ async def download_install_offline_script():
 
     Script này chạy local trên USB, không gọi lại server — phù hợp máy air-gapped.
     So với `install.ps1` (online): script này bỏ qua bước tải MSI (đã có sẵn trên USB)
-    và bỏ qua bước verify qua server.
+    và bỏ qua bước verify qua server. BOM UTF-8 có sẵn trong file template.
     """
     template_path = Path(__file__).resolve().parents[2] / "templates" / "install-offline.ps1"
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.ps1")
-    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"))
+    return PlainTextResponse(
+        content=template_path.read_bytes().decode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @router.get("/install-offline.cmd", response_class=PlainTextResponse)
@@ -147,7 +153,6 @@ async def download_velociraptor_agent_zip():
     Đặt trong `settings.agent_msi_dir` (mặc định `./agent_dist`).
     SHA256 đi kèm trong response header `X-Content-SHA256` để admin verify.
     """
-    import hashlib
 
     path = _safe_resolve(VELOCIRAPTOR_ZIP_FILENAME)
     _ensure_exists(path)
@@ -186,6 +191,27 @@ async def download_velociraptor_client_config():
     return PlainTextResponse(
         content=path.read_text(encoding="utf-8"),
         media_type="application/x-yaml",
+    )
+
+
+@router.get("/velociraptor-config-only.zip", response_class=FileResponse)
+async def download_velociraptor_config_only_zip():
+    """ZIP nhỏ (~5KB) chỉ chứa client.config.yaml — dùng cho Smart Update.
+
+    Khi máy đã cài Velociraptor, script install-both chỉ cần update URL enrollment.
+    Bundle đầy đủ (~50MB) không cần thiết — chỉ cần file config này.
+
+    File build bằng ``server/agent_dist/build-config-zip.sh`` — chạy lại khi
+    Velociraptor URL/CA cert thay đổi.
+    """
+    path = _safe_resolve(VELOCIRAPTOR_CONFIG_ONLY_ZIP)
+    _ensure_exists(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=VELOCIRAPTOR_CONFIG_ONLY_ZIP,
+        headers={"X-Content-SHA256": digest, "X-Bundle-Type": "config-only"},
     )
 
 
@@ -252,11 +278,20 @@ async def download_velociraptor_linux_rpm():
 
 @router.get("/install-both.ps1", response_class=PlainTextResponse)
 async def download_install_both_ps1():
-    """`install-both.ps1` — cài cùng lúc OrgInventory Agent + Velociraptor Client trên Windows."""
+    """`install-both.ps1` — cài cùng lúc OrgInventory Agent + Velociraptor Client trên Windows.
+
+    File template có sẵn BOM UTF-8 ở đầu để PowerShell trên Windows nhận diện đúng
+    encoding. Nếu thiếu BOM, các ký tự Unicode (─, ≤, ≥, ...) sẽ bị corrupt →
+    parse error như "Try statement is missing its Catch or Finally block".
+    """
     template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_PS1
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.ps1")
-    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"), media_type="text/plain")
+    # BOM đã có sẵn trong file template (thêm bằng `printf '\xEF\xBB\xBF'`)
+    return PlainTextResponse(
+        content=template_path.read_bytes().decode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @router.get("/install-both.sh", response_class=PlainTextResponse)
@@ -265,7 +300,10 @@ async def download_install_both_sh():
     template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_SH
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.sh")
-    return PlainTextResponse(content=template_path.read_text(encoding="utf-8"), media_type="text/plain")
+    return PlainTextResponse(
+        content=template_path.read_text(encoding="utf-8"),
+        media_type="text/plain; charset=utf-8",
+    )
 
 
 @router.get("/server_public_key.pem", response_class=PlainTextResponse)

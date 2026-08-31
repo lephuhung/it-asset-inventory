@@ -1,0 +1,17 @@
+# ── File nhị phân lớn (build artifact — không commit) ──
+*.msi
+*.zip
+*.deb
+*.rpm
+
+# ── Chứng chỉ / private key (TUYỆT ĐỐI KHÔNG commit) ──
+velociraptor-certs/
+*.pem
+*.key
+*.yaml
+*.yml
+
+# ── Thư mục build tạm ──
+build/
+velociraptor-config-only/
+publish/

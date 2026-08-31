@@ -1,4 +1,4 @@
-# install-offline.ps1 — Bộ điều phối cài đặt & thu thập tài sản 1-Click cho máy cách ly (Offline USB)
+﻿# install-offline.ps1 — Bộ điều phối cài đặt & thu thập tài sản 1-Click cho máy cách ly (Offline USB)
 #
 # Người dùng chỉ cần nháy đúp chuột vào install-offline.cmd (hoặc chạy install-offline.ps1).
 # Script tự động:

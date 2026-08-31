@@ -416,8 +416,17 @@ async def lookup_velociraptor_client(
         )
     client, _ = built
     try:
+        # Dùng docker exec VQL thay vì REST SearchClients (Velociraptor 0.77
+        # không expose REST API đúng cách cho external apps).
+        # Escape hostname cho VQL string (chỉ cần escape backslash và quote).
+        escaped = hostname.replace("\\", "\\\\").replace('"', '\\"')
+        vql = (
+            f'SELECT client_id, os_info FROM clients() '
+            f'WHERE os_info.hostname =~ "{escaped}" '
+            f'LIMIT 50'
+        )
         async with client as velo:
-            items = await velo.search_clients(query=hostname, limit=10)
+            items = await velo._vql_query(vql, container=client.container)
     except VelociraptorError as e:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -490,8 +499,11 @@ async def velociraptor_status(
     client, cfg = built
     try:
         async with client as velo:
-            # Quick ping: SearchClients với empty query
-            items = await velo.search_clients(query="", limit=1)
+            # Quick ping: docker exec VQL (Velociraptor 0.77 không expose REST API)
+            items = await velo._vql_query(
+                "SELECT client_id FROM clients() LIMIT 1",
+                container=client.container,
+            )
             return {
                 "reachable": True,
                 "server_url": cfg.server_url,

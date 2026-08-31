@@ -93,6 +93,11 @@ export interface MachineListItem {
   assigned_user_id: string | null;
   logged_user?: string | null;
   tags?: Tag[];
+  platform?: string | null;
+  agent_version?: string | null;
+  public_ip?: string | null;
+  velociraptor_client_id?: string | null;
+  velociraptor_last_seen_at?: string | null;
 }
 
 export interface NetworkInterface {
@@ -161,7 +166,8 @@ export interface TokenListItem {
 export interface TokenCreateResponse {
   token: string;
   install_command: string; // back-compat: Windows PowerShell MSI command
-  install_command_windows?: string; // PowerShell -EncodedCommand — MSI silent install
+  install_command_windows?: string; // PowerShell -EncodedCommand — cài CẢ 2 (OrgInventory + Velociraptor)
+  install_command_windows_org_only?: string; // PowerShell -EncodedCommand — cài CH� OrgInventory (không Velociraptor)
   install_command_linux?: string; // curl | bash one-liner — auto-detect .deb / .rpm
   install_offline_url?: string; // gói USB .zip cho máy cách ly (chế độ 2)
   install_url_warnings?: string[]; // cảnh báo khi portal/agent URL chưa public (localhost)

@@ -45,7 +45,11 @@ async def _validate_token(token: str, db: AsyncSession) -> EnrollToken:
 
 @router.get("/i/{token}", response_class=PlainTextResponse)
 async def render_install_script(token: str, db: AsyncSession = Depends(get_db)):
-    """Render install.ps1 đầy đủ với token nhúng — gọi bởi `irm ... | iex`."""
+    """Render install.ps1 đầy đủ với token nhúng — gọi bởi `irm ... | iex`.
+
+    BOM UTF-8 được thêm vào đầu response để PowerShell nhận diện đúng encoding.
+    Template `install.ps1.j2` có chuỗi BOM ở đầu (jinja2 pass-through).
+    """
     await _validate_token(token, db)
     agent_cfg = await effective_agent_config(db)
     template = jinja_env.get_template("install.ps1.j2")
@@ -54,4 +58,4 @@ async def render_install_script(token: str, db: AsyncSession = Depends(get_db)):
         portal_url=agent_cfg["portal_url"],
         agent_server_url=agent_cfg["agent_server_url"],
     )
-    return PlainTextResponse(content=script, media_type="text/plain")
+    return PlainTextResponse(content=script, media_type="text/plain; charset=utf-8")

@@ -221,17 +221,17 @@ class VelociraptorClient:
     # ── REST API: test_connection + hunt/collect ───────────
 
     async def test_connection(self) -> dict[str, Any]:
-        """Test kết nối — gọi SearchClients autocomplete.
+        """Test kết nối — dùng docker exec VQL CLI (Velociraptor 0.77 không expose
+        REST API đúng cách cho external apps).
 
-        200 = OK; 401/403 = auth fail; 5xx/connect-refused = server unreachable.
+        Trả ok=True nếu docker exec thành công + Velociraptor CLI đọc config OK.
         """
         try:
-            client = self._check_client()
-            r = await client.get("/SearchClients", params={"name_only": "true", "limit": 1})
-            r.raise_for_status()
-            return {"ok": True}
-        except httpx.HTTPStatusError as e:
-            return {"ok": False, "error": f"HTTP {e.response.status_code}: {e.response.text[:200]}"}
+            clients = await self._vql_query(
+                "SELECT client_id FROM clients() LIMIT 1",
+                container=self.container,
+            )
+            return {"ok": True, "client_count_sampled": len(clients)}
         except VelociraptorError as e:
             return {"ok": False, "error": str(e)}
         except Exception as e:  # noqa: BLE001
@@ -240,12 +240,70 @@ class VelociraptorClient:
     async def collect_artifact(
         self, client_id: str, artifacts: list[str], env: dict | None = None
     ) -> str:
-        """POST /api/v1/CollectArtifact — trả flow_id (string)."""
-        body: dict[str, Any] = {"client_id": client_id, "artifacts": artifacts}
-        if env:
-            body["env"] = env
-        data = await self._post("/CollectArtifact", body)
-        return str(data.get("flow_id", ""))
+        """Collect artifact trên 1 client — dùng Velociraptor CLI (REST API không có).
+
+        Velociraptor CLI: `artifacts collect <name> --client_id=<cid> --output=<file>`
+        Output: {"Download": ["downloads", client_id, flow_id, zip_path]}
+        → flow_id là phần tử thứ 3 (index 2) của array.
+
+        Args:
+            client_id: Velociraptor client ID (vd "C.xxxxx")
+            artifacts: list tên artifact cần collect
+            env: dict env vars (chưa support qua CLI — bỏ qua)
+
+        Returns: flow_id (string) — hoặc "" nếu fail
+        """
+        if not artifacts:
+            raise VelociraptorError("artifacts list rỗng")
+        artifact_name = artifacts[0]  # CLI chỉ nhận 1 artifact / lần
+
+        def _exec_collect() -> str:
+            import json as _json
+            import tempfile
+            # Lazy init Docker client (giống _vql_query)
+            if self._docker is None:
+                self._docker = docker.from_env()
+            container_obj = self._docker.containers.get(self.container)
+            tmpfile = tempfile.NamedTemporaryFile(
+                suffix=".zip", prefix="velo-collect-", delete=False
+            )
+            tmpfile.close()
+            try:
+                cmd = [
+                    "velociraptor",
+                    "--api_config", "/etc/velociraptor/portal-api.yaml",
+                    "artifacts", "collect", artifact_name,
+                    "--client_id", client_id,
+                    "--output", tmpfile.name,
+                ]
+                result = container_obj.exec_run(cmd, demux=True)
+                stdout, stderr = result.output
+                if result.exit_code != 0:
+                    err = stderr.decode("utf-8", errors="replace") if stderr else ""
+                    raise VelociraptorError(
+                        f"Collect thất bại (exit={result.exit_code}): {err[:300]}"
+                    )
+                output = stdout.decode("utf-8", errors="replace") if stdout else ""
+                # Parse JSON output để lấy flow_id
+                # Output: {"Download": ["downloads", client_id, flow_id, zip_path]}
+                try:
+                    parsed = _json.loads(output.strip().splitlines()[-1] if output else "{}")
+                    downloads = parsed.get("Download", [])
+                    if len(downloads) >= 3:
+                        return str(downloads[2])  # flow_id
+                except (_json.JSONDecodeError, IndexError):
+                    pass
+                return ""
+            finally:
+                Path(tmpfile.name).unlink(missing_ok=True)
+
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, _exec_collect)
+        except VelociraptorError:
+            raise
+        except Exception as e:
+            raise VelociraptorError(f"Collect exception: {e}") from e
 
     async def create_hunt(
         self, name: str, artifacts: list[str], description: str = "",
@@ -283,10 +341,16 @@ class VelociraptorClient:
         return await self._post("/ModifyHunt", body)
 
     async def get_hunt_status(self, hunt_id: str) -> dict:
-        return await self._get(f"/GetHuntStatus/{hunt_id}")
+        """Trả status của 1 hunt qua docker exec VQL (REST API không có)."""
+        vql = f"SELECT * FROM hunts() WHERE hunt_id = \"{hunt_id}\" LIMIT 1"
+        items = await self._vql_query(vql, container=self.container)
+        return items[0] if items else {"hunt_id": hunt_id, "error": "not found"}
 
     async def get_hunt(self, hunt_id: str) -> dict:
-        return await self._get(f"/GetHunt/{hunt_id}")
+        """Trả metadata hunt qua docker exec VQL."""
+        vql = f"SELECT * FROM hunts() WHERE hunt_id = \"{hunt_id}\" LIMIT 1"
+        items = await self._vql_query(vql, container=self.container)
+        return items[0] if items else {"hunt_id": hunt_id, "error": "not found"}
 
     async def get_flow_results(self, flow_id: str, limit: int = 100) -> dict:
         """Lấy rows data cho 1 flow (hunt/collection/interrogation).
@@ -312,31 +376,19 @@ class VelociraptorClient:
     ) -> list[dict]:
         """List flows (hunts/collections/interrogations) cho 1 client.
 
-        Velociraptor API: GET /api/v1/GetClientFlows?client_id=...&rows=...
-        ⚠️ Tham số là `rows` — `limit` bị Velociraptor bỏ qua (default rows=1
-        → chỉ trả flow mới nhất!). Response (Velociraptor 0.77):
-        {"columns": [...], "rows": [...], "total_rows": N} — mỗi row có format
-        {"State", "FlowId", "Artifacts", "Created", "Last Active", ...}
-        → convert thành dict dễ dùng cho portal.
+        Dùng docker exec VQL `flows()` (Velociraptor 0.77 không expose REST API).
+        Returns: list dict — mỗi dict là flow metadata.
         """
-        data = await self._get(f"/GetClientFlows?client_id={client_id}&rows={int(limit)}")
-
-        columns = data.get("columns", [])
-        rows = data.get("rows", [])
-        out: list[dict] = []
-        for r in rows:
-            item = dict(zip(columns, r.get("json") if isinstance(r.get("json"), list) else [r.get(c) for c in columns]))
-            # Nếu row có key "json" chứa JSON array → parse
-            if isinstance(r.get("json"), str):
-                import json as _json
-                try:
-                    parsed = _json.loads(r["json"])
-                    if isinstance(parsed, list):
-                        item = dict(zip(columns, parsed))
-                except Exception:
-                    pass
-            out.append(item)
-        return out
+        # Velociraptor VQL: session_id = flow_id, create_time/start_time ở dạng int µs
+        vql = (
+            f"SELECT session_id AS FlowId, state AS State, "
+            f"request.artifacts AS Artifacts, create_time AS Created, "
+            f"active_time AS LastActive, total_uploaded_bytes AS Mb, "
+            f"total_collected_rows AS Rows, request.creator AS Creator "
+            f"FROM flows(client_id=\"{client_id}\") "
+            f"ORDER BY create_time DESC LIMIT {int(limit)}"
+        )
+        return await self._vql_query(vql, container=self.container)
 
     async def list_artifacts(self) -> list[dict]:
         """Liệt kê artifacts Velociraptor có (admin chọn trong Collect dialog).
@@ -361,10 +413,41 @@ class VelociraptorClient:
     async def get_client_metadata(self, client_id: str) -> dict:
         """Lấy metadata của 1 client (hostname, OS, last seen, IP, agent version...).
 
-        Velociraptor API: GET /api/v1/GetClient/{client_id}
-        GetClientMetadata/{client_id} trả near-empty (chỉ client_id).
+        Velociraptor 0.77 không expose REST API đúng cách — dùng docker exec VQL
+        thay vì `GET /api/v1/GetClient/{client_id}`.
         """
-        return await self._get(f"/GetClient/{client_id}")
+        vql = (
+            f"SELECT client_id, os_info, last_seen_at, last_ip, agent_information "
+            f"FROM clients() WHERE client_id = \"{client_id}\" LIMIT 1"
+        )
+        items = await self._vql_query(vql, container=self.container)
+        if not items:
+            return {"client_id": client_id, "error": "client not found"}
+        item = items[0]
+        # VQL trả timestamp dạng int (microseconds since epoch) → convert sang ISO string
+        if isinstance(item.get("last_seen_at"), int):
+            try:
+                ts = item["last_seen_at"] / 1_000_000  # µs → seconds
+                item["last_seen_at"] = datetime.fromtimestamp(ts, tz=UTC).isoformat()
+            except (ValueError, OSError):
+                pass
+        # first_seen_at + last_seen_at ở dạng int seconds (since epoch) - convert sang ISO
+        for k in ("first_seen_at", "last_seen_at"):
+            v = item.get(k)
+            if isinstance(v, int):
+                try:
+                    # Velociraptor trả int seconds (không phải ns/µs) - thử cả 3 đơn vị
+                    for divisor in (1, 1_000_000, 1_000_000_000):
+                        try:
+                            ts = v / divisor
+                            if 1_000_000_000 < ts < 4_102_444_800:  # giữa 1970 và 2100
+                                item[k] = datetime.fromtimestamp(ts, tz=UTC).isoformat()
+                                break
+                        except (ValueError, OSError):
+                            continue
+                except (ValueError, OSError):
+                    pass
+        return item
 
     # ── REST API: DFIR Top-N events (flows → tables) ──────────
 
@@ -391,12 +474,23 @@ class VelociraptorClient:
     async def get_flow_details(self, client_id: str, flow_id: str) -> dict:
         """Lấy trạng thái chi tiết 1 flow (polling khi collect).
 
-        Velociraptor API: GET /api/v1/GetFlowDetails?client_id=...&flow_id=...
-        Response: {"context": {"state": "RUNNING"|"FINISHED"|"ERROR", ...}, ...}
+        Dùng docker exec VQL `flows()` (REST API không có).
+        Returns: {"context": {"state": "RUNNING"|"FINISHED"|"ERROR"}, ...}
         """
-        return await self._get(
-            f"/GetFlowDetails?client_id={client_id}&flow_id={flow_id}"
+        vql = (
+            f"SELECT state, status FROM flows(client_id=\"{client_id}\") "
+            f"WHERE session_id = \"{flow_id}\" LIMIT 1"
         )
+        items = await self._vql_query(vql, container=self.container)
+        if not items:
+            return {"context": {"state": "RUNNING", "status": ""}}
+        item = items[0]
+        return {
+            "context": {
+                "state": item.get("state", "RUNNING"),
+                "status": item.get("status", ""),
+            }
+        }
 
     async def get_flow_status(self, client_id: str, flow_id: str) -> dict:
         """Trạng thái flow (dạng dễ dùng cho orchestrator).
@@ -451,15 +545,14 @@ class VelociraptorClient:
     ) -> list[dict]:
         """Đọc bảng kết quả của 1 artifact trong 1 flow (rows → list dict).
 
-        Velociraptor API: GET /api/v1/GetTable?client_id=...&flow_id=...&artifact=...&rows=...
-        Response: {"columns": [...], "rows": [{"json": "[...]"}, ...], "total_rows": N}
-        Mỗi row là 1 array JSON theo đúng thứ tự `columns` → zip thành dict.
+        Dùng docker exec VQL `source()` — Velociraptor 0.77 không expose REST API.
         """
-        data = await self._get(
-            f"/GetTable?client_id={client_id}&flow_id={flow_id}"
-            f"&artifact={_url_quote(artifact)}&rows={int(rows)}"
+        # VQL: SELECT * FROM source(flow_id=..., artifact=...) LIMIT N
+        vql = (
+            f"SELECT * FROM source(flow_id=\"{flow_id}\", artifact=\"{artifact}\") "
+            f"LIMIT {int(rows)}"
         )
-        return _rows_to_dicts(data)
+        return await self._vql_query(vql, container=self.container)
 
     async def collect_artifact_and_wait(
         self,
@@ -539,14 +632,15 @@ class VelociraptorClient:
                 raise VelociraptorError(
                     f"Docker container '{cname}' không tồn tại — kiểm tra `docker ps`."
                 )
-            cmd_str = (
-                f"velociraptor --config /etc/velociraptor/server.config.yaml query "
-                f"{_shell_quote(vql)}"
-            )
-            exec_result = container_obj.exec_run(
-                ["sh", "-c", cmd_str],
-                demux=True,
-            )
+            # Velociraptor CLI cần --api_config (cert mTLS) để query clients.
+            # Cert được mount shared qua agent_dist/velociraptor-certs/.
+            api_config = "/etc/velociraptor/portal-api.yaml"
+            cmd_args = [
+                "velociraptor",
+                "--api_config", api_config,
+                "query", vql,
+            ]
+            exec_result = container_obj.exec_run(cmd_args, demux=True)
             stdout, stderr = exec_result.output
             if exec_result.exit_code != 0:
                 err = stderr.decode("utf-8", errors="replace") if stderr else ""
@@ -621,10 +715,12 @@ class VelociraptorClient:
     async def get_all_clients(self, page_size: int = 1000) -> list[dict]:
         """Lấy TOÀN BỘ clients (cho sync hostname mỗi 5 phút).
 
-        Velociraptor 0.77 SearchClients API: query= (empty) + limit=1000 → trả
-        đủ client trong 1 request (response có total field để check overflow).
+        Dùng docker exec VQL `clients()` (REST API không có).
         """
-        return await self.search_clients(query="", limit=page_size)
+        vql = (
+            f"SELECT client_id, os_info FROM clients() LIMIT {int(page_size)}"
+        )
+        return await self._vql_query(vql, container=self.container)
 
 
 def _shell_quote(s: str) -> str:

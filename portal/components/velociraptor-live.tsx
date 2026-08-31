@@ -59,7 +59,7 @@ export function VelociraptorLiveCard({
           <span className="flex size-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
             <Activity className="size-4" />
           </span>
-          Velociraptor — Live data
+          Phân tích sự cố — Live data
           {active ? (
             <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">
               <CheckCircle2 className="mr-1 size-3" /> Đang hoạt động
@@ -70,10 +70,10 @@ export function VelociraptorLiveCard({
           {loading && <Loader2 className="size-3.5 animate-spin text-slate-400" />}
         </span> as unknown as string
       }
-      subtitle="Dữ liệu realtime từ Velociraptor Server (qua API). Có thể chậm ~5 phút so với máy thật."
+      subtitle="Dữ liệu realtime từ hệ thống phân tích sự cố (DFIR). Có thể chậm ~5 phút so với máy thật."
       actions={
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={onOpenLogs} title="Xem log từ Velociraptor">
+          <Button variant="secondary" size="sm" onClick={onOpenLogs} title="Xem log DFIR">
             <ScrollText className="size-3.5" /> Xem log
           </Button>
           {onShowHistory && (
@@ -172,7 +172,7 @@ export function VelociraptorLiveCard({
               <dd className="font-medium text-slate-900">
                 {metadata.last_seen_at
                   ? formatDateTime(
-                      new Date(Number(metadata.last_seen_at) / 1e6).toISOString(),
+                      metadata.last_seen_at,
                     )
                   : "—"}
               </dd>
@@ -321,7 +321,7 @@ export function VeloLogDrawer({
                   <dd className="font-medium text-slate-900">
                     {metadata.last_seen_at
                       ? formatDateTime(
-                          new Date(Number(metadata.last_seen_at) / 1e6).toISOString(),
+                          metadata.last_seen_at,
                         )
                       : "—"}
                   </dd>
