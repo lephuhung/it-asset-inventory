@@ -47,6 +47,13 @@ case "$ARCH" in
     *) log_fail "Kiến trúc không hỗ trợ: $ARCH"; exit 1 ;;
 esac
 
+# Detect package format (.deb cho Debian/Ubuntu, .rpm cho RHEL/Rocky).
+case "${ID:-}" in
+    ubuntu|debian) PKG_EXT="deb" ;;
+    rhel|rocky|almalinux|centos|fedora) PKG_EXT="rpm" ;;
+    *) PKG_EXT="bin" ;;  # fallback: tải binary OrgInventoryAgent + chạy thẳng.
+esac
+
 # ── 3. Tải binary self-contained + SHA256 ───────────────────────────────
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -194,15 +201,60 @@ if [[ -S /run/orginventory/helper.sock ]]; then
     log_ok "Helper socket /run/orginventory/helper.sock đã sẵn sàng"
 fi
 
+# ── 10. Velociraptor Client (DFIR) — cài mặc định, có thể tắt bằng flag ───────
+# Set SKIP_VELOCIRAPTOR=1 trước khi curl | sudo bash để bỏ qua:
+#   curl -fsSL <portal>/i/<token> | sudo SKIP_VELOCIRAPTOR=1 bash
+SKIP_VELOCIRAPTOR="${SKIP_VELOCIRAPTOR:-0}"
+if [[ "$SKIP_VELOCIRAPTOR" == "1" ]]; then
+    log_warn "Velociraptor bị bỏ qua (SKIP_VELOCIRAPTOR=1)"
+else
+    log_step "Cài Velociraptor Client (DFIR)…"
+    VR_PKG_URL="$PORTAL_URL/download/velociraptor-linux-amd64.$PKG_EXT"
+    VR_CFG_URL="$PORTAL_URL/download/velociraptor-client.config.yaml"
+    TMP_VR="$(mktemp -d)"
+    trap 'rm -rf "$TMP" "$TMP_VR"' EXIT
+
+    log_step "Tải $VR_PKG_URL ..."
+    if ! curl -fsSL --max-time 120 -o "$TMP_VR/vr.$PKG_EXT" "$VR_PKG_URL"; then
+        log_warn "Không tải được Velociraptor ($VR_PKG_URL). Bỏ qua — máy vẫn có OrgInventory."
+    else
+        if [[ "$PKG_EXT" == "deb" ]]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "$TMP_VR/vr.deb" || log_warn "dpkg install VR thất bại — tiếp tục"
+        else
+            dnf install -y "$TMP_VR/vr.rpm" || log_warn "dnf install VR thất bại — tiếp tục"
+        fi
+        log_ok "Velociraptor package đã cài"
+
+        if curl -fsSL --max-time 30 "$VR_CFG_URL" -o /etc/velociraptor/client.config.yaml 2>/dev/null; then
+            chmod 0640 /etc/velociraptor/client.config.yaml 2>/dev/null || true
+            log_ok "Đã cập nhật /etc/velociraptor/client.config.yaml"
+        else
+            log_warn "Không tải được client.config.yaml ($VR_CFG_URL). Bỏ qua — dùng config mặc định."
+        fi
+
+        if systemctl enable --now velociraptor_client 2>/dev/null; then
+            sleep 2
+            if systemctl is-active --quiet velociraptor_client; then
+                log_ok "Service velociraptor_client đang chạy"
+            else
+                log_warn "velociraptor_client start fail — xem: journalctl -u velociraptor_client -n 50"
+            fi
+        else
+            log_warn "velociraptor_client không thể enable. Kiểm tra: systemctl list-units --type=service | grep velo"
+        fi
+    fi
+fi
+
 echo
 echo "============================================================"
-log_ok "Cài đặt thành công!"
+log_ok "Cài đặt thành công! (OrgInventory + Velociraptor)"
 echo "============================================================"
 echo
 echo "Agent sẽ tự enroll với $AGENT_SERVER_URL trong vòng 1 chu kỳ heartbeat (~30s)."
 echo "Sau ~30s, máy sẽ hiển thị 'online' trên Portal."
 echo
 echo "Kiểm tra:"
-echo "  • Log:    tail -f $DATA_DIR/logs/agent.log  (hoặc journalctl -u orginventory-agent -f)"
-echo "  • Status: systemctl status orginventory-agent.service"
-echo "  • Helper: ls -la /run/orginventory/helper.sock"
+echo "  • OI log:   tail -f $DATA_DIR/logs/agent.log  (hoặc journalctl -u orginventory-agent -f)"
+echo "  • VR log:   journalctl -u velociraptor_client -f"
+echo "  • Status:   systemctl status orginventory-agent.service"
+echo "  • Helper:   ls -la /run/orginventory/helper.sock"
