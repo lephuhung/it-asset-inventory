@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   Cai dat CUNG LUC 2 agent bang 1 lenh:
     1) OrgInventory Agent  - kiem ke tai san CNTT & ATTT
@@ -100,11 +100,12 @@ Write-Step "[1/5] Kiem tra trang thai agent hien tai..."
 $oiInstalled = $false
 $oiSvc = $null
 if (-not $SkipOrgInventory) {
-    $oiExisting = Get-WmiObject -Class Win32_Product -Filter "Name='OrgInventory Agent'" -ErrorAction SilentlyContinue
-    if ($oiExisting) {
+    $oiExisting = Get-WmiObject -Class Win32_Product -Filter "Name LIKE '%OrgInventory%'" -ErrorAction SilentlyContinue
+    $oiSvc = Get-Service -Name "OrgInventoryAgent" -ErrorAction SilentlyContinue
+    if ($oiExisting -or $oiSvc -or (Test-Path "$env:ProgramFiles\OrgInventory\OrgInventoryAgent.exe")) {
         $oiInstalled = $true
-        $oiSvc = Get-Service -Name "OrgInventoryAgent" -ErrorAction SilentlyContinue
-        Write-Info "OrgInventory Agent da cai (v$($oiExisting.Version))"
+        $ver = if ($oiExisting) { "v$($oiExisting.Version)" } else { "" }
+        Write-Info "OrgInventory Agent da cai $ver"
         if ($oiSvc) {
             Write-Info "  Service: $($oiSvc.Status)"
         } else {
@@ -118,12 +119,13 @@ if (-not $SkipOrgInventory) {
 $vrInstalled = $false
 $vrSvc = $null
 if (-not $SkipVelociraptor) {
-    $vrExisting = Get-WmiObject -Class Win32_Product -Filter "Name='Velociraptor Service Installer'" -ErrorAction SilentlyContinue
-    if ($vrExisting) {
+    $vrExisting = Get-WmiObject -Class Win32_Product -Filter "Name LIKE '%Velociraptor%'" -ErrorAction SilentlyContinue
+    $vrSvc = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
+    if (-not $vrSvc) { $vrSvc = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
+    if ($vrExisting -or $vrSvc -or (Test-Path "$env:ProgramFiles\Velociraptor\velociraptor.exe")) {
         $vrInstalled = $true
-        $vrSvc = Get-Service -Name "Velociraptor" -ErrorAction SilentlyContinue
-        if (-not $vrSvc) { $vrSvc = Get-Service | Where-Object { $_.DisplayName -like "*Velociraptor*" } | Select-Object -First 1 }
-        Write-Info "Velociraptor da cai (v$($vrExisting.Version))"
+        $ver = if ($vrExisting) { "v$($vrExisting.Version)" } else { "" }
+        Write-Info "Velociraptor da cai $ver"
         if ($vrSvc) {
             Write-Info "  Service: $($vrSvc.Status)"
         } else {
@@ -162,12 +164,14 @@ if (-not $SkipOrgInventory) {
     if (-not $oiInstalled -or $ForceReinstall) {
         if ($ForceReinstall -and $oiInstalled) {
             Write-Info "ForceReinstall = true → go MSI cu truoc..."
-            try {
-                $oiExisting.Uninstall() | Out-Null
-                Start-Sleep -Seconds 5
-                Write-Ok "Đã gỡ OrgInventory Agent cũ"
-            } catch {
-                Write-Warn "Loi khi go: $($_.Exception.Message)"
+            if ($oiExisting) {
+                try {
+                    $oiExisting.Uninstall() | Out-Null
+                    Start-Sleep -Seconds 5
+                    Write-Ok "Da go OrgInventory Agent cu"
+                } catch {
+                    Write-Warn "Loi khi go: $($_.Exception.Message)"
+                }
             }
         }
 
@@ -271,12 +275,14 @@ if (-not $SkipVelociraptor) {
     if (-not $vrInstalled -or $ForceReinstall) {
         if ($ForceReinstall -and $vrInstalled) {
             Write-Info "ForceReinstall = true → go MSI cu truoc..."
-            try {
-                $vrExisting.Uninstall() | Out-Null
-                Start-Sleep -Seconds 3
-                Write-Ok "Đã g� Velociraptor cũ"
-            } catch {
-                Write-Warn "Loi khi go: $($_.Exception.Message)"
+            if ($vrExisting) {
+                try {
+                    $vrExisting.Uninstall() | Out-Null
+                    Start-Sleep -Seconds 3
+                    Write-Ok "Da go Velociraptor cu"
+                } catch {
+                    Write-Warn "Loi khi go: $($_.Exception.Message)"
+                }
             }
         }
 
