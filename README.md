@@ -1,89 +1,203 @@
-# IT Asset Inventory — Hệ thống quản lý tài sản máy tính (Agent – Server)
+# IT Asset Inventory
 
-> **Đơn vị phát triển:** Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh  
-> **Mục đích:** Quản lý tài sản CNTT, kiểm kê cấu hình phần cứng, danh mục phần mềm và đánh giá an toàn thông tin (Security Posture) phục vụ công tác bảo đảm an ninh mạng và an toàn thông tin trong các cơ quan, đơn vị.  
+Hệ thống quản lý tài sản CNTT theo mô hình **Agent – Server**, dùng để kiểm kê phần cứng, phần mềm, trạng thái an toàn thông tin và hỗ trợ điều tra số tập trung.
 
-Mô hình Agent – Server, dữ liệu sống realtime, định danh đa nguồn, bảo mật mTLS, agent Windows read-only zero-GUI.
-Căn cứ thiết kế: [`KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md`](KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md) v1.2 · [`PLAN_THUC_HIEN.md`](PLAN_THUC_HIEN.md) v1.3 · hợp đồng API: [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) · vận hành: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+> **Đơn vị phát triển:** Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh.
 
-## Cấu trúc repo (mono)
+## Tổng quan
 
-| Thư mục | Thành phần | Công nghệ | Trạng thái |
-|---|---|---|---|
-| `server/` | API Server + nginx + step-ca | FastAPI (Python 3.12), PostgreSQL 16, Redis 7 | ✅ Hoàn chỉnh — 68/68 test |
-| `portal/` | Portal quản trị | Next.js 16 (App Router, TypeScript, Tailwind), BFF proxy | ✅ Hoàn chỉnh — build xanh |
-| `agent/` | Agent Windows + Linux | C# .NET 8 Windows Service / Linux systemd | ✅ Hoàn chỉnh — build 0 lỗi, e2e với schema server thật; .deb/.rpm packaging cho Ubuntu/RHEL |
-| `deploy/` | Helper dev (cert, step-ca, env, velociraptor) | — | ✅ |
-| `docs/` | API contract, runbook | — | ✅ |
+Repository này là monorepo gồm ba thành phần chính:
 
-> **Compose canonical nằm ở `server/deploy/docker-compose.yml`** (postgres :5432, redis :6381, api :8000, nginx :443/:9443). Nginx 2 server block: agent mTLS (9443) + portal (443) — xem `server/deploy/nginx/nginx.conf`.
+- **API Server:** FastAPI, PostgreSQL, Redis, Alembic; cung cấp API cho agent và portal.
+- **Portal quản trị:** Next.js App Router, TypeScript, React và Tailwind CSS; sử dụng mô hình BFF để giữ JWT trong cookie `httpOnly`.
+- **Agent:** .NET 8 cho Windows Service và Linux systemd; thu thập dữ liệu theo hướng read-only, hỗ trợ mTLS, lưu tạm khi mất mạng và đồng bộ cấu hình từ server.
 
-## Chạy nhanh (dev)
-
-```bash
-# 1. Khởi động hạ tầng (PostgreSQL + Redis + API)
-cd server && cp .env.example .env   # sửa secret trước khi chạy
-cd server/deploy && docker compose up -d postgres redis   # DB :5432, Redis :6381
-
-# 2. Migration + chạy API
-cd server && .venv/bin/pip install -e ".[dev]"
-alembic upgrade head
-uvicorn app.main:app --reload        # → http://127.0.0.1:8000/docs
-
-# 3. Portal
-cd portal && pnpm install && pnpm dev   # → http://localhost:3003
-
-# 4. Tạo chứng chỉ dev tạm (nếu cần mTLS demo)
-bash deploy/certs/gen-dev-certs.sh
+```mermaid
+flowchart LR
+    WA[Windows Agent] -->|enroll, mTLS, heartbeat, inventory| NX[nginx]
+    LA[Linux Agent] -->|enroll, mTLS, heartbeat, inventory| NX
+    UI[Next.js Portal] -->|BFF / JWT / WebSocket| API[FastAPI]
+    NX --> API
+    API --> PG[(PostgreSQL)]
+    API --> RD[(Redis)]
+    API -. tùy chọn .-> VR[Velociraptor]
+    API -. tùy chọn .-> LLM[Ollama / OpenAI-compatible LLM]
 ```
 
-Tài khoản seed mặc định: `admin@example.gov.vn` (xem `server/.env` → `SEED_ADMIN_*`).
+## Tính năng chính
 
-## Đồng bộ GitHub & CI
+- Enroll agent bằng token dùng một lần; heartbeat, inventory, gia hạn chứng chỉ và rescan từ xa.
+- Kiểm kê CPU, RAM, ổ đĩa, mạng, hệ điều hành, phần mềm, startup, cổng mạng và security posture.
+- Dashboard realtime, thống kê cấu hình, vòng đời tài sản, máy mất kết nối, EOL, tag và so sánh thay đổi fingerprint.
+- Quản lý người dùng và phân quyền theo cây tổ chức (`super_admin`, `org_admin`, `viewer`).
+- 2FA TOTP, JWT access/refresh token, audit log hash chain, mã hóa AES-256-GCM và API key cho tích hợp ngoài.
+- Xuất báo cáo Excel/PDF, thông báo, alert rule và import dữ liệu từ máy cách ly.
+- Tích hợp Velociraptor cho DFIR; hỗ trợ phân tích bằng LLM cục bộ hoặc API tương thích OpenAI.
 
-Repo git đã khởi tạo (nhánh `main`, đã loại cache: node_modules/.next/.venv/bin/obj/.nuget-packages/.env).
+## Cấu trúc repository
+
+| Đường dẫn | Nội dung |
+|---|---|
+| [`server/`](server/) | FastAPI, model dữ liệu, migration, background services và Docker Compose cho hạ tầng |
+| [`portal/`](portal/) | Portal Next.js, BFF route handlers và giao diện quản trị |
+| [`agent/`](agent/) | Agent .NET 8, test, MSI và package Linux `.deb`/`.rpm` |
+| [`deploy/`](deploy/) | Chứng chỉ dev, step-ca và stack Velociraptor |
+| [`docs/`](docs/) | API contract, schema inventory, runbook và tài liệu DFIR/LLM |
+| [`build-all.sh`](build-all.sh) | Kiểm tra build cả server, agent và portal |
+
+## Yêu cầu phát triển
+
+- Python **3.12+**
+- Node.js **22+** và npm
+- .NET SDK **8.0**
+- Docker Engine và Docker Compose plugin
+- PostgreSQL 16 và Redis 7 có thể chạy bằng Docker, không cần cài trực tiếp
+
+Chỉ cần Python, Node.js và Docker nếu chưa phát triển agent.
+
+## Chạy nhanh môi trường dev
+
+### 1. Khởi động PostgreSQL và Redis
+
+Từ thư mục gốc của repository:
 
 ```bash
-# 1. Tạo repo trên GitHub (khuyến nghị Private), rồi:
-git remote add origin git@github.com:<USER>/<REPO>.git
-git push -u origin main
-
-# 2. CI chạy tự động mỗi push/PR (xem .github/workflows/ci.yml):
-#    - Server: pytest (68 tests, có Postgres service) + ruff
-#    - Agent:  dotnet build trên Ubuntu + Windows
-#    - Portal: npm run typecheck + build
+docker compose -f server/deploy/docker-compose.yml up -d postgres redis
 ```
 
-**Phát triển agent trên Windows (theo yêu cầu):**
-1. Clone repo trên máy Windows: `git clone <repo> && cd agent`
-2. Mở `agent/OrgInventoryAgent.sln` (cần .NET 8 SDK) hoặc `dotnet build -c Release`
-3. Build MSI: `.\installer\build-msi.ps1 -Sign -CertificateThumbprint <thumb>` (cần WiX v4: `dotnet tool install --global wix`)
-4. Cài thử: `msiexec /i OrgInventoryAgent.msi /qn ENROLL_TOKEN="t_..." ENDPOINTS="https://agent.gov.vn"` (admin)
-5. Debug không cần MSI: `OrgInventoryAgent.exe --data-dir C:\temp\at --endpoint https://... --enroll-token ... --once`
-6. Log: `%ProgramData%\OrgInventory\logs\agent.log` · config: `%ProgramData%\OrgInventory\config.json`
-7. Mỗi commit agent → push → job CI "Agent C# (dotnet build)" chạy trên cả Ubuntu lẫn Windows tự xác nhận build xanh.
+PostgreSQL lắng nghe tại `localhost:5432`; Redis được expose tại `localhost:6381`.
 
-**Phát triển agent trên Linux (Ubuntu/Debian + RHEL/Rocky):**
-
-1. Clone repo trên máy Linux: `git clone <repo> && cd agent`
-2. Mở `OrgInventoryAgent.sln` (cần .NET 8 SDK) hoặc `dotnet build -c Release`
-3. Build package: `bash installer/linux/build-deb.sh linux-x64` (cần `dpkg-deb`) hoặc `bash installer/linux/build-rpm.sh linux-x64` (cần `rpmbuild`)
-4. Cài thử: `sudo dpkg -i dist/orginventory-agent_1.1.0_amd64.deb` rồi `sudo bash installer/linux/postinstall-enable.sh` (tự verify helper + enable service)
-5. Debug không cần package: `dotnet run --project linux/src/OrgInventoryAgent.Linux -- --data-dir /tmp/at --print-inventory` (xem v4 envelope JSON)
-6. Log: `/var/log/orginventory/agent.log` · config: `/etc/orginventory/config.json` (mode 0640, group `orginventory`)
-7. Mỗi commit agent → push → job CI build cả Windows lẫn Linux tự xác nhận build xanh.
-
-## Test
+### 2. Cấu hình và chạy API
 
 ```bash
-cd server && .venv/bin/pytest -q          # 68 tests (cần PG test trên localhost:5432)
-cd portal && pnpm typecheck && pnpm build
-cd agent && dotnet build -c Release       # 0 lỗi trên Linux; e2e: python3 tools/mock_server.py + agent --once
+cd server
+cp .env.example .env
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/alembic upgrade head
+.venv/bin/uvicorn app.main:app --reload
 ```
 
-## Tính năng đã có (Phase 1 + một phần 2/3)
+Trước khi dùng ngoài môi trường dev, hãy thay các giá trị `CHANGE_ME` trong `server/.env`. Có thể kiểm tra API tại:
 
-- **Agent kênh:** enroll (token 1 lần → mTLS), heartbeat ~30s±8s jitter, inventory, renew cert tự động, `GET /api/agent/config` (config-driven), on-demand rescan, audit log hash chain.
-- **Portal:** login + 2FA TOTP (backup codes), dashboard realtime (WebSocket), quản lý máy/token (phễu triển khai, one-liner), báo cáo Excel (mask SĐT), xác nhận tuân thủ pháp lý, audit, cây tổ chức UBND xã, self-service enroll (`/enroll/[code]`), alerts/drifts/EOL/offline-import.
-- **DFIR (Velociraptor):** backend tích hợp [Velociraptor](https://github.com/velocidex/velociraptor) — Super Admin cấu hình Velociraptor Server URL + API Token (AES-256-GCM) + **allowlist artifact** (chống lạm quyền) trên portal. Background task **5 phút/lần** tự động gọi Velociraptor `SearchClients` để đồng bộ `machine.hostname ↔ Velociraptor client_id` — **không phụ thuộc agent**. Admin chạy hunt/collect artifact từ `/dfir` hoặc từ trang máy; kết quả lưu trên Velociraptor Server, portal deep-link sang GUI. Cho phép điều tra số từ xa khi xảy ra sự cố an ninh mạng.
-- **Bảo mật:** mTLS qua nginx (X-SSL-Client-* headers), AES-256-GCM cho SĐT/TOTP seed + Velociraptor API Token, JWT httpOnly cookie + auto-refresh, RBAC theo cây org, rate-limit, `install.ps1` verify chữ ký trước khi cài.
+- Health check: <http://127.0.0.1:8000/health>
+- OpenAPI/Swagger UI: <http://127.0.0.1:8000/docs>
+
+Trong `APP_ENV=dev`, server tự seed tài khoản quản trị theo `SEED_ADMIN_*`. Mặc định trong file mẫu là:
+
+```text
+admin@example.gov.vn / ChangeMe!123
+```
+
+Hãy đổi mật khẩu ngay khi khởi tạo môi trường dùng chung.
+
+### 3. Chạy Portal
+
+Mở terminal khác:
+
+```bash
+cd portal
+cp .env.local.example .env.local
+npm ci
+npm run dev
+```
+
+Portal mặc định chạy tại <http://localhost:3000> và BFF kết nối tới `API_BASE=http://localhost:8000`.
+
+### 4. Chạy thử Agent
+
+```bash
+cd agent
+dotnet build -c Release
+dotnet run --project src/OrgInventoryAgent -c Release -- \
+  --data-dir ./tmp-data --print-fingerprint
+```
+
+Khi đã tạo enroll token trên Portal, có thể chạy agent một lần ở console. Trước đó, đặt `AGENT_SERVER_URL=http://localhost:8000` trong `server/.env` và khởi động lại API để agent tiếp tục sử dụng endpoint local sau khi enroll.
+
+```bash
+dotnet run --project src/OrgInventoryAgent -c Release -- \
+  --data-dir ./tmp-data \
+  --endpoint http://localhost:8000 \
+  --enroll-token '<TOKEN>' \
+  --once
+```
+
+Agent production được cài dưới dạng Windows Service hoặc Linux systemd service. Xem [hướng dẫn Agent](agent/README.md) và [runbook](docs/RUNBOOK.md) trước khi đóng gói/triển khai.
+
+## Cấu hình quan trọng
+
+Server đọc cấu hình từ `server/.env`; Portal đọc từ `portal/.env.local`.
+
+| Biến | Ý nghĩa |
+|---|---|
+| `DATABASE_URL` | Kết nối PostgreSQL async qua `asyncpg` |
+| `REDIS_URL` | Redis cho trạng thái online và realtime pub/sub |
+| `SECRET_KEY` | Khóa ký JWT |
+| `DATA_ENCRYPTION_KEY` | Khóa mã hóa dữ liệu nhạy cảm |
+| `CA_MODE` | `local` cho dev/test; `stepca` cho CA nội bộ |
+| `AGENT_SERVER_URL` | URL công khai agent sử dụng sau enroll |
+| `PORTAL_URL` | URL công khai của Portal |
+| `HEARTBEAT_INTERVAL_SECONDS` | Chu kỳ heartbeat do server phân phối cho agent |
+| `VELOCIRAPTOR_ENABLED` | Bật tích hợp DFIR Velociraptor |
+| `LLM_ENABLED` | Bật trợ lý phân tích DFIR bằng LLM |
+| `API_BASE` | Backend FastAPI mà BFF của Portal sử dụng |
+
+Danh sách đầy đủ và giá trị mẫu nằm trong [`server/.env.example`](server/.env.example) và [`portal/.env.local.example`](portal/.env.local.example).
+
+## Kiểm tra chất lượng
+
+Chạy riêng từng thành phần:
+
+```bash
+# Server
+(cd server && .venv/bin/ruff check app && .venv/bin/pytest -q)
+
+# Portal
+(cd portal && npm run typecheck && npm run build)
+
+# Agent
+(cd agent && dotnet test -c Release && dotnet build -c Release)
+```
+
+Hoặc kiểm tra build toàn repository:
+
+```bash
+./build-all.sh
+```
+
+GitHub Actions tự động chạy lint/test server, build agent trên Linux và Windows, sau đó typecheck/build Portal cho mỗi push hoặc pull request vào `main`.
+
+## Triển khai
+
+File [`server/deploy/docker-compose.yml`](server/deploy/docker-compose.yml) cung cấp PostgreSQL, Redis, API, nginx và profile step-ca. Trong dev, nên dùng Compose cho PostgreSQL/Redis và chạy API/Portal từ source như phần quick start.
+
+Triển khai production cần chuẩn bị thêm:
+
+- image API và artifact Agent đã được build/ký;
+- TLS server, client CA, CRL và step-ca;
+- secret từ secret manager/Vault thay cho file mẫu;
+- volume bền vững, backup PostgreSQL và quy trình restore;
+- domain tách biệt cho Portal và kênh mTLS của Agent;
+- `REQUIRE_AGENT_MTLS_HEADER=true` khi FastAPI đặt sau nginx đã xác thực client certificate.
+
+Không dùng nguyên cấu hình dev hoặc các secret mặc định cho production.
+
+## Tài liệu
+
+- [API contract](docs/API_CONTRACT.md)
+- [Runbook triển khai và vận hành](docs/RUNBOOK.md)
+- [Schema inventory v4](docs/INVENTORY_V4_SCHEMA.md)
+- [Payload inventory của Agent](docs/AGENT_INVENTORY_PAYLOAD_SPEC.md)
+- [Cơ chế đồng bộ cấu hình Agent](docs/AGENT_CONFIG_SYNC.md)
+- [Cài đồng thời OrgInventory Agent và Velociraptor](docs/INSTALL_BOTH_AGENTS.md)
+- [Tổng quan LLM cho DFIR](docs/llm-dfir/00_TONG_QUAN.md)
+- [Thiết kế hệ thống](KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md)
+- [Kế hoạch thực hiện](PLAN_THUC_HIEN.md)
+
+## Ghi chú bảo mật
+
+- Không commit `.env`, private key, client certificate, token enroll, backup code 2FA hoặc artifact điều tra.
+- Private key của agent được sinh và lưu tại máy trạm; không gửi lên server.
+- Endpoint Agent production phải đi qua reverse proxy mTLS; Portal dùng TLS thông thường kèm JWT/RBAC.
+- Chỉ cho phép các Velociraptor artifact trong allowlist và luôn duy trì audit log cho thao tác DFIR.
