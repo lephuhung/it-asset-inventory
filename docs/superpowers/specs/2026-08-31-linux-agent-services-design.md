@@ -183,15 +183,19 @@ var snapshot = provider.CollectSnapshot(); // flat fields
 
 ### 4.2. Flow mới trong `install.sh.j2`
 
+> `install.sh.j2` là **canonical** — one-liner `curl -fsSL <portal>/i/<token> | sudo bash` render template này và **đã cài đủ 2 agent trong 1 lần** (OrgInventory bước 1–9 + Velociraptor bước 10 mặc định bật). Do đó xóa `install-both.sh` (mục 4.4) **không mất khả năng cài 2 agent cùng lúc**.
+
 ```
 Bước 1 — Detect trạng thái:
   OI_INSTALLED = binary /opt/orginventory/OrgInventoryAgent tồn tại
                  AND service orginventory-agent tồn tại
   VR_INSTALLED = package velociraptor-client (dpkg/rpm) tồn tại
                  AND service velociraptor_client tồn tại
+  FORCE_REINSTALL = 0 (mặc định); bật khi user truyền `--force` (hoặc env
+                    INSTALL_FORCE=1) → buộc cài đè binary/package dù đã có
 
 Bước 2 — OrgInventory:
-  NẾU OI_INSTALLED:
+  NẾU OI_INSTALLED VÀ KHÔNG force:
       KHÔNG tải binary, KHÔNG tạo lại user/unit (idempotent)
       Chỉ: MERGE /etc/orginventory/config.json — giữ nguyên identity (enrolled,
         machineId, clientCertThumbprint, certStoreLocation, các interval đã sync),
@@ -207,21 +211,28 @@ Bước 2 — OrgInventory:
       (có sẵn trên Ubuntu/RHEL): đọc JSON cũ → chỉ thay `endpoints` (+`enroll_token`)
       → giữ mọi field khác → ghi lại. Fallback jq nếu không có python3; nếu cả 2 đều
       không có → cảnh báo + ghi đè (chấp nhận re-enroll).
-  NẾU CHƯA CÀI:
+  NẾU CHƯA CÀI HOẶC force:
       Flow cài mới như hiện tại (download + SHA256 + systemd units + config)
+      (force: stop service → thay binary mới → restart)
 
 Bước 3 — Velociraptor:
-  NẾU VR_INSTALLED:
+  NẾU VR_INSTALLED VÀ KHÔNG force:
       KHÔNG tải package (~100MB), KHÔNG dpkg/dnf reinstall
       Chỉ: cập nhật /etc/velociraptor/client.config.yaml
             chmod 0640
             systemctl restart velociraptor_client
-  NẾU CHƯA CÀI:
+  NẾU CHƯA CÀI HOẶC force:
       Flow cài mới như hiện tại
+      (force: stop service → remove package cũ → cài lại → update config)
 
 Bước 4 — Bắt buộc đủ 2:
   BỎ flag SKIP_VELOCIRAPTOR (trái nguyên tắc "bắt buộc đủ 2 agent")
   Nếu 1 trong 2 fail → exit 1, log rõ agent nào fail
+
+Cách dùng (1 lệnh):
+  curl -fsSL <portal>/i/<token> | sudo bash            # cài mới / reinstall config-only
+  curl -fsSL <portal>/i/<token> | sudo bash -s -- --force  # buộc cài đè binary/package
+  curl -fsSL <portal>/i/<token> | sudo INSTALL_FORCE=1 bash  # tương đương --force
 ```
 
 ### 4.3. Edge cases reinstall
@@ -229,6 +240,7 @@ Bước 4 — Bắt buộc đủ 2:
 | Tình huống | Xử lý |
 |---|---|
 | Cả 2 đã cài, chạy lại script | Chỉ update 2 config files + restart. Không download. |
+| Cả 2 đã cài, chạy lại với `--force` | Cài đè binary/package + merge config + restart (dùng khi binary/package hư) |
 | OI cài rồi, VR chưa | Update config OI + cài mới VR |
 | VR cài rồi, OI chưa | Cài mới OI + update config VR |
 | OI đã enroll cũ (config có enrolled=true + cert còn) | Merge config giữ `enrolled`/`machineId`/`clientCertThumbprint`; token mới trong config **không kích hoạt re-enroll** (cert + machine_id còn → `IsEnrolled` true). Máy giữ identity. |
@@ -236,7 +248,8 @@ Bước 4 — Bắt buộc đủ 2:
 
 ### 4.4. `install-both.sh` — XÓA
 
-- Lý do: broken (3 lỗi bash), trùng 100% chức năng với `install.sh.j2` sau khi hoàn thiện (canonical one-liner `/i/<token>` đã là lệnh Portal copy cho user).
+- Lý do: broken (3 lỗi bash), trùng 100% chức năng với `install.sh.j2` sau khi hoàn thiện.
+- `install.sh.j2` **đã đảm bảo cài đủ 2 agent trong 1 lệnh** (OrgInventory + Velociraptor, mục 4.2) + smart reinstall (config-only, `--force` để cài đè) → không mất khả năng sau khi xóa.
 - Xóa: `server/app/templates/install-both.sh`, route `GET /download/install-both.sh` trong `downloads.py`, references trong docs/code.
 
 ---
@@ -272,7 +285,8 @@ Sửa test scaffold (mục 3.1) + thêm test mới cho:
 - Test logic reinstall trong container/máy thật `AI` (Ubuntu 24.04):
   1. Cài lần 1 → cả 2 service active
   2. Chạy lại script → chỉ update config, không re-download (log "đã cài → update config")
-  3. `--force-reinstall`? (mục 2.5 install-both.sh có flag này — install.sh.j2 hiện không có; không thêm — yêu cầu "không xóa/cài đè")
+  3. Chạy lại với `--force` → cài đè binary/package mới + config merge + restart
+  4. Verify config sau merge: `enrolled`/`machineId`/`clientCertThumbprint` còn nguyên (không re-enroll)
 
 ### 6.3. Server tests
 
@@ -287,7 +301,7 @@ cd server && .venv/bin/pytest -q   # giữ xanh (sau khi xóa install-both.sh ro
 - [ ] `dotnet build` + `dotnet test` solution `agent/linux` xanh (test scaffold sửa + mới)
 - [ ] Linux agent chạy service mode: heartbeat ± jitter, inventory 24h (hoặc interval server trả), config sync 6h, renew <70%
 - [ ] Payload inventory: envelope v4 đầy đủ (agent.name/runtime/architecture/package_type đúng; os.kernel_version) — verify DB query trên máy `AI`
-- [ ] `install.sh.j2`: cài mới đủ 2 agent; reinstall chỉ update config + restart; bỏ `SKIP_VELOCIRAPTOR`
+- [ ] `install.sh.j2`: cài mới đủ 2 agent; reinstall chỉ merge config + restart; bỏ `SKIP_VELOCIRAPTOR`; hỗ trợ `--force` cài đè
 - [ ] `install-both.sh` + route `/download/install-both.sh` đã xóa; không còn reference
 - [ ] `server/.venv/bin/pytest -q` xanh
 - [ ] `INVENTORY_V4_SCHEMA.md` cập nhật trạng thái (Linux agent hoàn thiện, done checklist)
