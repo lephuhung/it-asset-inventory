@@ -129,8 +129,3 @@ public sealed class RenewService : BackgroundService
     }
 }
 
-// TODO Task 4: thay bằng EnrollCoordinator thật
-public sealed class EnrollCoordinator
-{
-    public Task<bool> EnsureEnrolledAsync(CancellationToken ct) => Task.FromResult(true);
-}
