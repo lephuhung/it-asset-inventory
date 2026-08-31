@@ -43,16 +43,16 @@ log_warn()  { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
 
 # ── Detect trạng thái ────────────────────────────────────────────
 OI_INSTALLED=0
-if [[ -x /opt/orginventory/OrgInventoryAgent ]] && systemctl list-unit-files orginventory-agent.service >/dev/null 2>&1; then
+if [[ -x /opt/orginventory/OrgInventoryAgent ]] && systemctl cat orginventory-agent.service >/dev/null 2>&1; then
     OI_INSTALLED=1
 fi
 VR_INSTALLED=0
 if (dpkg -l velociraptor-client >/dev/null 2>&1 || rpm -q velociraptor-client >/dev/null 2>&1) \
-   && systemctl list-unit-files velociraptor_client.service >/dev/null 2>&1; then
+   && systemctl cat velociraptor_client.service >/dev/null 2>&1; then
     VR_INSTALLED=1
 fi
 
-# ── Merge config: giữ identity (enrolled/machineId/thumbprint), chỉ thay endpoints + enroll_token ──
+# ── Merge config: giữ identity (enrolled/machineId/thumbprint), chỉ thay endpoints (giữ identity) ──
 merge_oi_config() {
     local cfg=/etc/orginventory/config.json
     mkdir -p /etc/orginventory
