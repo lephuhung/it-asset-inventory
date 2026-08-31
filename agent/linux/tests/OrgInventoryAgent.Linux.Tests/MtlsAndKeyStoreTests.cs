@@ -46,7 +46,10 @@ public class MtlsAndKeyStoreTests : IDisposable
         using var key = CsrGenerator.CreateKeyPair();
         Assert.NotNull(key);
         var parameters = key.ExportParameters(false);
-        Assert.Equal("nistP256", parameters.Curve.Oid.FriendlyName);
+        // Linux/OpenSSL trả "ECDSA_P256", Windows/.NET trả "nistP256" — platform-dependent
+        Assert.True(
+            parameters.Curve.Oid.FriendlyName is "nistP256" or "ECDSA_P256",
+            $"Unexpected curve friendly name: {parameters.Curve.Oid.FriendlyName}");
 
         var csrPem = CsrGenerator.CreateCsrPem(key, "machine-test-uuid");
         Assert.StartsWith("-----BEGIN CERTIFICATE REQUEST-----", csrPem.Trim());

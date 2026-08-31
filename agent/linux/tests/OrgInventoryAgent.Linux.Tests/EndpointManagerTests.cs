@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using OrgInventoryAgent.Core;
 using OrgInventoryAgent.Linux;
 using OrgInventoryAgent.Core.Net;
 using Xunit;
