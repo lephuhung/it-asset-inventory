@@ -68,17 +68,21 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """
     import base64
 
+    # Tải script install-both.ps1 thẳng vào memory (ScriptBlock) — KHÔNG ghi file.
+    # Tránh AV quarantine file .ps1 mới tải về + tránh ExecutionPolicy chặn invoke.
     script = (
         f'$env:ORGINV_ALLOW_UNSIGNED="1";'
         f'$t="{token}";'
         f'$p="{portal_url}";'
         f'$e="{agent_server_url}";'
-        f'$s=Join-Path $env:TEMP ("install-both-" + $t + ".ps1");'
-        f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1...";'
-        f'try {{ irm "$p/download/install-both.ps1" -OutFile $s -ErrorAction Stop }} catch {{ Write-Host "ERR: Khong tai duoc script - ${{$_.Exception.Message}}"; exit 1 }};'
-        f'if (-not (Test-Path $s)) {{ Write-Host "ERR: Script khong duoc luu tai $s"; exit 1 }};'
-        f'Write-Host "Script da luu ($((Get-Item $s).Length) bytes). Chay...";'
-        f'& $s -Token $t -PortalUrl $p -Endpoint $e'
+        f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1 (in-memory)...";'
+        f'try {{'
+        f'  $src = irm "$p/download/install-both.ps1" -UseBasicParsing -ErrorAction Stop;'
+        f'  if ($null -eq $src) {{ Write-Host "ERR: irm tra ve null"; exit 1 }};'
+        f'  Write-Host ("Script da tai (" + $src.Length + " bytes). Chay...");'
+        f'  $sb = [ScriptBlock]::Create($src);'
+        f'  & $sb -Token $t -PortalUrl $p -Endpoint $e'
+        f'}} catch {{ Write-Host ("ERR: " + $_.Exception.Message); exit 1 }}'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     # -ExecutionPolicy Bypass: chạy script .ps1 bất chấp policy hệ thống

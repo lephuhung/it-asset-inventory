@@ -56,17 +56,23 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     """
     import base64
 
+    # Tải MSI thẳng vào memory (đọc stream bytes), verify SHA256, lưu ra file.
+    # Tránh AV quarantine + ExecutionPolicy.
     script = (
         f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
-        f'$m=Join-Path $env:TEMP ("agent-" + $t + ".msi");'
         f'Write-Host "Tai MSI tu {portal_url}/download/agent.msi...";'
-        f'try {{ irm "{portal_url}/download/agent.msi" -OutFile $m -ErrorAction Stop }} catch {{ Write-Host "ERR: Khong tai duoc MSI - ${{$_.Exception.Message}}"; exit 1 }};'
-        f'if (-not (Test-Path $m)) {{ Write-Host "ERR: MSI khong duoc luu tai $m"; exit 1 }};'
-        f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
-        f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
-        f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
-        f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
+        f'try {{'
+        f'  $msiBytes = irm "{portal_url}/download/agent.msi" -UseBasicParsing -ErrorAction Stop;'
+        f'  if ($null -eq $msiBytes) {{ Write-Host "ERR: irm tra ve null"; exit 1 }};'
+        f'  $shaExpected = (irm "{portal_url}/download/agent.msi.sha256" -UseBasicParsing).Trim().ToLower();'
+        f'  $shaActual = (Get-FileHash -InputStream $msiBytes -Algorithm SHA256).Hash.ToLower();'
+        f'  if($shaExpected -ne $shaActual){{Write-Host "LOI: SHA256 khong khop";exit 1}};'
+        f'  $m=Join-Path $env:TEMP ("agent-" + $t + ".msi");'
+        f'  [IO.File]::WriteAllBytes($m, $msiBytes);'
+        f'  Write-Host "MSI verified (sha256 ok), cai bang msiexec...";'
+        f'  msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
+        f'}} catch {{ Write-Host ("ERR: " + $_.Exception.Message); exit 1 }}'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
