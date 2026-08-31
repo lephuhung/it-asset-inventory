@@ -112,7 +112,8 @@ ProtectSystem=strict
 PrivateTmp=yes
 ProtectHome=yes
 RestrictSUIDSGID=yes
-MemoryDenyWriteExecute=yes
+# MemoryDenyWriteExecute=yes TẮT: .NET 8 cần JIT (ghi memory rồi thực thi) — chặn sẽ SEGV.
+MemoryDenyWriteExecute=no
 ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
 
 [Install]

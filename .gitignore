@@ -49,3 +49,4 @@ portal-dev.log
 
 # ── Local git worktrees ──
 .worktrees/
+/logs/
