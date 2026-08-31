@@ -109,6 +109,26 @@ async def download_agent_linux():
     )
 
 
+@router.get("/agent-{rid}", response_class=FileResponse)
+async def download_agent_linux_dynamic(rid: str):
+    """Generic download cho OrgInventoryAgent binary theo RID (linux-x64 / linux-arm64).
+
+    File phải đặt tại `OrgInventoryAgent-{rid}` trong `agent_msi_dir`.
+    Build script `installer/linux/build-linux.sh` publish vào `agent/dist/{rid}/OrgInventoryAgent`
+    rồi copy sang `server/agent_dist/`.
+    """
+    if rid not in ("linux-x64", "linux-arm64"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"RID không hỗ trợ: {rid}")
+    filename = f"OrgInventoryAgent-{rid}"
+    path = _safe_resolve(filename)
+    _ensure_exists(path)
+    return FileResponse(
+        path,
+        media_type="application/octet-stream",
+        filename=filename,
+    )
+
+
 @router.get("/install-offline.ps1", response_class=PlainTextResponse)
 async def download_install_offline_script():
     """Trả về `install-offline.ps1` — wrapper cài cho máy cách ly (KHÔNG cần mạng).

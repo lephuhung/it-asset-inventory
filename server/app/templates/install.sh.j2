@@ -7,11 +7,12 @@
 #   curl -fsSL {{ portal_url }}/i/{{ token }} | sudo bash
 #
 # Flow:
-#   1. Phát hiện distro (Ubuntu/Debian/RHEL/Rocky) + architecture (x64/arm64)
-#   2. Tải .deb hoặc .rpm tương ứng + verify SHA256
-#   3. Cài package qua apt / dnf
-#   4. Ghi /etc/orginventory/config.json (token, endpoints, data_dir)
-#   5. Enable + start systemd service
+#   1. Phát hiện distro + architecture
+#   2. Tải binary self-contained OrgInventoryAgent (single-file .NET 8) + SHA256
+#   3. Tạo user/group orginventory, thư mục data/log/run
+#   4. Cài binary + helper, tạo systemd service (orginventory-agent + helper socket)
+#   5. Ghi /etc/orginventory/config.json với token + endpoints
+#   6. Enable + start services
 # ============================================================================
 set -euo pipefail
 
@@ -46,46 +47,122 @@ case "$ARCH" in
     *) log_fail "Kiến trúc không hỗ trợ: $ARCH"; exit 1 ;;
 esac
 
-case "${ID:-}" in
-    ubuntu|debian) PKG_EXT="deb" ;;
-    rhel|rocky|almalinux|centos|fedora) PKG_EXT="rpm" ;;
-    *) log_fail "Distro không hỗ trợ: ${ID:-unknown}"; exit 1 ;;
-esac
-
-PKG_URL="$PORTAL_URL/download/linux/$TOKEN/orginventory-agent-1.1.0-$RID.$PKG_EXT"
-SHA_URL="$PORTAL_URL/download/linux/$TOKEN/pkg.sha256"
-
-log_step "Phát hiện: $ID $VERSION_ID ($ARCH) → $PKG_EXT"
-
-# ── 3. Tải package + verify SHA256 ───────────────────────────────────────
+# ── 3. Tải binary self-contained + SHA256 ───────────────────────────────
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-log_step "Tải $PKG_URL ..."
-if ! curl -fsSL --max-time 60 -o "$TMP/pkg.$PKG_EXT" "$PKG_URL"; then
-    log_fail "Không tải được package. Kiểm tra URL và token."
+BINARY_URL="$PORTAL_URL/download/agent-$RID"
+BINARY_PATH="/opt/orginventory/OrgInventoryAgent"
+HELPER_PATH="/opt/orginventory/orginventory-helper"
+
+log_step "Phát hiện: $ID $VERSION_ID ($ARCH)"
+log_step "Tải binary từ $BINARY_URL ..."
+
+if ! curl -fsSL --max-time 120 -o "$TMP/OrgInventoryAgent" "$BINARY_URL"; then
+    log_fail "Không tải được binary. Kiểm tra URL và token."
     exit 1
 fi
+chmod 0755 "$TMP/OrgInventoryAgent"
+log_ok "Đã tải $(du -h "$TMP/OrgInventoryAgent" | cut -f1)"
 
-EXPECTED="$(curl -fsSL --max-time 30 "$SHA_URL" | awk '{print $1}')"
-ACTUAL="$(sha256sum "$TMP/pkg.$PKG_EXT" | awk '{print $1}')"
-if [[ -z "$EXPECTED" || "$EXPECTED" != "$ACTUAL" ]]; then
-    log_fail "SHA256 không khớp. Dừng cài (an toàn)."
-    log_fail "  expected: $EXPECTED"
-    log_fail "  actual:   $ACTUAL"
-    exit 1
+# Tải helper (cùng binary — chỉ đổi tên)
+cp "$TMP/OrgInventoryAgent" "$TMP/orginventory-helper"
+chmod 0755 "$TMP/orginventory-helper"
+
+# ── 4. Tạo user/group + thư mục ────────────────────────────────────────
+log_step "Tạo user orginventory và thư mục..."
+
+if ! getent group orginventory >/dev/null; then
+    groupadd --system orginventory
 fi
-log_ok "SHA256 verified"
-
-# ── 4. Cài package ────────────────────────────────────────────────────────
-if [[ "$PKG_EXT" == "deb" ]]; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y "$TMP/pkg.deb"
-else
-    dnf install -y "$TMP/pkg.rpm"
+if ! getent passwd orginventory >/dev/null; then
+    useradd --system --no-create-home --home "$DATA_DIR" --gid orginventory orginventory
 fi
 
-# ── 5. Ghi /etc/orginventory/config.json ──────────────────────────────────
-mkdir -p /etc/orginventory
+mkdir -p "$DATA_DIR" /var/log/orginventory /etc/orginventory /run/orginventory
+chown -R orginventory:orginventory "$DATA_DIR" /var/log/orginventory /run/orginventory
+chmod 0750 "$DATA_DIR" /var/log/orginventory /run/orginventory
+chmod 0755 /etc/orginventory
+
+# ── 5. Cài binary + helper ─────────────────────────────────────────────
+log_step "Cài binary vào /opt/orginventory..."
+mkdir -p /opt/orginventory
+install -m 0755 "$TMP/OrgInventoryAgent" "$BINARY_PATH"
+install -m 0755 "$TMP/orginventory-helper" "$HELPER_PATH"
+log_ok "Đã cài binary + helper"
+
+# ── 6. systemd units ────────────────────────────────────────────────────
+log_step "Cài systemd service..."
+
+cat > /etc/systemd/system/orginventory-agent.service <<'EOF'
+[Unit]
+Description=OrgInventory Agent (IT Asset Inventory)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orginventory
+Group=orginventory
+ExecStart=/opt/orginventory/OrgInventoryAgent --data-dir /var/lib/orginventory --config /etc/orginventory/config.json
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/orginventory-helper.socket <<'EOF'
+[Unit]
+Description=OrgInventory Helper (privileged operations socket)
+Before=orginventory-agent.service
+
+[Socket]
+ListenStream=/run/orginventory/helper.sock
+SocketMode=0660
+SocketUser=root
+SocketGroup=orginventory
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
+EOF
+
+cat > /etc/systemd/system/orginventory-helper.service <<'EOF'
+[Unit]
+Description=OrgInventory Helper (privileged operations)
+After=orginventory-helper.socket
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/orginventory/orginventory-helper
+StandardInput=socket
+StandardOutput=socket
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now orginventory-helper.socket
+log_ok "Đã cài systemd units + enable helper socket"
+
+# ── 7. Ghi /etc/orginventory/config.json ─────────────────────────────────
+log_step "Ghi /etc/orginventory/config.json..."
 cat > /etc/orginventory/config.json <<EOF
 {
   "endpoints": ["$AGENT_SERVER_URL"],
@@ -94,22 +171,24 @@ cat > /etc/orginventory/config.json <<EOF
 }
 EOF
 chmod 0640 /etc/orginventory/config.json
-chown root:orginventory /etc/orginventory/config.json 2>/dev/null || true
-log_ok "Đã ghi /etc/orginventory/config.json"
+chown root:orginventory /etc/orginventory/config.json
+log_ok "Đã ghi config.json"
 
-# ── 6. Enable + start service ────────────────────────────────────────────
-systemctl daemon-reload
-systemctl enable --now orginventory-helper.socket
-systemctl enable --now orginventory-agent.service
-
-sleep 2
-if systemctl is-active --quiet orginventory-agent.service; then
-    log_ok "Service orginventory-agent đang chạy"
+# ── 8. Enable + start service chính ──────────────────────────────────────
+log_step "Enable + start orginventory-agent.service..."
+systemctl enable orginventory-agent.service
+if systemctl start orginventory-agent.service; then
+    sleep 2
+    if systemctl is-active --quiet orginventory-agent.service; then
+        log_ok "Service orginventory-agent đang chạy"
+    else
+        log_warn "Service start fail — xem: journalctl -u orginventory-agent -n 50"
+    fi
 else
-    log_warn "Service start fail — xem: journalctl -u orginventory-agent -n 50"
+    log_warn "systemctl start fail — xem: journalctl -u orginventory-agent -n 50"
 fi
 
-# ── 7. Verify helper ──────────────────────────────────────────────────────
+# ── 9. Verify helper socket ─────────────────────────────────────────────
 if [[ -S /run/orginventory/helper.sock ]]; then
     log_ok "Helper socket /run/orginventory/helper.sock đã sẵn sàng"
 fi
