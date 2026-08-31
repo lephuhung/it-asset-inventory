@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 from jinja2 import Environment, FileSystemLoader
 from sqlalchemy import select
@@ -44,15 +44,29 @@ async def _validate_token(token: str, db: AsyncSession) -> EnrollToken:
 
 
 @router.get("/i/{token}", response_class=PlainTextResponse)
-async def render_install_script(token: str, db: AsyncSession = Depends(get_db)):
-    """Render install.ps1 đầy đủ với token nhúng — gọi bởi `irm ... | iex`.
+async def render_install_script(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Render script cài đặt phù hợp với client OS.
 
-    BOM UTF-8 được thêm vào đầu response để PowerShell nhận diện đúng encoding.
-    Template `install.ps1.j2` có chuỗi BOM ở đầu (jinja2 pass-through).
+    Auto-detect từ User-Agent header:
+    - Windows (PowerShell) → install.ps1.j2 (gọi qua `irm ... | iex`)
+    - Linux / macOS / curl / wget → install.sh.j2 (gọi qua `curl -fsSL ... | sudo bash`)
+    - Mặc định: Linux (an toàn — bash script nếu user quên `-A` flag).
+
+    BOM UTF-8 được thêm vào đầu response PowerShell để Windows nhận diện đúng encoding.
     """
     await _validate_token(token, db)
     agent_cfg = await effective_agent_config(db)
-    template = jinja_env.get_template("install.ps1.j2")
+    user_agent = (request.headers.get("user-agent") or "").lower()
+
+    # PowerShell / Windows: thường gửi User-Agent chứa 'windows' hoặc 'powershell'
+    is_windows = any(s in user_agent for s in ("windows", "powershell", "microsoft"))
+
+    template_name = "install.ps1.j2" if is_windows else "install.sh.j2"
+    template = jinja_env.get_template(template_name)
     script = template.render(
         token=token,
         portal_url=agent_cfg["portal_url"],

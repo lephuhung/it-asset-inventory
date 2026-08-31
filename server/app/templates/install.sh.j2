@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# ============================================================================
+# install.sh — Cài OrgInventory Agent trên Linux (Ubuntu/Debian + RHEL/Rocky).
+# Rendered dynamically bởi server từ token trong URL — KHÔNG cần arg dòng lệnh.
+#
+# Cách dùng (1 lệnh từ user):
+#   curl -fsSL {{ portal_url }}/i/{{ token }} | sudo bash
+#
+# Flow:
+#   1. Phát hiện distro (Ubuntu/Debian/RHEL/Rocky) + architecture (x64/arm64)
+#   2. Tải .deb hoặc .rpm tương ứng + verify SHA256
+#   3. Cài package qua apt / dnf
+#   4. Ghi /etc/orginventory/config.json (token, endpoints, data_dir)
+#   5. Enable + start systemd service
+# ============================================================================
+set -euo pipefail
+
+TOKEN="{{ token }}"
+PORTAL_URL="{{ portal_url }}"
+AGENT_SERVER_URL="{{ agent_server_url }}"
+DATA_DIR="/var/lib/orginventory"
+
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
+
+log_step()  { echo -e "${CYAN}[*] $1${NC}"; }
+log_ok()    { echo -e "  ${GREEN}[OK]${NC} $1"; }
+log_fail()  { echo -e "  ${RED}[FAIL]${NC} $1"; }
+log_warn()  { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
+
+# ── 1. Privilege check ───────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+    log_fail "Cần quyền root. Chạy lại: curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash"
+    exit 1
+fi
+
+# ── 2. Detect distro + architecture ───────────────────────────────────────
+. /etc/os-release 2>/dev/null || { log_fail "Không đọc được /etc/os-release"; exit 1; }
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64)  RID="linux-x64" ;;
+    aarch64) RID="linux-arm64" ;;
+    *) log_fail "Kiến trúc không hỗ trợ: $ARCH"; exit 1 ;;
+esac
+
+case "${ID:-}" in
+    ubuntu|debian) PKG_EXT="deb" ;;
+    rhel|rocky|almalinux|centos|fedora) PKG_EXT="rpm" ;;
+    *) log_fail "Distro không hỗ trợ: ${ID:-unknown}"; exit 1 ;;
+esac
+
+PKG_URL="$PORTAL_URL/download/linux/$TOKEN/orginventory-agent-1.1.0-$RID.$PKG_EXT"
+SHA_URL="$PORTAL_URL/download/linux/$TOKEN/pkg.sha256"
+
+log_step "Phát hiện: $ID $VERSION_ID ($ARCH) → $PKG_EXT"
+
+# ── 3. Tải package + verify SHA256 ───────────────────────────────────────
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+log_step "Tải $PKG_URL ..."
+if ! curl -fsSL --max-time 60 -o "$TMP/pkg.$PKG_EXT" "$PKG_URL"; then
+    log_fail "Không tải được package. Kiểm tra URL và token."
+    exit 1
+fi
+
+EXPECTED="$(curl -fsSL --max-time 30 "$SHA_URL" | awk '{print $1}')"
+ACTUAL="$(sha256sum "$TMP/pkg.$PKG_EXT" | awk '{print $1}')"
+if [[ -z "$EXPECTED" || "$EXPECTED" != "$ACTUAL" ]]; then
+    log_fail "SHA256 không khớp. Dừng cài (an toàn)."
+    log_fail "  expected: $EXPECTED"
+    log_fail "  actual:   $ACTUAL"
+    exit 1
+fi
+log_ok "SHA256 verified"
+
+# ── 4. Cài package ────────────────────────────────────────────────────────
+if [[ "$PKG_EXT" == "deb" ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$TMP/pkg.deb"
+else
+    dnf install -y "$TMP/pkg.rpm"
+fi
+
+# ── 5. Ghi /etc/orginventory/config.json ──────────────────────────────────
+mkdir -p /etc/orginventory
+cat > /etc/orginventory/config.json <<EOF
+{
+  "endpoints": ["$AGENT_SERVER_URL"],
+  "enroll_token": "$TOKEN",
+  "data_dir": "$DATA_DIR"
+}
+EOF
+chmod 0640 /etc/orginventory/config.json
+chown root:orginventory /etc/orginventory/config.json 2>/dev/null || true
+log_ok "Đã ghi /etc/orginventory/config.json"
+
+# ── 6. Enable + start service ────────────────────────────────────────────
+systemctl daemon-reload
+systemctl enable --now orginventory-helper.socket
+systemctl enable --now orginventory-agent.service
+
+sleep 2
+if systemctl is-active --quiet orginventory-agent.service; then
+    log_ok "Service orginventory-agent đang chạy"
+else
+    log_warn "Service start fail — xem: journalctl -u orginventory-agent -n 50"
+fi
+
+# ── 7. Verify helper ──────────────────────────────────────────────────────
+if [[ -S /run/orginventory/helper.sock ]]; then
+    log_ok "Helper socket /run/orginventory/helper.sock đã sẵn sàng"
+fi
+
+echo
+echo "============================================================"
+log_ok "Cài đặt thành công!"
+echo "============================================================"
+echo
+echo "Agent sẽ tự enroll với $AGENT_SERVER_URL trong vòng 1 chu kỳ heartbeat (~30s)."
+echo "Sau ~30s, máy sẽ hiển thị 'online' trên Portal."
+echo
+echo "Kiểm tra:"
+echo "  • Log:    tail -f $DATA_DIR/logs/agent.log  (hoặc journalctl -u orginventory-agent -f)"
+echo "  • Status: systemctl status orginventory-agent.service"
+echo "  • Helper: ls -la /run/orginventory/helper.sock"
