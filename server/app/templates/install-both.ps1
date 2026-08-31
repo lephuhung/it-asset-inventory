@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Cai dat CUNG LUC 2 agent bang 1 lenh:
     1) OrgInventory Agent  - kiem ke tai san CNTT & ATTT
@@ -13,18 +13,18 @@
 
   PHILOSOPHY: KHONG GO MSI neu khong can thiet.
 
-    - Neu OrgInventory chua cai → cai MSI moi
-    - Neu OrgInventory da cai → chi UPDATE config.json (token, endpoints) + restart service
-      (Agent doc truc tiep config.json → khong can go MSI de doi token)
-    - Tuong tu cho Velociraptor → chi UPDATE client.config.yaml
+    - Neu OrgInventory chua cai -> cai MSI moi
+    - Neu OrgInventory da cai -> chi UPDATE config.json (token, endpoints) + restart service
+      (Agent doc truc tiep config.json -> khong can go MSI de doi token)
+    - Tuong tu cho Velociraptor -> chi UPDATE client.config.yaml
 
     ForceReinstall (optional): go + cai lai MSI (chi dung khi MSI bi loi)
 
   Luong xu ly:
     [1] Kiem tra quyen Administrator
     [2] Detect trang thai 2 agent (Installed? Service Running?)
-    [3] OrgInventory: neu chua cai → cai MSI; neu da cai → update config.json
-    [4] Velociraptor: neu chua cai → cai MSI; neu da cai → update client.config.yaml
+    [3] OrgInventory: neu chua cai -> cai MSI; neu da cai -> update config.json
+    [4] Velociraptor: neu chua cai -> cai MSI; neu da cai -> update client.config.yaml
     [5] Verify ca 2 service Running + enrollment status
 #>
 [CmdletBinding()]
@@ -160,10 +160,10 @@ function Download-File([string]$Url, [string]$OutPath, [string]$Label) {
 if (-not $SkipOrgInventory) {
     Write-Step "[2/5] Cai dat / cap nhat OrgInventory Agent..."
 
-    # === Case 1: Chua cai → cai MSI moi ===
+    # === Case 1: Chua cai -> cai MSI moi ===
     if (-not $oiInstalled -or $ForceReinstall) {
         if ($ForceReinstall -and $oiInstalled) {
-            Write-Info "ForceReinstall = true → go MSI cu truoc..."
+            Write-Info "ForceReinstall = true -> go MSI cu truoc..."
             if ($oiExisting) {
                 try {
                     $oiExisting.Uninstall() | Out-Null
@@ -185,7 +185,7 @@ if (-not $SkipOrgInventory) {
             $expected = (Invoke-WebRequest -Uri "$PortalUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
             $actual = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
             if ($expected.ToLower() -ne $actual) {
-                Write-Fail "SHA256 khong khop (server: $expected, file: $actual) — dung cai dat."
+                Write-Fail "SHA256 khong khop (server: $expected, file: $actual) - dung cai dat."
                 exit 1
             }
             Write-Ok "SHA256 khop"
@@ -202,7 +202,7 @@ if (-not $SkipOrgInventory) {
             exit 1
         }
         if ($sig.Status -eq 'Valid') { Write-Ok "Chu ky hop le: $($sig.SignerCertificate.Subject)" }
-        else { Write-Warn "MSI khong ky Authenticode — bo qua vi ORGINV_ALLOW_UNSIGNED=1 (TEST mode)" }
+        else { Write-Warn "MSI khong ky Authenticode - bo qua vi ORGINV_ALLOW_UNSIGNED=1 (TEST mode)" }
 
         # msiexec
         Write-Info "Chay msiexec /qn (silent install, ENROLL_TOKEN + ENDPOINTS)..."
@@ -216,9 +216,9 @@ if (-not $SkipOrgInventory) {
         Write-Ok "MSI da cai dat thanh cong"
     }
 
-    # === Case 2: Da cai → chi UPDATE config.json ===
+    # === Case 2: Da cai -> chi UPDATE config.json ===
     else {
-        Write-Info "OrgInventory Agent da cai → chi UPDATE config.json (KHONG go MSI)"
+        Write-Info "OrgInventory Agent da cai -> chi UPDATE config.json (KHONG go MSI)"
         $cfgPath = "$env:ProgramData\OrgInventory\config.json"
         if (-not (Test-Path $cfgPath)) {
             # Tao moi neu chua co
@@ -280,10 +280,10 @@ if (-not $SkipOrgInventory) {
 if (-not $SkipVelociraptor) {
     Write-Step "[3/5] Cai dat / cap nhat Velociraptor Client..."
 
-    # === Case 1: Chua cai → cai MSI moi ===
+    # === Case 1: Chua cai -> cai MSI moi ===
     if (-not $vrInstalled -or $ForceReinstall) {
         if ($ForceReinstall -and $vrInstalled) {
-            Write-Info "ForceReinstall = true → go MSI cu truoc..."
+            Write-Info "ForceReinstall = true -> go MSI cu truoc..."
             if ($vrExisting) {
                 try {
                     $vrExisting.Uninstall() | Out-Null
@@ -311,7 +311,7 @@ if (-not $SkipVelociraptor) {
         Write-Ok "MSI da cai dat thanh cong"
     }
 
-    # === Case 2: Da cai → chi UPDATE client.config.yaml ===
+    # === Case 2: Da cai -> chi UPDATE client.config.yaml ===
     $vrDir = Join-Path $env:ProgramFiles "Velociraptor"
     $cfgDst = Join-Path $vrDir "client.config.yaml"
     if (-not (Test-Path $vrDir)) {
@@ -320,7 +320,7 @@ if (-not $SkipVelociraptor) {
     }
 
     if ($vrInstalled -and -not $ForceReinstall) {
-        Write-Info "Velociraptor da cai → chi UPDATE client.config.yaml (KHONG go MSI)"
+        Write-Info "Velociraptor da cai -> chi UPDATE client.config.yaml (KHONG go MSI)"
         $oldCfg = Get-Content $cfgDst -Raw -ErrorAction SilentlyContinue
         if ($oldCfg -match "server_urls:") {
             $oldUrls = ($oldCfg -split "`n" | Select-String -Pattern "server_urls:" -Context 0,2).ToString()
@@ -434,8 +434,8 @@ if ($allOk) {
     Write-Host "  - Velociraptor:  log: $env:ProgramFiles\Velociraptor\logs\velociraptor.log" -ForegroundColor White
     Write-Host ""
     Write-Host "Verify enroll (~30s):" -ForegroundColor Yellow
-    Write-Host "  Portal:    Tab Machines → may moi sau ~1 phut" -ForegroundColor Gray
-    Write-Host "  Velociraptor GUI: https://10.10.0.241:8889 → tab Clients" -ForegroundColor Gray
+    Write-Host "  Portal:    Tab Machines -> may moi sau ~1 phut" -ForegroundColor Gray
+    Write-Host "  Velociraptor GUI: https://10.10.0.241:8889 -> tab Clients" -ForegroundColor Gray
     exit 0
 } else {
     Write-Host "==========================================================" -ForegroundColor Yellow
