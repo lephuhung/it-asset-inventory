@@ -40,40 +40,59 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
 ];
 
 
-const OSLogo = ({ platform }: { platform: string | null | undefined }) => {
-  if (!platform) return null;
-  const p = platform.toLowerCase();
+const OSLogo = ({ platform, className = "size-3.5" }: { platform: string | null | undefined; className?: string }) => {
+  const p = (platform ?? "").toLowerCase();
+
   if (p.includes("win")) {
-    // Windows logo (4 ô vuông)
+    // Windows logo (4 ô vuông — Windows 8/10/11 mark)
     return (
-      <svg viewBox="0 0 24 24" className="inline size-3.5 align-middle" aria-label="Windows">
+      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Windows" role="img">
         <title>Windows</title>
         <path fill="#0078D4" d="M0 3.5L10.5 2v9H0zM11.5 1.9L24 0v11h-12.5zM0 12.5h10.5v9L0 20.5zM11.5 12.5H24V24l-12.5-1.9z" />
       </svg>
     );
   }
-  if (p.includes("linux") || p.includes("ubuntu") || p.includes("debian") || p.includes("rhel")) {
-    // Linux logo (Tux silhouette đơn giản hóa)
+  if (p.includes("linux") || p.includes("ubuntu") || p.includes("debian") || p.includes("rhel") || p.includes("rocky")) {
+    // Tux — con cánh cụt đơn giản (penguin silhouette). Mắt trắng + body đen.
     return (
-      <svg viewBox="0 0 24 24" className="inline size-3.5 align-middle" aria-label="Linux">
+      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Linux" role="img">
         <title>Linux</title>
-        <ellipse cx="12" cy="9" rx="4" ry="5" fill="#333" />
-        <path fill="#333" d="M9 14c0 3 1.5 5 3 5s3-2 3-5c0 0-1 1-3 1s-3-1-3-1z" />
-        <circle cx="10.5" cy="7" r="0.7" fill="#fff" />
-        <circle cx="13.5" cy="7" r="0.7" fill="#fff" />
+        {/* đầu */}
+        <ellipse cx="12" cy="9" rx="4" ry="5" fill="#000" />
+        {/* bụng trắng + cằm trắng */}
+        <ellipse cx="12" cy="10.5" rx="2.4" ry="3" fill="#fff" />
+        {/* mắt */}
+        <circle cx="10.6" cy="7.6" r="0.85" fill="#fff" />
+        <circle cx="13.4" cy="7.6" r="0.85" fill="#fff" />
+        <circle cx="10.6" cy="7.7" r="0.35" fill="#000" />
+        <circle cx="13.4" cy="7.7" r="0.35" fill="#000" />
+        {/* mỏ cam */}
+        <path fill="#F4A100" d="M11 9.6l1 0.6 1-0.6 -1 1.2z" />
+        {/* thân + chân */}
+        <path fill="#000" d="M8 13c0 4 1.8 6 4 6s4-2 4-6c0 0-1 1.2-4 1.2S8 13 8 13z" />
+        {/* chân (chỉ 2 ngón) */}
+        <ellipse cx="10" cy="20" rx="1.6" ry="0.9" fill="#F4A100" />
+        <ellipse cx="14" cy="20" rx="1.6" ry="0.9" fill="#F4A100" />
       </svg>
     );
   }
   if (p.includes("mac") || p.includes("darwin") || p.includes("osx")) {
-    // Apple logo đơn giản
+    // Apple logo (đơn giản)
     return (
-      <svg viewBox="0 0 24 24" className="inline size-3.5 align-middle" aria-label="macOS">
+      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="macOS" role="img">
         <title>macOS</title>
         <path fill="#000" d="M17.05 12.04c-.02-2.16 1.76-3.2 1.84-3.25-1-1.46-2.57-1.66-3.13-1.69-1.32-.13-2.59.78-3.27.78-.68 0-1.72-.76-2.83-.74-1.45.02-2.79.85-3.54 2.15-1.51 2.62-.39 6.5 1.08 8.62.72 1.05 1.57 2.21 2.69 2.17 1.08-.04 1.49-.7 2.79-.7 1.31 0 1.67.7 2.81.68 1.16-.02 1.9-1.06 2.61-2.11.83-1.2 1.17-2.37 1.19-2.43-.03-.01-2.27-.87-2.29-3.46zM14.95 5.84c.6-.72 1-1.73.89-2.74-.86.04-1.91.57-2.53 1.29-.55.64-1.04 1.67-.91 2.66.96.08 1.95-.49 2.55-1.21z" />
       </svg>
     );
   }
-  return null;
+  // Unknown — hiển thị chấm hỏi giúp admin biết máy chưa gửi v4 envelope.
+  return (
+    <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Unknown OS" role="img">
+      <title>Unknown OS (chưa gửi platform)</title>
+      <circle cx="12" cy="12" r="11" fill="#94a3b8" />
+      <text x="12" y="17" textAnchor="middle" fontFamily="sans-serif" fontSize="14" fontWeight="bold" fill="#fff">?</text>
+    </svg>
+  );
 };
 
 
@@ -296,16 +315,15 @@ export default function MachinesPage() {
                         <OSLogo platform={m.platform} />
                         <span>{m.hostname ?? "(chưa đặt tên)"}</span>
                         {m.velociraptor_client_id && (
-                          <Badge
-                            className="bg-violet-50 text-violet-700 ring-violet-600/20 ml-1"
+                          <span
+                            className="ml-1 inline-flex items-center gap-0.5 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700"
                             title={`DFIR: Velociraptor đã enroll\nclient_id: ${m.velociraptor_client_id}\nLast seen: ${m.velociraptor_last_seen_at || "unknown"}`}
                           >
-                            <svg viewBox="0 0 24 24" className="inline size-3 mr-0.5" aria-hidden="true">
-                              <title>Velociraptor DFIR</title>
+                            <svg viewBox="0 0 24 24" className="inline size-3" aria-hidden="true">
                               <path fill="currentColor" d="M12 2L4 6v6c0 5 3.5 9.5 8 10.5 4.5-1 8-5.5 8-10.5V6l-8-4zm0 2.2l6 3v4.8c0 4-2.7 7.7-6 8.7-3.3-1-6-4.7-6-8.7V7.2l6-3z" />
                             </svg>
                             DFIR
-                          </Badge>
+                          </span>
                         )}
                       </div>
                     </td>
