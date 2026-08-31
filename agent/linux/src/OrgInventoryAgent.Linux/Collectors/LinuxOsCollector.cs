@@ -5,6 +5,34 @@ namespace OrgInventoryAgent.Linux.Collectors;
 
 public static class LinuxOsCollector
 {
+    public static string? GetOsReleaseId()
+    {
+        try
+        {
+            foreach (var line in File.ReadAllLines("/etc/os-release"))
+            {
+                if (line.StartsWith("ID=", StringComparison.Ordinal))
+                    return line.Substring(3).Trim('"');
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static string? GetOsReleaseVersionId()
+    {
+        try
+        {
+            foreach (var line in File.ReadAllLines("/etc/os-release"))
+            {
+                if (line.StartsWith("VERSION_ID=", StringComparison.Ordinal))
+                    return line.Substring(11).Trim('"');
+            }
+        }
+        catch { }
+        return null;
+    }
+
     public static CpuInfo? GetCpu() => new()
     {
         Model = SafeRead("/proc/cpuinfo")?.Split('\n')

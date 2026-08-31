@@ -102,6 +102,14 @@ public class Program
         // Tạm thời: nếu chưa enroll, thử gọi /api/enroll 1 lần để máy xuất hiện trên Portal.
         await TryEnrollAndHeartbeatOnceAsync(dataDir, inv, fp, logger);
 
+        // Tùy chọn --send-inventory: gửi 1 inventory update ngay để server fill các trường
+        // v4 (platform, agent_version, ...). Mặc định service sẽ tự gửi inventory định kỳ
+        // (mặc định 24h), nhưng flag này tiện test / trigger ngay khi cần.
+        if (args.Length > 0 && Array.IndexOf(args, "--send-inventory") >= 0)
+        {
+            await SendInventoryOnceAsync(dataDir, inv, fp, logger);
+        }
+
         var stopSignal = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopSignal.Cancel(); };
         logger.LogInformation("Agent ready — waiting for Phase 3 services (Ctrl+C để thoát).");
@@ -235,5 +243,109 @@ public class Program
         {
             logger.LogError(ex, "Heartbeat lỗi");
         }
+    }
+
+    private static async Task SendInventoryOnceAsync(
+        string dataDir,
+        InventoryEnvelope inv,
+        FingerprintPayload fp,
+        ILogger logger)
+    {
+        try
+        {
+            // Lấy machine_id từ state.json (nếu đã enroll)
+            var stateFile = Path.Combine(dataDir, "state.json");
+            if (!File.Exists(stateFile))
+            {
+                logger.LogWarning("Chưa enroll (state.json không tồn tại) — không thể gửi inventory.");
+                return;
+            }
+            string? machineId;
+            using (var fs = File.OpenRead(stateFile))
+            using (var doc = System.Text.Json.JsonDocument.Parse(fs))
+            {
+                machineId = doc.RootElement.TryGetProperty("machine_id", out var m) ? m.GetString() : null;
+            }
+            if (string.IsNullOrEmpty(machineId))
+            {
+                logger.LogWarning("state.json không có machine_id");
+                return;
+            }
+
+            var serverUrl = Environment.GetEnvironmentVariable("ORGINV_SERVER_URL")
+                ?? ExtractEndpointFromConfig();
+            if (string.IsNullOrEmpty(serverUrl))
+            {
+                logger.LogWarning("Không lấy được endpoint từ config");
+                return;
+            }
+
+            // Build full snapshot including v4 envelope fields.
+            var provider = new LinuxInventoryProvider(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<LinuxInventoryProvider>.Instance);
+            var snapshot = provider.CollectSnapshot();
+            var payload = new
+            {
+                os_name = snapshot.OsName,
+                os_version = snapshot.OsVersion,
+                os_build = snapshot.OsBuild,
+                os_arch = snapshot.OsArch,
+                is_vm = snapshot.IsVm,
+                logged_user = Environment.UserName,
+                cpu = snapshot.Cpu,
+                ram_gb = snapshot.RamGb,
+                disks = snapshot.Disks,
+                gpu = snapshot.Gpu,
+                mainboard = snapshot.Mainboard,
+                bios = snapshot.Bios,
+                network = snapshot.Network,
+                installed_software = snapshot.InstalledSoftware,
+                security = snapshot.Security,
+                // v4 envelope (server expects these to fill platform/agent_version columns)
+                agent = new
+                {
+                    platform = "linux",
+                    version = AppInfo.Version,
+                    package_type = "deb",
+                },
+                os = new
+                {
+                    platform = "linux",
+                    distribution = LinuxOsCollector.GetOsReleaseId(),
+                    distribution_version = LinuxOsCollector.GetOsReleaseVersionId(),
+                },
+                inventory_schema_version = 4,
+            };
+
+            using var http = new HttpClient { BaseAddress = new Uri(serverUrl) };
+            var req = new HttpRequestMessage(HttpMethod.Post, "/api/inventory");
+            req.Headers.TryAddWithoutValidation("X-Machine-Id", machineId);
+            req.Content = JsonContent.Create(payload);
+            var resp = await http.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+            if (resp.IsSuccessStatusCode)
+                logger.LogInformation("Inventory HTTP {Status} OK", (int)resp.StatusCode);
+            else
+                logger.LogWarning("Inventory HTTP {Status}: {Body}", (int)resp.StatusCode, body);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "SendInventory lỗi");
+        }
+    }
+
+    private static string? ExtractEndpointFromConfig()
+    {
+        try
+        {
+            var p = Path.Combine("/etc/orginventory", "config.json");
+            if (!File.Exists(p)) return null;
+            using var fs = File.OpenRead(p);
+            using var doc = System.Text.Json.JsonDocument.Parse(fs);
+            if (doc.RootElement.TryGetProperty("endpoints", out var ep) && ep.ValueKind == System.Text.Json.JsonValueKind.Array && ep.GetArrayLength() > 0)
+                return ep[0].GetString();
+        }
+        catch { }
+        return null;
     }
 }
