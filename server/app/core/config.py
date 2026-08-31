@@ -98,7 +98,6 @@ class Settings(BaseSettings):
     #   admin có thể chỉnh trên portal. Tất cả là artifact read-only, không tốn disk.
     velociraptor_enabled: bool = False
     velociraptor_default_url: str = ""
-    velociraptor_docker_container: str = "velociraptor"
     velociraptor_sync_interval_seconds: int = 300
     velociraptor_api_timeout_seconds: int = 30
     velociraptor_default_allowlist: list[str] = [

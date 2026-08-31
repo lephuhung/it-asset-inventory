@@ -21,8 +21,9 @@ dependencies = [
     "slowapi>=0.1.9",
     "openpyxl>=3.1.0",
     "httpx>=0.27.0",
-    "pyyaml>=6.0.0",  # parse Velociraptor client.config.yaml
-    "docker>=7.0.0",  # exec VQL queries trong Velociraptor container (sync hostname ↔ client_id)
+    "pyyaml>=6.0.0",  # parse Velociraptor api_client.yaml
+    "grpcio>=1.66.0",
+    "pyvelociraptor>=0.1.11",
 ]
 
 [project.optional-dependencies]

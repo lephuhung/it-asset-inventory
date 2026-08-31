@@ -16,13 +16,8 @@ agent (điều tra số, thu thập bằng chứng từ xa). Có 2 cách giao ti
 Cách ta dùng:
   - REST API (HTTP Basic) cho **hunt/collect** — CreateHunt, ModifyHunt, v.v.
     (chỉ cần vài endpoint, không cần list).
-  - VQL qua `docker exec` cho **search_clients / get_all_clients** — chạy
-    `SELECT * FROM clients()` trong container Velociraptor, parse JSON output.
-
-Lý do dùng docker exec thay vì gRPC thuần Python:
-  - Velociraptor CLI đã wrap sẵn auth (dùng server.config.yaml) — ta không phải
-    generate cert/key, build protobuf, handle gRPC streaming.
-  - Đơn giản cho use case sync hostname ↔ client_id mỗi 5 phút.
+  - gRPC/VQL cho **search_clients / get_all_clients** và collect — chạy trực tiếp
+    trên Velociraptor Server qua mTLS, parse JSON streaming response.
 
 Authentication chi tiết:
   - HTTP Basic (default authenticator của Velociraptor). User + password tạo
@@ -46,12 +41,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
-import docker
 import httpx
 import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from docker.errors import APIError, NotFound
 
 logger = logging.getLogger("velociraptor")
 
@@ -61,16 +54,15 @@ class VelociraptorError(Exception):
 
 
 class VelociraptorClient:
-    """Wrapper Velociraptor Server — REST API (Basic auth) + VQL (docker exec).
+    """Wrapper Velociraptor Server — REST compatibility + gRPC/VQL mTLS.
 
     Dùng như context manager:
         async with VelociraptorClient(url, username="admin", password="…",
-                                      container="velociraptor") as client:
+                                      api_connection_string="veloci.example:8001") as client:
             clients = await client.get_all_clients()
             hunt_id = await client.create_hunt("Hunt", ["Generic.Client.Info"])
 
-    `container` chỉ cần cho search_clients (VQL exec). Hunt/Collect qua REST API
-    thì không cần.
+    VQL và collect dùng gRPC; không cần Docker daemon hay container name.
     """
 
     BASE_PATH = "/api/v1"
@@ -84,7 +76,8 @@ class VelociraptorClient:
         client_cert_pem: str | None = None,
         client_key_pem: str | None = None,
         ca_cert_pem: str | None = None,
-        container: str | None = None,
+        api_connection_string: str | None = None,
+        grpc_target_name: str = "VelociraptorServer",
         timeout: int = 30,
         verify_ssl: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -107,12 +100,12 @@ class VelociraptorClient:
         self.client_cert_pem = client_cert_pem
         self.client_key_pem = client_key_pem
         self.ca_cert_pem = ca_cert_pem
-        self.container = container
+        self.api_connection_string = (api_connection_string or "").strip()
+        self.grpc_target_name = grpc_target_name
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self._transport = transport
         self._client: httpx.AsyncClient | None = None
-        self._docker: docker.DockerClient | None = None
         self._temp_files: list[str] = []
         self._temp_dirs: list[str] = []
 
@@ -154,21 +147,12 @@ class VelociraptorClient:
             transport=self._transport,
         )
 
-        # Docker client (sync — wrap với run_in_executor khi cần gọi từ async)
-        # Chỉ khởi tạo khi cần (search_clients qua VQL).
-        # Lazy init trong _vql_query().
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._client:
             await self._client.aclose()
             self._client = None
-        if self._docker:
-            try:
-                self._docker.close()
-            except Exception:
-                logger.debug("Docker client close failed", exc_info=True)
-            self._docker = None
         for path_str in self._temp_files:
             try:
                 Path(path_str).unlink(missing_ok=True)
@@ -221,16 +205,9 @@ class VelociraptorClient:
     # ── REST API: test_connection + hunt/collect ───────────
 
     async def test_connection(self) -> dict[str, Any]:
-        """Test kết nối — dùng docker exec VQL CLI (Velociraptor 0.77 không expose
-        REST API đúng cách cho external apps).
-
-        Trả ok=True nếu docker exec thành công + Velociraptor CLI đọc config OK.
-        """
+        """Test gRPC/mTLS, giữ nguyên contract response cũ của portal."""
         try:
-            clients = await self._vql_query(
-                "SELECT client_id FROM clients() LIMIT 1",
-                container=self.container,
-            )
+            clients = await self._vql_query("SELECT client_id FROM clients() LIMIT 1")
             return {"ok": True, "client_count_sampled": len(clients)}
         except VelociraptorError as e:
             return {"ok": False, "error": str(e)}
@@ -240,70 +217,27 @@ class VelociraptorClient:
     async def collect_artifact(
         self, client_id: str, artifacts: list[str], env: dict | None = None
     ) -> str:
-        """Collect artifact trên 1 client — dùng Velociraptor CLI (REST API không có).
+        """Collect artifact bằng VQL qua gRPC/mTLS, trả ``flow_id``.
 
-        Velociraptor CLI: `artifacts collect <name> --client_id=<cid> --output=<file>`
-        Output: {"Download": ["downloads", client_id, flow_id, zip_path]}
-        → flow_id là phần tử thứ 3 (index 2) của array.
-
-        Args:
-            client_id: Velociraptor client ID (vd "C.xxxxx")
-            artifacts: list tên artifact cần collect
-            env: dict env vars (chưa support qua CLI — bỏ qua)
-
-        Returns: flow_id (string) — hoặc "" nếu fail
+        ``collect_client`` chạy ở Velociraptor Server. Không tạo file tạm hay
+        thực thi lệnh trong container, nên backend và Velociraptor có thể ở hai
+        máy hoàn toàn độc lập.
         """
         if not artifacts:
             raise VelociraptorError("artifacts list rỗng")
-        artifact_name = artifacts[0]  # CLI chỉ nhận 1 artifact / lần
-
-        def _exec_collect() -> str:
-            import json as _json
-            import tempfile
-            # Lazy init Docker client (giống _vql_query)
-            if self._docker is None:
-                self._docker = docker.from_env()
-            container_obj = self._docker.containers.get(self.container)
-            tmpfile = tempfile.NamedTemporaryFile(
-                suffix=".zip", prefix="velo-collect-", delete=False
-            )
-            tmpfile.close()
-            try:
-                cmd = [
-                    "velociraptor",
-                    "--api_config", "/etc/velociraptor/portal-api.yaml",
-                    "artifacts", "collect", artifact_name,
-                    "--client_id", client_id,
-                    "--output", tmpfile.name,
-                ]
-                result = container_obj.exec_run(cmd, demux=True)
-                stdout, stderr = result.output
-                if result.exit_code != 0:
-                    err = stderr.decode("utf-8", errors="replace") if stderr else ""
-                    raise VelociraptorError(
-                        f"Collect thất bại (exit={result.exit_code}): {err[:300]}"
-                    )
-                output = stdout.decode("utf-8", errors="replace") if stdout else ""
-                # Parse JSON output để lấy flow_id
-                # Output: {"Download": ["downloads", client_id, flow_id, zip_path]}
-                try:
-                    parsed = _json.loads(output.strip().splitlines()[-1] if output else "{}")
-                    downloads = parsed.get("Download", [])
-                    if len(downloads) >= 3:
-                        return str(downloads[2])  # flow_id
-                except (_json.JSONDecodeError, IndexError):
-                    pass
-                return ""
-            finally:
-                Path(tmpfile.name).unlink(missing_ok=True)
-
-        loop = asyncio.get_event_loop()
-        try:
-            return await loop.run_in_executor(None, _exec_collect)
-        except VelociraptorError:
-            raise
-        except Exception as e:
-            raise VelociraptorError(f"Collect exception: {e}") from e
+        rows = await self._vql_query(
+            "SELECT collect_client(client_id=ClientId, artifacts=Artifact) AS Collection "
+            "FROM scope()",
+            env={"ClientId": client_id, "Artifact": artifacts[0], **(env or {})},
+        )
+        for row in rows:
+            collection = row.get("Collection") or row
+            if isinstance(collection, dict) and collection.get("flow_id"):
+                return str(collection["flow_id"])
+            download = row.get("Download")
+            if isinstance(download, list) and len(download) >= 3:
+                return str(download[2])
+        raise VelociraptorError("Velociraptor không trả flow_id sau khi collect artifact")
 
     async def create_hunt(
         self, name: str, artifacts: list[str], description: str = "",
@@ -341,42 +275,23 @@ class VelociraptorClient:
         return await self._post("/ModifyHunt", body)
 
     async def get_hunt_status(self, hunt_id: str) -> dict:
-        """Trả status của 1 hunt qua docker exec VQL (REST API không có)."""
+        """Trả status của 1 hunt qua gRPC/VQL."""
         vql = f"SELECT * FROM hunts() WHERE hunt_id = \"{hunt_id}\" LIMIT 1"
-        items = await self._vql_query(vql, container=self.container)
+        items = await self._vql_query(vql)
         return items[0] if items else {"hunt_id": hunt_id, "error": "not found"}
 
     async def get_hunt(self, hunt_id: str) -> dict:
-        """Trả metadata hunt qua docker exec VQL."""
+        """Trả metadata hunt qua gRPC/VQL."""
         vql = f"SELECT * FROM hunts() WHERE hunt_id = \"{hunt_id}\" LIMIT 1"
-        items = await self._vql_query(vql, container=self.container)
+        items = await self._vql_query(vql)
         return items[0] if items else {"hunt_id": hunt_id, "error": "not found"}
-
-    async def get_flow_results(self, flow_id: str, limit: int = 100) -> dict:
-        """Lấy rows data cho 1 flow (hunt/collection/interrogation).
-
-        Velociraptor API: POST /api/v1/GetTable?table=NotebookCells&flow_id=...
-        Đơn giản hơn: POST /api/v1/GetFlowResults (một số version).
-        Response: {"columns": [...], "rows": [...], "total_rows": N}
-        Mỗi row có format giống GetClientFlows.
-
-        Args:
-          flow_id: ID của flow (F.xxxx...) — lấy từ VelociraptorClientFlowOut.FlowId.
-          limit: số rows tối đa (mặc định 100, cap cứng 1000).
-        """
-        # Velociraptor 0.77: dùng POST /api/v1/GetTable với table=NotebookCells
-        data = await self._post(
-            "/GetTable",
-            {"table": "NotebookCells", "flow_id": flow_id, "limit": int(limit)},
-        )
-        return data
 
     async def list_client_flows(
         self, client_id: str, limit: int = 50
     ) -> list[dict]:
         """List flows (hunts/collections/interrogations) cho 1 client.
 
-        Dùng docker exec VQL `flows()` (Velociraptor 0.77 không expose REST API).
+        Dùng gRPC VQL `flows()`.
         Returns: list dict — mỗi dict là flow metadata.
         """
         # Velociraptor VQL: session_id = flow_id, create_time/start_time ở dạng int µs
@@ -388,7 +303,7 @@ class VelociraptorClient:
             f"FROM flows(client_id=\"{client_id}\") "
             f"ORDER BY create_time DESC LIMIT {int(limit)}"
         )
-        return await self._vql_query(vql, container=self.container)
+        return await self._vql_query(vql)
 
     async def list_artifacts(self) -> list[dict]:
         """Liệt kê artifacts Velociraptor có (admin chọn trong Collect dialog).
@@ -413,14 +328,14 @@ class VelociraptorClient:
     async def get_client_metadata(self, client_id: str) -> dict:
         """Lấy metadata của 1 client (hostname, OS, last seen, IP, agent version...).
 
-        Velociraptor 0.77 không expose REST API đúng cách — dùng docker exec VQL
+        Velociraptor external automation dùng gRPC VQL
         thay vì `GET /api/v1/GetClient/{client_id}`.
         """
         vql = (
             f"SELECT client_id, os_info, last_seen_at, last_ip, agent_information "
             f"FROM clients() WHERE client_id = \"{client_id}\" LIMIT 1"
         )
-        items = await self._vql_query(vql, container=self.container)
+        items = await self._vql_query(vql)
         if not items:
             return {"client_id": client_id, "error": "client not found"}
         item = items[0]
@@ -474,14 +389,14 @@ class VelociraptorClient:
     async def get_flow_details(self, client_id: str, flow_id: str) -> dict:
         """Lấy trạng thái chi tiết 1 flow (polling khi collect).
 
-        Dùng docker exec VQL `flows()` (REST API không có).
+        Dùng gRPC VQL `flows()`.
         Returns: {"context": {"state": "RUNNING"|"FINISHED"|"ERROR"}, ...}
         """
         vql = (
-            f"SELECT state, status FROM flows(client_id=\"{client_id}\") "
+            f"SELECT state, status, request FROM flows(client_id=\"{client_id}\") "
             f"WHERE session_id = \"{flow_id}\" LIMIT 1"
         )
-        items = await self._vql_query(vql, container=self.container)
+        items = await self._vql_query(vql)
         if not items:
             return {"context": {"state": "RUNNING", "status": ""}}
         item = items[0]
@@ -489,6 +404,7 @@ class VelociraptorClient:
             "context": {
                 "state": item.get("state", "RUNNING"),
                 "status": item.get("status", ""),
+                "request": item.get("request") or {},
             }
         }
 
@@ -545,14 +461,14 @@ class VelociraptorClient:
     ) -> list[dict]:
         """Đọc bảng kết quả của 1 artifact trong 1 flow (rows → list dict).
 
-        Dùng docker exec VQL `source()` — Velociraptor 0.77 không expose REST API.
+        Dùng gRPC VQL `source()`.
         """
         # VQL: SELECT * FROM source(flow_id=..., artifact=...) LIMIT N
         vql = (
             f"SELECT * FROM source(flow_id=\"{flow_id}\", artifact=\"{artifact}\") "
             f"LIMIT {int(rows)}"
         )
-        return await self._vql_query(vql, container=self.container)
+        return await self._vql_query(vql)
 
     async def collect_artifact_and_wait(
         self,
@@ -599,78 +515,62 @@ class VelociraptorClient:
             f"— trạng thái cuối: {last_state}"
         )
 
-    # ── VQL: search_clients (qua docker exec) ──────────────────
+    # ── VQL: gRPC/mTLS remote API ──────────────────────────────
 
-    async def _vql_query(self, vql: str, container: str | None = None) -> list[dict]:
-        """Chạy VQL trong Velociraptor container qua docker exec.
+    async def _vql_query(self, vql: str, env: dict[str, str] | None = None) -> list[dict]:
+        """Chạy server-side VQL qua gRPC API, không phụ thuộc Docker.
 
-        Output Velociraptor CLI có dạng:
-            [
-             { "client_id": "...", "os_info": {...} },
-             ...
-            ]
-
-        Args:
-            vql: Velociraptor Query Language string
-            container: container name (vd 'velociraptor'). Mặc định dùng self.container.
+        Các bindings gRPC là synchronous; chạy chúng trong executor để không chặn
+        event loop FastAPI. Dữ liệu biến được truyền qua VQL environment thay vì
+        nội suy vào query string.
         """
-        cname = container or self.container
-        if not cname:
+        if not self.api_connection_string:
             raise VelociraptorError(
-                "VQL query cần `container` (Velociraptor Docker container name). "
-                "Cấu hình qua VelociraptorConfig hoặc truyền khi tạo client."
+                "Thiếu api_connection_string trong api_client.yaml; hãy sinh lại cấu hình "
+                "API client cho Velociraptor remote."
             )
+        if not (self.ca_cert_pem and self.client_cert_pem and self.client_key_pem):
+            raise VelociraptorError("VQL gRPC yêu cầu api_client.yaml với đầy đủ certificate mTLS")
 
-        if self._docker is None:
-            # Lazy init Docker client (sync SDK). Dùng unix socket mặc định.
-            self._docker = docker.from_env()
-
-        def _exec() -> str:
+        def _query() -> list[dict]:
             try:
-                container_obj = self._docker.containers.get(cname)
-            except NotFound:
+                import grpc
+                from pyvelociraptor import api_pb2, api_pb2_grpc
+            except ImportError as exc:
                 raise VelociraptorError(
-                    f"Docker container '{cname}' không tồn tại — kiểm tra `docker ps`."
-                )
-            # Velociraptor CLI cần --api_config (cert mTLS) để query clients.
-            # Cert được mount shared qua agent_dist/velociraptor-certs/.
-            api_config = "/etc/velociraptor/portal-api.yaml"
-            cmd_args = [
-                "velociraptor",
-                "--api_config", api_config,
-                "query", vql,
-            ]
-            exec_result = container_obj.exec_run(cmd_args, demux=True)
-            stdout, stderr = exec_result.output
-            if exec_result.exit_code != 0:
-                err = stderr.decode("utf-8", errors="replace") if stderr else ""
-                raise VelociraptorError(
-                    f"VQL exec thất bại (exit={exec_result.exit_code}): {err[:500]}"
-                )
-            return stdout.decode("utf-8", errors="replace") if stdout else ""
+                    "Thiếu dependency gRPC Velociraptor; cài pyvelociraptor và grpcio."
+                ) from exc
 
-        loop = asyncio.get_event_loop()
-        try:
-            stdout = await loop.run_in_executor(None, _exec)
-        except VelociraptorError:
-            raise
-        except APIError as e:
-            raise VelociraptorError(f"Docker API lỗi: {e}") from e
+            credentials = grpc.ssl_channel_credentials(
+                root_certificates=self.ca_cert_pem.encode("utf-8"),
+                private_key=self.client_key_pem.encode("utf-8"),
+                certificate_chain=self.client_cert_pem.encode("utf-8"),
+            )
+            options = (("grpc.ssl_target_name_override", self.grpc_target_name),)
+            request = api_pb2.VQLCollectorArgs(
+                max_wait=1,
+                max_row=1000,
+                timeout=self.timeout,
+                Query=[api_pb2.VQLRequest(Name="inventory-backend", VQL=vql)],
+                env=[{"key": key, "value": value} for key, value in (env or {}).items()],
+            )
+            rows: list[dict] = []
+            try:
+                with grpc.secure_channel(self.api_connection_string, credentials, options) as channel:
+                    for response in api_pb2_grpc.APIStub(channel).Query(request, timeout=self.timeout):
+                        if not response.Response:
+                            continue
+                        payload = json.loads(response.Response)
+                        if isinstance(payload, list):
+                            rows.extend(item for item in payload if isinstance(item, dict))
+            except Exception as exc:  # grpc errors are optional dependency types
+                code = getattr(exc, "code", lambda: None)()
+                details_method = getattr(exc, "details", None)
+                details = details_method() if callable(details_method) else str(exc)
+                raise VelociraptorError(f"Velociraptor gRPC lỗi ({code or 'unknown'}): {details}") from exc
+            return rows
 
-        if not stdout.strip():
-            return []
-        try:
-            data = json.loads(stdout)
-            if isinstance(data, list):
-                return data
-            # Velociraptor đôi khi trả [[{...}]] (array lồng nhau) — flatten 1 cấp.
-            if isinstance(data, list) and data and isinstance(data[0], list):
-                return data[0]
-            return []
-        except json.JSONDecodeError as e:
-            raise VelociraptorError(
-                f"VQL output không phải JSON hợp lệ: {stdout[:300]}"
-            ) from e
+        return await asyncio.get_running_loop().run_in_executor(None, _query)
 
     async def search_clients(
         self, query: str = "", limit: int = 1000, offset: int = 0
@@ -715,12 +615,12 @@ class VelociraptorClient:
     async def get_all_clients(self, page_size: int = 1000) -> list[dict]:
         """Lấy TOÀN BỘ clients (cho sync hostname mỗi 5 phút).
 
-        Dùng docker exec VQL `clients()` (REST API không có).
+        Dùng gRPC VQL `clients()`.
         """
         vql = (
             f"SELECT client_id, os_info FROM clients() LIMIT {int(page_size)}"
         )
-        return await self._vql_query(vql, container=self.container)
+        return await self._vql_query(vql)
 
 
 def _shell_quote(s: str) -> str:
@@ -786,7 +686,8 @@ def parse_client_config_yaml(content: str) -> dict[str, str]:
 
     Cũng chấp nhận alias `ca_cert` (một số tool phiên bản cũ / fork).
 
-    Trả về dict với keys: ca_cert, client_cert, client_private_key, name (optional).
+    Trả về dict với keys: ca_cert, client_cert, client_private_key,
+    api_connection_string, name (optional).
     Raise ValueError nếu thiếu trường hoặc YAML lỗi.
     """
     try:
@@ -811,10 +712,17 @@ def parse_client_config_yaml(content: str) -> dict[str, str]:
         if not isinstance(data[k], str):
             raise TypeError(f"Trường '{k}' phải là string PEM")
 
+    connection = data.get("api_connection_string")
+    if not connection or not isinstance(connection, str) or ":" not in connection:
+        raise ValueError(
+            "YAML thiếu hoặc sai 'api_connection_string' (ví dụ velociraptor.example.gov.vn:8001)"
+        )
+
     return {
         "ca_cert": ca_cert,
         "client_cert": data["client_cert"],
         "client_private_key": data["client_private_key"],
+        "api_connection_string": connection.strip(),
         "name": data.get("name", ""),
     }
 

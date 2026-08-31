@@ -155,16 +155,14 @@ async def _build_velociraptor_client(
 
     Auth: mTLS (client_config_encrypted — Velociraptor-native, cần authenticator=Certs)
     hoặc HTTP Basic (username/password lưu encrypted trong `basic_auth_encrypted`).
-    search_clients() qua VQL CLI docker exec → cần `container` (mặc định từ env).
+    Các thao tác VQL dùng gRPC/mTLS tới ``api_connection_string`` trong YAML.
     """
     from app.core.security import encrypt_aes_gcm as _enc  # noqa: F401 — keep import
     cfg = await _get_config(db)
     if cfg is None or not cfg.enabled or not cfg.server_url:
         return None
 
-    container = settings.velociraptor_docker_container
     common_kwargs: dict[str, Any] = {
-        "container": container,
         "timeout": settings.velociraptor_api_timeout_seconds,
     }
 
@@ -212,6 +210,7 @@ async def _build_velociraptor_client(
     if cfg.api_token_encrypted:
         try:
             token = decrypt_aes_gcm(cfg.api_token_encrypted)
+            api_connection_string=parsed["api_connection_string"],
         except Exception as e:
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -416,17 +415,9 @@ async def lookup_velociraptor_client(
         )
     client, _ = built
     try:
-        # Dùng docker exec VQL thay vì REST SearchClients (Velociraptor 0.77
-        # không expose REST API đúng cách cho external apps).
-        # Escape hostname cho VQL string (chỉ cần escape backslash và quote).
-        escaped = hostname.replace("\\", "\\\\").replace('"', '\\"')
-        vql = (
-            f'SELECT client_id, os_info FROM clients() '
-            f'WHERE os_info.hostname =~ "{escaped}" '
-            f'LIMIT 50'
-        )
+        vql = "SELECT client_id, os_info FROM clients() WHERE os_info.hostname =~ Hostname LIMIT 50"
         async with client as velo:
-            items = await velo._vql_query(vql, container=client.container)
+            items = await velo._vql_query(vql, env={"Hostname": hostname})
     except VelociraptorError as e:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -499,11 +490,7 @@ async def velociraptor_status(
     client, cfg = built
     try:
         async with client as velo:
-            # Quick ping: docker exec VQL (Velociraptor 0.77 không expose REST API)
-            items = await velo._vql_query(
-                "SELECT client_id FROM clients() LIMIT 1",
-                container=client.container,
-            )
+            items = await velo._vql_query("SELECT client_id FROM clients() LIMIT 1")
             return {
                 "reachable": True,
                 "server_url": cfg.server_url,

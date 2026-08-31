@@ -29,7 +29,6 @@ from app.db.models import Machine, VelociraptorConfig, VelociraptorLink
 from app.services.velociraptor import (
     VelociraptorClient,
     VelociraptorError,
-    hostname_from_velociraptor_client,
     normalize_hostname,
     parse_client_config_yaml,
 )
@@ -45,7 +44,7 @@ async def _load_config_row() -> tuple[VelociraptorConfig | None, dict, str | Non
         (None, {}, error)  nếu có lỗi (vd giải mã fail)
         (config, creds, None) nếu OK. creds là dict với keys:
           - username, password (HTTP Basic), hoặc
-          - client_cert_pem, client_key_pem, ca_cert_pem (mTLS)
+          - client_cert_pem, client_key_pem, ca_cert_pem, api_connection_string (mTLS)
     """
     async with db_session.AsyncSessionLocal() as db:
         cfg = (
@@ -61,7 +60,7 @@ async def _load_config_row() -> tuple[VelociraptorConfig | None, dict, str | Non
 
         # Mở khoá credentials — ưu tiên mTLS, fallback Basic, cuối cùng Bearer legacy.
         username = password = None
-        client_cert_pem = client_key_pem = ca_cert_pem = None
+        client_cert_pem = client_key_pem = ca_cert_pem = api_connection_string = None
 
         if cfg.client_config_encrypted:
             try:
@@ -70,6 +69,7 @@ async def _load_config_row() -> tuple[VelociraptorConfig | None, dict, str | Non
                 client_cert_pem = parsed_yaml["client_cert"]
                 client_key_pem = parsed_yaml["client_private_key"]
                 ca_cert_pem = parsed_yaml["ca_cert"]
+                api_connection_string = parsed_yaml["api_connection_string"]
             except Exception as e:  # noqa: BLE001
 
                 return None, None, f"Giải mã client_config thất bại: {e}"
@@ -121,6 +121,7 @@ async def _load_config_row() -> tuple[VelociraptorConfig | None, dict, str | Non
             "client_cert_pem": client_cert_pem,
             "client_key_pem": client_key_pem,
             "ca_cert_pem": ca_cert_pem,
+            "api_connection_string": api_connection_string,
         }, None
 
 
@@ -167,7 +168,6 @@ async def sync_velociraptor_links() -> dict:
     config_id = config.id
     linked_count = 0
     total_count = 0
-    container = settings.velociraptor_docker_container
     try:
         async with VelociraptorClient(
             config.server_url,
@@ -176,24 +176,13 @@ async def sync_velociraptor_links() -> dict:
             client_cert_pem=creds.get("client_cert_pem"),
             client_key_pem=creds.get("client_key_pem"),
             ca_cert_pem=creds.get("ca_cert_pem"),
-            container=container,
+            api_connection_string=creds.get("api_connection_string"),
             timeout=settings.velociraptor_api_timeout_seconds,
         ) as velo:
-            # Dùng docker exec (VQL `SELECT * FROM clients()`) thay vì REST SearchClients
-            # — Velociraptor 0.77 không expose REST API đúng cách cho external apps.
-            # docker exec chạy trực tiếp VQL trong Velociraptor container, bypass
-            # HTTPS/gRPC authentication. Container phải accessible từ API container
-            # (cùng Docker network hoặc shared docker socket).
-            try:
-                clients = await velo._vql_query(
-                    "SELECT client_id, os_info.hostname AS hostname, last_seen_at "
-                    "FROM clients() LIMIT 1000",
-                    container=container,
-                )
-            except (VelociraptorError, Exception) as vql_err:
-                # Fallback về REST API (cho trường hợp docker exec fail)
-                logger.warning("VQL docker exec fail (%s), fallback sang REST API", vql_err)
-                clients = await velo.get_all_clients()
+            clients = await velo._vql_query(
+                "SELECT client_id, os_info.hostname AS hostname, last_seen_at, os_info "
+                "FROM clients() LIMIT 1000"
+            )
             total_count = len(clients)
 
             # Build map hostname → client_id (chọn client có last_seen mới nhất)

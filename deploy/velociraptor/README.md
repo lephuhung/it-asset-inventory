@@ -42,30 +42,53 @@ Mở GUI: **https://localhost:8889** (HTTPS self-signed → trình duyệt cản
 > Lưu ý: password đặt trong `.env` chỉ áp dụng khi **lần đầu** generate config. Nếu container đã từng chạy (đã có `etc/server.config.yaml`), đổi password phải làm trong GUI hoặc `velociraptor user reset_password`.
 
 
-## 3. Cấu hình trên Inventory Server portal
+## 3. Kết nối Inventory Server qua gRPC/mTLS (không cần Docker socket)
 
-Velociraptor có 2 cơ chế authenticate REST API:
+Inventory Server dùng API automation chính thức của Velociraptor qua gRPC. Có thể
+đặt Velociraptor trên máy riêng; backend chỉ cần reach được cổng API và không cần
+truy cập Docker daemon hay filesystem Velociraptor.
 
-### Cách A: HTTP Basic (khuyến nghị cho hầu hết use case — đơn giản nhất)
+Trên Velociraptor Server, cấu hình API trước khi sinh credential:
+
+```yaml
+API:
+  hostname: velociraptor.example.gov.vn
+  bind_address: 0.0.0.0
+  bind_port: 8001
+  bind_scheme: tcp
+```
+
+Restart server, giới hạn firewall port `8001` chỉ cho IP Inventory Backend, rồi
+sinh `api_client.yaml` có `api_connection_string: velociraptor.example.gov.vn:8001`.
+Trong portal, Super Admin nhập GUI URL (`https://...:8889`) và tải file YAML này
+lên; portal mã hoá file trong DB và backend dùng mTLS để sync, lookup, collect và
+đọc flow qua gRPC.
+
+## 4. Cấu hình trên Inventory Server portal
+
+Velociraptor có HTTP Basic cho GUI/REST compatibility. Inventory Server dùng gRPC
+API mTLS cho sync, lookup, collect và đọc flow; các API hunt cũ vẫn dùng REST.
+
+### Cách A: HTTP Basic (chỉ GUI/compatibility)
 
 Velociraptor default authenticator = Basic. Trên portal `/dfir/settings`:
 - Nhập **Username** (mặc định: `admin`)
 - Nhập **Password** (giá trị `VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD` lúc khởi động container, vd `ChangeMe!Velociraptor2026`)
 
-Không cần sinh key/cer gì thêm. Sync hostname bắt đầu trong vòng 5 phút.
+HTTP Basic không thay thế `api_client.yaml`; backend sẽ không chạy các automation
+gRPC nếu chưa tải YAML.
 
-### Cách B: mTLS (Velociraptor-native — cần config thêm phía server)
+### Cách B: mTLS API client (bắt buộc cho Inventory automation)
 
 Velociraptor client dùng mTLS + CA-pinned. Cấu hình phía Velociraptor Server:
 
 ```yaml
-# /etc/velociraptor/server.config.yaml — section GUI:
-GUI:
-  authenticator:
-    type: Certs                  # đổi từ Basic mặc định
-    default_roles_for_unknown_user:
-     - reader
-     - administrator
+# /etc/velociraptor/server.config.yaml — section API:
+API:
+  hostname: velociraptor.example.gov.vn
+  bind_address: 0.0.0.0
+  bind_port: 8001
+  bind_scheme: tcp
 ```
 
 (Cần restart Velociraptor Server để áp dụng.)
@@ -78,9 +101,8 @@ bash generate-client-config.sh "inventory-portal"
 
 Script sẽ in ra YAML (~3KB) chứa `ca_certificate` + `client_cert` + `client_private_key`.
 
-→ Paste toàn bộ YAML vào portal `/dfir/settings` → ô "Client Config (YAML)".
-
-## 4. Cấu hình trên Inventory Server portal
+→ Tải YAML lên portal `/dfir/settings`. Nếu dùng màn hình tạo hunt cũ qua REST,
+cấu hình thêm `GUI.authenticator.type: Certs`; nếu không, giữ Basic cho GUI.
 
 Login Super Admin → **/dfir/settings**:
 
@@ -88,7 +110,7 @@ Login Super Admin → **/dfir/settings**:
 |---|---|
 | Bật Velociraptor | ✅ Enabled |
 | Server URL | `https://<host>:8889` (cùng URL admin truy cập GUI) |
-| Username + Password | HTTP Basic (Cách A — khuyến nghị) |
+| API Client YAML | `api_client.yaml` cho gRPC/mTLS (bắt buộc cho automation) |
 | Allowlist | giữ mặc định (13 artifact read-only) hoặc chỉnh |
 
 Bấm **Lưu** → **Test kết nối** → OK → backend sẽ sync hostname ↔ client_id trong vòng 5 phút.

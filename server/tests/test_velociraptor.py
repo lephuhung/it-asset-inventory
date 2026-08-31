@@ -79,18 +79,96 @@ def test_velociraptor_client_rejects_bad_url() -> None:
         VelociraptorClient("veloci.example.gov.vn", username="admin", password="tok")
 
 
-def test_velociraptor_client_test_connection_ok() -> None:
+def test_parse_api_client_config_requires_grpc_target() -> None:
+    from app.services.velociraptor import parse_client_config_yaml
+
+    valid = """ca_certificate: CA\nclient_cert: CERT\nclient_private_key: KEY\napi_connection_string: velo.example:8001\n"""
+    parsed = parse_client_config_yaml(valid)
+    assert parsed["ca_cert"] == "CA"
+    assert parsed["api_connection_string"] == "velo.example:8001"
+
+    with pytest.raises(ValueError, match="api_connection_string"):
+        parse_client_config_yaml("ca_certificate: CA\nclient_cert: CERT\nclient_private_key: KEY\n")
+
+
+def test_vql_query_uses_grpc_mtls_and_collects_stream(monkeypatch) -> None:
+    """Không cần server thật: fake bindings kiểm tra request gRPC và stream JSON."""
+    import sys
+    import types
+
     from app.services.velociraptor import VelociraptorClient
 
-    def handler(req: httpx.Request) -> Any:
-        assert req.headers["Authorization"] == "Basic YWRtaW46c2VjcmV0LXRva2Vu"
-        assert req.url.path == "/api/v1/SearchClients"
-        return {"clients": SAMPLE_CLIENTS[:1]}
+    captured: dict[str, Any] = {}
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient(
-        "https://veloci.test", username="admin", password="secret-token", transport=transport
+    class Channel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+    grpc = types.SimpleNamespace(
+        ssl_channel_credentials=lambda **kwargs: captured.setdefault("credentials", kwargs),
+        secure_channel=lambda target, credentials, options: captured.update(
+            target=target, options=options
+        ) or Channel(),
     )
+
+    class VQLRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class VQLCollectorArgs:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class Stub:
+        def __init__(self, channel):
+            pass
+
+        def Query(self, request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return [types.SimpleNamespace(Response='[{"client_id":"C.1"}]'), types.SimpleNamespace(Response="")]
+
+    monkeypatch.setitem(sys.modules, "grpc", grpc)
+    monkeypatch.setitem(
+        sys.modules,
+        "pyvelociraptor",
+        types.SimpleNamespace(api_pb2=types.SimpleNamespace(VQLRequest=VQLRequest, VQLCollectorArgs=VQLCollectorArgs), api_pb2_grpc=types.SimpleNamespace(APIStub=Stub)),
+    )
+    monkeypatch.setitem(sys.modules, "pyvelociraptor.api_pb2", types.SimpleNamespace(VQLRequest=VQLRequest, VQLCollectorArgs=VQLCollectorArgs))
+    monkeypatch.setitem(sys.modules, "pyvelociraptor.api_pb2_grpc", types.SimpleNamespace(APIStub=Stub))
+
+    client = VelociraptorClient(
+        "https://velo.example:8889",
+        client_cert_pem="CERT",
+        client_key_pem="KEY",
+        ca_cert_pem="CA",
+        api_connection_string="velo.example:8001",
+    )
+
+    import asyncio
+
+    assert asyncio.run(client._vql_query("SELECT * FROM clients()", {"Hostname": "PC-01"})) == [
+        {"client_id": "C.1"}
+    ]
+    assert captured["target"] == "velo.example:8001"
+    assert captured["request"].env == [{"key": "Hostname", "value": "PC-01"}]
+
+
+def test_velociraptor_client_test_connection_ok(monkeypatch) -> None:
+    from app.services.velociraptor import VelociraptorClient
+
+    client = VelociraptorClient(
+        "https://veloci.test", username="admin", password="secret-token"
+    )
+
+    async def fake_query(self, vql, env=None):
+        assert vql == "SELECT client_id FROM clients() LIMIT 1"
+        return [{"client_id": "C.1"}]
+
+    monkeypatch.setattr(VelociraptorClient, "_vql_query", fake_query)
 
     async def run() -> dict:
         async with client as c:
@@ -100,17 +178,19 @@ def test_velociraptor_client_test_connection_ok() -> None:
 
     result = asyncio.run(run())
     assert result["ok"] is True
-    assert result["ok"] is True
+    assert result["client_count_sampled"] == 1
 
 
-def test_velociraptor_client_test_connection_http_error() -> None:
+def test_velociraptor_client_test_connection_http_error(monkeypatch) -> None:
     from app.services.velociraptor import VelociraptorClient
 
-    def handler(req: httpx.Request) -> Any:
-        return (401, {"error": "bad token"})
+    client = VelociraptorClient("https://veloci.test", username="admin", password="bad")
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="bad", transport=transport)
+    async def fake_query(self, vql, env=None):
+        from app.services.velociraptor import VelociraptorError
+        raise VelociraptorError("Velociraptor gRPC lỗi (UNAUTHENTICATED): bad certificate")
+
+    monkeypatch.setattr(VelociraptorClient, "_vql_query", fake_query)
 
     async def run() -> dict:
         async with client as c:
@@ -120,21 +200,21 @@ def test_velociraptor_client_test_connection_http_error() -> None:
 
     result = asyncio.run(run())
     assert result["ok"] is False
-    assert "401" in result["error"]
+    assert "UNAUTHENTICATED" in result["error"]
 
 
-def test_velociraptor_client_collect_artifact_returns_flow_id() -> None:
+def test_velociraptor_client_collect_artifact_returns_flow_id(monkeypatch) -> None:
     from app.services.velociraptor import VelociraptorClient
 
-    def handler(req: httpx.Request) -> Any:
-        assert req.url.path == "/api/v1/CollectArtifact"
-        body = json.loads(req.content)
-        assert body["client_id"] == "C.aaa111"
-        assert body["artifacts"] == ["Generic.Client.Info"]
-        return {"flow_id": "F.1234567890"}
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+    async def fake_query(self, vql, env=None):
+        assert "collect_client" in vql
+        assert env["ClientId"] == "C.aaa111"
+        assert env["Artifact"] == "Generic.Client.Info"
+        return [{"Collection": {"flow_id": "F.1234567890"}}]
+
+    monkeypatch.setattr(VelociraptorClient, "_vql_query", fake_query)
 
     async def run() -> str:
         async with client as c:
@@ -144,6 +224,26 @@ def test_velociraptor_client_collect_artifact_returns_flow_id() -> None:
 
     flow = asyncio.run(run())
     assert flow == "F.1234567890"
+
+
+def test_get_flow_results_uses_request_artifact_when_not_supplied(monkeypatch) -> None:
+    """Response gRPC flow details vẫn thỏa contract fallback artifact cũ."""
+    import asyncio
+
+    from app.services.velociraptor import VelociraptorClient
+
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
+
+    async def fake_query(self, vql, env=None):
+        if "FROM flows" in vql:
+            return [{"state": "FINISHED", "status": "", "request": {"artifacts": ["Generic.Client.Info"]}}]
+        if "FROM source" in vql:
+            assert 'artifact="Generic.Client.Info"' in vql
+            return [{"Hostname": "PC-01"}]
+        raise AssertionError(vql)
+
+    monkeypatch.setattr(VelociraptorClient, "_vql_query", fake_query)
+    assert asyncio.run(client.get_flow_results("C.1", "F.1")) == [{"Hostname": "PC-01"}]
 
 
 def test_velociraptor_client_create_hunt_with_modify() -> None:
@@ -230,19 +330,19 @@ async def test_sync_links_matches_by_normalized_hostname(client, session_factory
     await _setup_machine(session_factory, "DESKTOP-NOT-IN-VELO")
 
     async def run() -> dict:
-        # Patch search_clients để trả về SAMPLE_CLIENTS (mock REST API)
+        # Patch gRPC VQL để trả về SAMPLE_CLIENTS.
         from app.services import velociraptor as vmod
 
-        orig_search = vmod.VelociraptorClient.search_clients
+        orig_query = vmod.VelociraptorClient._vql_query
 
-        async def patched_search(self, query="", limit=1000, offset=0):
+        async def patched_query(self, query, env=None):
             return SAMPLE_CLIENTS
 
-        vmod.VelociraptorClient.search_clients = patched_search
+        vmod.VelociraptorClient._vql_query = patched_query
         try:
             return await sync_velociraptor_links()
         finally:
-            vmod.VelociraptorClient.search_clients = orig_search
+            vmod.VelociraptorClient._vql_query = orig_query
 
     result = await run()
     assert result["linked"] == 3, result  # DESKTOP-AAA, DESKTOP-BBB, DESKTOP-CCC
@@ -293,16 +393,16 @@ async def test_sync_records_last_sync(client, session_factory):
     async def run() -> dict:
         from app.services import velociraptor as vmod
 
-        orig_search = vmod.VelociraptorClient.search_clients
+        orig_query = vmod.VelociraptorClient._vql_query
 
-        async def patched_search(self, query="", limit=1000, offset=0):
+        async def patched_query(self, query, env=None):
             return SAMPLE_CLIENTS[:3]  # chỉ 3 client, 1 match
 
-        vmod.VelociraptorClient.search_clients = patched_search
+        vmod.VelociraptorClient._vql_query = patched_query
         try:
             return await sync_velociraptor_links()
         finally:
-            vmod.VelociraptorClient.search_clients = orig_search
+            vmod.VelociraptorClient._vql_query = orig_query
 
     result = await run()
     assert result["linked"] == 1
