@@ -227,20 +227,29 @@ if (-not $SkipOrgInventory) {
         }
 
         # Đọc config cũ (nếu có)
-        $cfg = @{}
+        $cfgObj = $null
         if (Test-Path $cfgPath) {
-            try { $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json } catch { $cfg = @{} }
+            try { $cfgObj = Get-Content $cfgPath -Raw | ConvertFrom-Json } catch { }
         }
-        $oldToken = $cfg.token
-        $oldEndpoints = $cfg.endpoints
-        Write-Info "Config cu: token=$($oldToken.Substring(0, [Math]::Min(8, $oldToken.Length)))..., endpoints=$oldEndpoints"
+        $oldToken = if ($cfgObj -and $cfgObj.token) { [string]$cfgObj.token } else { "" }
+        $oldTokenDisplay = if ($oldToken) { "$($oldToken.Substring(0, [Math]::Min(8, $oldToken.Length)))..." } else { "(da enroll)" }
+        $oldEndpoints = if ($cfgObj -and $cfgObj.endpoints) { $cfgObj.endpoints -join ", " } else { "" }
+        Write-Info "Config cu: token=$oldTokenDisplay, endpoints=$oldEndpoints"
 
-        # Update config.json
-        $cfg.token = $Token
-        $cfg.endpoints = @($Endpoint)
-        $cfg.configVersion = 2  # Bump version de agent biet config da thay doi
+        # Update config.json (bao toan cac truong cu, reset enroll de nhan token moi)
+        $cfgDict = [ordered]@{}
+        if ($cfgObj) {
+            foreach ($prop in $cfgObj.PSObject.Properties) {
+                $cfgDict[$prop.Name] = $prop.Value
+            }
+        }
+        $cfgDict["token"] = $Token
+        $cfgDict["endpoints"] = @($Endpoint)
+        $cfgDict["configVersion"] = 2
+        $cfgDict["enrolled"] = $false
+        $cfgDict["clientCertThumbprint"] = $null
 
-        $cfgJson = $cfg | ConvertTo-Json -Depth 5
+        $cfgJson = $cfgDict | ConvertTo-Json -Depth 5
         $cfgJson | Set-Content -Path $cfgPath -Encoding UTF8 -Force
         Write-Ok "Config da update: token moi, endpoints=$Endpoint"
 
