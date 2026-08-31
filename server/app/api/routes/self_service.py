@@ -67,7 +67,7 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    return f"powershell -NoProfile -EncodedCommand {encoded}"
+    return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
 def _install_command_linux(token: str, portal_url: str, agent_server_url: str) -> str:

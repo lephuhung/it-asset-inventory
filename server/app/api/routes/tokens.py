@@ -78,7 +78,10 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'& $s -Token $t -PortalUrl $p -Endpoint $e'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-    return f"powershell -NoProfile -EncodedCommand {encoded}"
+    # -ExecutionPolicy Bypass: chạy script .ps1 bất chấp policy hệ thống
+    # (mặc định Windows: Restricted/RemoteSigned chặn script chưa ký).
+    # Chỉ áp dụng cho invocation này — KHÔNG thay đổi policy hệ thống.
+    return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
 def _install_command_org_only(token: str, portal_url: str, agent_server_url: str) -> str:
