@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using OrgInventoryAgent.Linux;
-using OrgInventoryAgent.Linux.Net;
+using OrgInventoryAgent.Core.Net;
 using Xunit;
 
 namespace OrgInventoryAgent.Linux.Tests;

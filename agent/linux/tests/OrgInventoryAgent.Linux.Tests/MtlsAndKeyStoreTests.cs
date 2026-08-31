@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
-using OrgInventoryAgent.Linux.Crypto;
-using OrgInventoryAgent.Linux.Services;
+using OrgInventoryAgent.Core.Crypto;
+using OrgInventoryAgent.Core;
+
 using Xunit;
 
 namespace OrgInventoryAgent.Linux.Tests;

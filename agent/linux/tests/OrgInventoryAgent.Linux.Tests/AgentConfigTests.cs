@@ -1,3 +1,4 @@
+using OrgInventoryAgent.Core;
 using OrgInventoryAgent.Linux;
 using Xunit;
 
