@@ -73,8 +73,11 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'$t="{token}";'
         f'$p="{portal_url}";'
         f'$e="{agent_server_url}";'
-        f'$s="$env:TEMP\\install-both-$t.ps1";'
-        f'irm "$p/download/install-both.ps1" -OutFile $s;'
+        f'$s=Join-Path $env:TEMP ("install-both-" + $t + ".ps1");'
+        f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1...";'
+        f'try {{ irm "$p/download/install-both.ps1" -OutFile $s -ErrorAction Stop }} catch {{ Write-Host "ERR: Khong tai duoc script - ${{$_.Exception.Message}}"; exit 1 }};'
+        f'if (-not (Test-Path $s)) {{ Write-Host "ERR: Script khong duoc luu tai $s"; exit 1 }};'
+        f'Write-Host "Script da luu ($((Get-Item $s).Length) bytes). Chay...";'
         f'& $s -Token $t -PortalUrl $p -Endpoint $e'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")

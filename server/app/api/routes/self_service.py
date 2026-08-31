@@ -59,8 +59,10 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     script = (
         f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
-        f'$m="$env:TEMP\\agent-$t.msi";'
-        f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
+        f'$m=Join-Path $env:TEMP ("agent-" + $t + ".msi");'
+        f'Write-Host "Tai MSI tu {portal_url}/download/agent.msi...";'
+        f'try {{ irm "{portal_url}/download/agent.msi" -OutFile $m -ErrorAction Stop }} catch {{ Write-Host "ERR: Khong tai duoc MSI - ${{$_.Exception.Message}}"; exit 1 }};'
+        f'if (-not (Test-Path $m)) {{ Write-Host "ERR: MSI khong duoc luu tai $m"; exit 1 }};'
         f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
         f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
         f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
