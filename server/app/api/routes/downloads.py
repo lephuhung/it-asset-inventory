@@ -46,7 +46,6 @@ VELOCIRAPTOR_CONFIG_ONLY_ZIP = "velociraptor-config-only.zip"
 VELOCIRAPTOR_DEB_FILENAME = "velociraptor_client_amd64.deb"
 VELOCIRAPTOR_RPM_FILENAME = "velociraptor_client_amd64.rpm"
 INSTALL_BOTH_PS1 = "install-both.ps1"
-INSTALL_BOTH_SH = "install-both.sh"
 
 
 def _safe_resolve(filename: str) -> Path:
@@ -98,7 +97,8 @@ async def download_agent_linux():
       cd agent && dotnet publish src/OrgInventoryAgent -c Release -r linux-x64 \
           --self-contained -p:PublishSingleFile=true -p:DebugType=none -o publish/linux-x64
     → copy `OrgInventoryAgent` vào `agent_msi_dir` với tên `OrgInventoryAgent-linux-x64`.
-    Script `install-both.sh` (Linux) tải file này khi có `--portal-url`.
+    Linux one-liner `curl -fsSL <portal>/i/<token> | sudo bash` (render `install.sh.j2`)
+    tải file này.
     """
     path = _safe_resolve(AGENT_LINUX_FILENAME)
     _ensure_exists(path)
@@ -292,8 +292,7 @@ async def download_velociraptor_linux_rpm():
 # File gốc đặt ở app/templates/ (cùng chỗ install-offline.ps1); bản dev ở agent/.
 #   Windows (1 lệnh):  $env:ORGINVENTORY_TOKEN='t_xxx'; $env:ORGINVENTORY_PORTAL_URL='<portal>';
 #                      irm <portal>/download/install-both.ps1 | iex
-#   Linux (1 lệnh):    curl -fsSL <portal>/download/install-both.sh | sudo bash -s -- \
-#                      --token t_xxx --endpoint https://agent.gov.vn --portal-url <portal>
+#   Linux (1 lệnh):    curl -fsSL <portal>/i/<token> | sudo bash   (canonical — render install.sh.j2)
 
 
 @router.get("/install-both.ps1", response_class=PlainTextResponse)
@@ -310,18 +309,6 @@ async def download_install_both_ps1():
     # BOM đã có sẵn trong file template (thêm bằng `printf '\xEF\xBB\xBF'`)
     return PlainTextResponse(
         content=template_path.read_bytes().decode("utf-8"),
-        media_type="text/plain; charset=utf-8",
-    )
-
-
-@router.get("/install-both.sh", response_class=PlainTextResponse)
-async def download_install_both_sh():
-    """`install-both.sh` — cài cùng lúc OrgInventory Agent + Velociraptor Client trên Linux."""
-    template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_SH
-    if not template_path.exists():
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.sh")
-    return PlainTextResponse(
-        content=template_path.read_text(encoding="utf-8"),
         media_type="text/plain; charset=utf-8",
     )
 

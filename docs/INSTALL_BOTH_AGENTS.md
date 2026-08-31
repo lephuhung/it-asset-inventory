@@ -88,38 +88,32 @@ Hoặc chạy file trực tiếp (có tham số):
 > `-VelociraptorMsiUrl https://portal.gov.vn/download/velociraptor-windows-amd64.msi`
 > (script sẽ bỏ qua bước ghi đè config nếu MSI đã nhúng).
 
-### 2.2. Linux — `install-both.sh`
+### 2.2. Linux — canonical `install.sh.j2`
 
-**1 lệnh duy nhất**:
-
-```bash
-curl -fsSL https://portal.gov.vn/download/install-both.sh | sudo bash -s -- \
-  --token t_xxx --endpoint https://agent.gov.vn --portal-url https://portal.gov.vn
-```
-
-Hoặc chạy file trực tiếp:
+**1 lệnh duy nhất** (server render `install.sh.j2`, token nhúng sẵn trong URL):
 
 ```bash
-sudo bash install-both.sh --token t_xxx --endpoint https://agent.gov.vn \
-  --velociraptor-package-url https://portal.gov.vn/download/velociraptor-linux-amd64.deb
+curl -fsSL https://portal.gov.vn/i/<token> | sudo bash
 ```
 
-> Khi có `--portal-url`, script tự tải binary agent từ `/download/agent-linux-x64` và gói
-> Velociraptor từ `/download/velociraptor-linux-amd64.deb` (không cần truyền 2 tham số URL đó).
+> Lệnh này là **canonical** — thay thế hoàn toàn `install-both.sh` (đã xóa): template
+> `server/app/templates/install.sh.j2` tự cài đủ **2 agent trong 1 lần** (OrgInventory +
+> Velociraptor). Nếu agent đã cài → **smart reinstall**: chỉ merge config + restart
+> (giữ identity), không tải lại binary/package; `--force` để cài đè hoàn toàn.
 
-**Luồng xử lý** (file: `agent/install-both.sh`, bản serve: `server/app/templates/install-both.sh`):
+**Luồng xử lý** (template: `server/app/templates/install.sh.j2`):
 
-1. **OrgInventory Agent**:
-   - Lấy binary linux-x64: từ `--agent-binary-url` (URL/path), hoặc `publish/linux-x64/`
-     trong repo, hoặc **tự build** bằng `dotnet publish -r linux-x64 --self-contained -p:PublishSingleFile=true`
-     nếu đang chạy trong repo có source + dotnet SDK.
-   - Cài vào `/opt/orginventory/`, tạo user `orginventory`, data dir `/var/lib/orginventory`.
-   - **Smoke test enroll** (`--once`, tối đa 120s): nếu enroll thành công ngay → unit file
-     **không** chứa token; nếu máy offline → giữ `--enroll-token` trong unit để service tự retry.
-   - Tạo + enable systemd unit `orginventory-agent.service`.
-2. **Velociraptor Client**: tải gói `.deb`/`.rpm` (từ URL hoặc path) → `dpkg -i` / `rpm -i`
-   → `systemctl enable --now velociraptor_client`.
-3. Verify cả 2 service.
+1. Phát hiện distro (Debian/Ubuntu ↔ `.deb`, RHEL/Rocky ↔ `.rpm`) + architecture.
+2. **OrgInventory Agent**:
+   - Tải binary self-contained từ `/download/agent-linux-x64` + SHA256 → verify.
+   - Tạo user `orginventory`, data dir `/var/lib/orginventory`, helper socket
+     `/run/orginventory/helper.sock`.
+   - Ghi `/etc/orginventory/config.json` với token + endpoints; tạo + enable systemd unit
+     `orginventory-agent.service`.
+3. **Velociraptor Client**: tải gói từ `/download/velociraptor-linux-amd64.{deb,rpm}` →
+   `dpkg -i` / `dnf install` → `systemctl enable --now velociraptor_client`; đè
+   `client.config.yaml` từ `/download/velociraptor-client.config.yaml` → restart.
+4. Verify cả 2 service (OrgInventory + Velociraptor).
 
 > ⚠️ Gói `.deb`/`.rpm` phải là gói **đã nhúng `client.config.yaml`** (tạo bằng
 > `Server.Utils.CreateLinuxPackages` hoặc `velociraptor debian client --config client.config.yaml`
@@ -136,7 +130,6 @@ Trong `server/app/api/routes/downloads.py`:
 | Route | Nội dung |
 |---|---|
 | `GET /download/install-both.ps1` | Script Windows (serve từ `app/templates/install-both.ps1`) |
-| `GET /download/install-both.sh` | Script Linux (serve từ `app/templates/install-both.sh`) |
 | `GET /download/agent-linux-x64` | Binary Linux OrgInventoryAgent (từ `agent_dist/OrgInventoryAgent-linux-x64`) |
 | `GET /download/velociraptor-linux-amd64.deb` | Gói `.deb` từ `agent_dist/velociraptor_client_amd64.deb` |
 | `GET /download/velociraptor-linux-amd64.rpm` | Gói `.rpm` từ `agent_dist/velociraptor_client_amd64.rpm` |

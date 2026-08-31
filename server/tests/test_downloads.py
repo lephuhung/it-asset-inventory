@@ -99,17 +99,8 @@ async def test_download_install_both_ps1_ok(client):
     assert "Velociraptor" in r.text
 
 
-async def test_download_install_both_sh_ok(client):
-    """install-both.sh đọc từ template — hỗ trợ --token/--endpoint/--velociraptor-package-url."""
-    r = await client.get("/download/install-both.sh")
-    assert r.status_code == 200, r.text
-    assert r.headers["content-type"].startswith("text/plain")
-    assert "--velociraptor-package-url" in r.text
-    assert "orginventory-agent" in r.text  # systemd unit cho agent
-
-
 async def test_download_agent_linux_x64_ok(client, msi_dir):
-    """Binary Linux của OrgInventoryAgent — phục vụ cho install-both.sh."""
+    """Binary Linux của OrgInventoryAgent — phục vụ cho one-liner `curl -fsSL <portal>/i/<token> | sudo bash` (install.sh.j2)."""
     r = await client.get("/download/agent-linux-x64")
     assert r.status_code == 200, r.text
     assert r.content == b"LINUX-BIN-FAKE-CONTENT"
