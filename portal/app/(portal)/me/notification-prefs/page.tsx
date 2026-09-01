@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import type { UserNotificationPref } from "@/lib/types";
 import { ALERT_CATEGORY_META, ALERT_SEVERITY_META } from "@/lib/format";
 import { useAuth } from "@/components/auth-context";
-import { Badge, Button, Card, EmptyState, ErrorBanner, Select, Spinner, Toggle } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorBanner, Spinner, Toggle } from "@/components/ui";
 
 const SEVERITY_OPTIONS = ["info", "success", "warning", "error", "critical"];
 
@@ -155,17 +155,40 @@ export default function NotificationPrefsPage() {
                       </div>
                     )}
                     {it.opt_out_controls.includes("severity") && (
-                      <div className={`flex items-center gap-2 text-sm ${it.muted ? "text-slate-300" : "text-slate-700"}`}>
+                      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 text-sm ${it.muted ? "text-slate-300" : "text-slate-700"}`}>
                         <span className={`text-xs ${it.muted ? "text-slate-300" : "text-slate-500"}`}>Chỉ nhận từ mức:</span>
-                        <Select
-                          value={it.min_severity ?? it.default_severity}
-                          onChange={(e) => update(it.template_code, { min_severity: e.target.value })}
-                          disabled={isSuperAdmin || it.muted}
-                          title={it.muted ? "Tắt nhận thông báo cho template này trước để chọn mức" : undefined}
-                          className="w-36"
-                        >
-                          {SEVERITY_OPTIONS.map((s) => <option key={s} value={s}>{ALERT_SEVERITY_META[s]?.label ?? s}</option>)}
-                        </Select>
+                        {/* Severity pill nhóm — thay dropdown: active = chip tint màu severity
+                            (giống badge "Mức mặc định"), disabled khi super admin / template đang tắt. */}
+                        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`Chọn mức tối thiểu cho ${it.template_name}`}>
+                          {SEVERITY_OPTIONS.map((s) => {
+                            const meta = ALERT_SEVERITY_META[s];
+                            const active = (it.min_severity ?? it.default_severity) === s;
+                            const disabled = isSuperAdmin || it.muted;
+                            return (
+                              <button
+                                key={s}
+                                type="button"
+                                disabled={disabled}
+                                onClick={() => update(it.template_code, { min_severity: s })}
+                                aria-pressed={active}
+                                title={
+                                  isSuperAdmin
+                                    ? "Super Admin luôn nhận mọi mức alert"
+                                    : it.muted
+                                      ? "Bật nhận thông báo cho template này trước để chọn mức"
+                                      : undefined
+                                }
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors duration-150 motion-reduce:transition-none ${
+                                  active
+                                    ? `${meta?.badge ?? ""} ring-1 ring-inset`
+                                    : "bg-white text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-slate-700"
+                                } ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
+                              >
+                                {meta?.label ?? s}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
                     {it.opt_out_controls.length === 0 && (
