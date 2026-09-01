@@ -120,6 +120,7 @@ def test_render_missing_var_substitutes_placeholder():
 def test_validate_template_vars_returns_unknown():
     warnings = validate_template_vars(
         "[{org_name}] {hostname} {unknown_var}",
+        None,
         ["org_name", "hostname"],
     )
     assert "unknown_var" in warnings
