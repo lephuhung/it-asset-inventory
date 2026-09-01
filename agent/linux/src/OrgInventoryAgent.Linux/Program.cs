@@ -28,6 +28,28 @@ public class Program
         catch (Exception ex) { Console.Error.WriteLine($"Không thể khởi tạo data dir '{dataDir}': {ex.Message}"); return 10; }
 
         if (cli.PrintVersion) { Console.WriteLine($"{AppInfo.Name} v{AppInfo.Version}"); return 0; }
+        if (cli.ShowHelp)
+        {
+            Console.WriteLine($"""
+                OrgInventoryAgent v{AppInfo.Version} — Linux Agent
+                Sử dụng: OrgInventoryAgent [tùy chọn]
+                  --data-dir <path>        Thư mục dữ liệu (config/cache/log)
+                  --config <path>          File config.json (mặc định /etc/orginventory/config.json)
+                  --enroll-token <token>   Enroll token (lưu vào config, xóa sau enroll)
+                  --endpoint <url>         Server URL mTLS
+                  --inventory-seconds <n>  Chu kỳ inventory (giây, test)
+                  --once                   Enroll (nếu cần) → inventory 1 lần rồi exit
+                  --send-inventory         Gửi inventory 1 lần rồi exit (tương đương --once)
+                  --print-config           In cấu hình hiện tại
+                  --print-inventory        In payload inventory v4 đầy đủ
+                  --print-security         In security posture
+                  --print-fingerprint      In fingerprint
+                  --version, -v            In version
+                  --about, --info          In cam kết an toàn
+                  --help, -h               In hướng dẫn này
+                """);
+            return 0;
+        }
         if (cli.PrintAbout) { Console.WriteLine(AppInfo.TransparencyAndSafetyCommitment); return 0; }
         if (cli.PrintConfig)
         {
@@ -114,6 +136,7 @@ public class Program
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(AgentState.Load());
         builder.Services.AddSingleton<KeyStore>();
+        builder.Services.AddSingleton<IKeyStore>(sp => sp.GetRequiredService<KeyStore>());
         builder.Services.AddSingleton<EndpointManager>();
         builder.Services.AddSingleton<OfflineCache>();
         builder.Services.AddSingleton<LinuxFingerprintCollector>();
