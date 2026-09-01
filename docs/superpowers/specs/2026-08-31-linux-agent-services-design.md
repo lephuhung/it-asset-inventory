@@ -323,3 +323,6 @@ cd server && .venv/bin/pytest -q   # giữ xanh (sau khi xóa install-both.sh ro
 - Core: `agent/src/OrgInventoryAgent.Core/` (AgentConfig, Net/, Services/, Crypto/)
 - Install template: `server/app/templates/install.sh.j2`, `server/app/templates/install-both.sh` (xóa)
 - Server routes: `server/app/api/routes/{enroll,heartbeat,agent_settings,downloads,tokens,install}.py`
+
+**Quyết định khi deploy (bổ sung sau review):**
+- `OrgInventoryAgent.LinuxHelper` (SMART/DMI/LUKS privileged helper) **đã xóa hoàn toàn** — agent v1.1.0 chưa dùng dữ liệu nào cần helper (DMI qua sysfs world-readable, LUKS qua lsblk, SMART chưa implement collector); install.sh.j2 trước đó cài helper giả (đổi tên binary). Khi cần SMART trong tương lai: thêm lại project + download endpoint helper riêng (commit `dbc137f`).
