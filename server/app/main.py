@@ -43,6 +43,7 @@ from app.api.routes import (
     users,
     velociraptor,
     ws,
+    alert_templates_admin,
 )
 from app.core.config import settings
 
@@ -173,6 +174,7 @@ app.include_router(notifications.ext_router)
 app.include_router(notifications.me_router)
 app.include_router(notifications.tg_router)
 app.include_router(telegram_bot_admin.router)
+app.include_router(alert_templates_admin.router)
 
 
 @app.get("/health")
