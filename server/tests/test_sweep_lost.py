@@ -58,7 +58,7 @@ async def test_sweep_lost_full_workflow(session_factory, seeded_env, monkeypatch
 
     # Run sweep with the test session factory.  The production module owns a
     # long-lived engine, which belongs to a different event loop in pytest.
-    monkeypatch.setattr("app.services.monitor.AsyncSessionLocal", session_factory)
+    monkeypatch.setattr("app.db.session.AsyncSessionLocal", session_factory)
     await _sweep_lost()
 
     # Verify

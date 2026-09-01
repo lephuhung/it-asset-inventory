@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.models import Machine, MachineStatus
-from app.db.session import AsyncSessionLocal
+from app.db import session as db_session
 from app.services import dfir_investigation
 from app.services.partition import ensure_heartbeat_partitions
 from app.services.realtime import publish_machine_event
@@ -39,7 +39,7 @@ LLM_DFIR_WORKER_SECONDS = settings.llm_investigation_interval_seconds  # 30 giâ
 async def _sweep_offline() -> None:
     """Máy last_seen quá hạn mà đang online → chuyển offline + publish."""
     cutoff = datetime.now(UTC) - OFFLINE_THRESHOLD
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         rows = (
             (
                 await db.execute(
@@ -91,7 +91,7 @@ async def _sweep_lost() -> None:
     được admin/webhook chuyển về `online` (qua API).
     """
     cutoff = datetime.now(UTC) - timedelta(days=settings.lost_after_days)
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         try:
             rows = (
                 (
@@ -125,7 +125,7 @@ async def _sweep_lost() -> None:
 
 async def _ensure_partitions() -> None:
     try:
-        async with AsyncSessionLocal() as db:
+        async with db_session.AsyncSessionLocal() as db:
             raw = await db.connection()
             from sqlalchemy import text
 
@@ -155,7 +155,7 @@ async def _scan_alerts() -> None:
     software_new / hardware_changed: Phase 3 — chưa có trigger.
     """
     now = datetime.now(UTC)
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         from app.db.models import AlertRule as AR
         from app.services.alert_engine import trigger_alert
         from app.services.alert_templates import get_template
@@ -310,10 +310,10 @@ async def _scan_dfir_schedules() -> None:
     from datetime import datetime as dt
     from sqlalchemy import select as sa_select, update
     from app.db.models import DfirSchedule, DfirHunt, VelociraptorLink
-    from app.db.session import AsyncSessionLocal
+    from app.db import session as db_session
     from app.services.velociraptor import VelociraptorClient, VelociraptorError
 
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         now = dt.now(UTC)
         due = (
             await db.execute(
@@ -423,7 +423,7 @@ async def _scan_sensitive_flows() -> None:
 
     # Lấy các hunt gần đây (24h) có artifact match sensitive patterns
     cutoff = dt.now(UTC) - timedelta(hours=24)
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         for pattern, severity, description in SENSITIVE_ARTIFACT_PATTERNS:
             # Match artifact name theo glob pattern (vd "Windows.Persistence.Permanent*")
             artifact_prefix = pattern.rstrip("*")
