@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from app.db.models import Machine
 from app.services.monitor import _sweep_lost
 
@@ -28,7 +26,7 @@ async def _create_machine(session, org_id, *, last_seen_at, status, hostname):
     return m
 
 
-async def test_sweep_lost_full_workflow(session_factory, seeded_env):
+async def test_sweep_lost_full_workflow(session_factory, seeded_env, monkeypatch):
     """Verify đầy đủ logic sweep_lost: transition + threshold + ignore online + None last_seen."""
     from app.core.config import settings
 
@@ -58,7 +56,9 @@ async def test_sweep_lost_full_workflow(session_factory, seeded_env):
         await session.commit()
         ids = (m_old_offline.id, m_recent_offline.id, m_old_online.id, m_no_lastseen.id)
 
-    # Run sweep
+    # Run sweep with the test session factory.  The production module owns a
+    # long-lived engine, which belongs to a different event loop in pytest.
+    monkeypatch.setattr("app.services.monitor.AsyncSessionLocal", session_factory)
     await _sweep_lost()
 
     # Verify

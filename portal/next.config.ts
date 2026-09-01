@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const apiBase = process.env.API_BASE ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   reactStrictMode: true,
   // Cho phép HMR WebSocket (`/_next/hmr`) qua địa chỉ LAN khi dev.
   // Next 15.2+ chặn host lạ (chống DNS-rebinding) trừ khi khai báo ở đây.

@@ -40,6 +40,7 @@ import {
   Select,
   Spinner,
   StatusDot,
+  Textarea,
 } from "@/components/ui";
 import {
   LIFECYCLE_META,
@@ -1244,7 +1245,11 @@ export default function MachineDetailPage() {
       />
 
       {showInvestigationModal && (
-        <Modal title="Khởi tạo điều tra AI" onClose={() => setShowInvestigationModal(false)}>
+        <Modal
+          open={showInvestigationModal}
+          title="Khởi tạo điều tra AI"
+          onClose={() => setShowInvestigationModal(false)}
+        >
           <div className="space-y-4">
             <p className="text-sm text-slate-600">Điều tra máy <strong>{machine.hostname}</strong> qua LangGraph và Velociraptor. Agent dùng policy cố định; chỉ thời gian hiện tại và dấu hiệu dưới đây được đưa vào cuộc điều tra.</p>
             <Field label="Dấu hiệu nghi ngờ / yêu cầu điều tra">

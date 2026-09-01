@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy import text
 
 from app.api.routes import (
     agent_config,
@@ -19,14 +20,17 @@ from app.api.routes import (
     audit,
     auth,
     compliance,
-    downloads,
     dfir_requests,
+    downloads,
     drifts,
     enroll,
     heartbeat,
     install,
     inventory,
+    llm_dfir,
+    llm_dfir_external,
     machines,
+    notifications,
     offline_import,
     orgs,
     renew,
@@ -38,9 +42,6 @@ from app.api.routes import (
     users,
     velociraptor,
     ws,
-    llm_dfir,
-    llm_dfir_external,
-    notifications,
 )
 from app.core.config import settings
 
@@ -86,13 +87,16 @@ async def lifespan(app: FastAPI):
         from app.db.seed_orgs import seed_all
         from app.db.session import AsyncSessionLocal
 
-        async with AsyncSessionLocal() as db:
-            await auth.seed_admin(db)
-            await seed_all(db)
+        async with AsyncSessionLocal() as db, db.begin():
+            # Nhiều Uvicorn workers cùng khởi động; khóa transaction này giúp
+            # chỉ một worker seed dữ liệu hệ thống trên mỗi PostgreSQL database.
+            await db.execute(text("SELECT pg_advisory_xact_lock(84620931)"))
+            await auth.seed_admin(db, commit=False)
+            await seed_all(db, commit=False)
             # 3 tag phân loại máy (cá nhân / công vụ / BMNN) — tự seed nếu thiếu
             from app.services.tags import ensure_system_tags
 
-            await ensure_system_tags(db)
+            await ensure_system_tags(db, commit=False)
 
     # Background monitor: phát hiện offline + đảm bảo partition heartbeats
     from app.services.monitor import start_monitor

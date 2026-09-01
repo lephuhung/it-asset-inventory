@@ -281,8 +281,9 @@ async def test_portal_url_override_used_in_install_command(client, seeded_env):
     # Lệnh cài là `powershell -EncodedCommand <base64 UTF-16LE>` — giải mã trước khi assert
     import base64 as _b64
 
-    if cmd.startswith("powershell -NoProfile -EncodedCommand "):
-        decoded_cmd = _b64.b64decode(cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    encoded_marker = "-EncodedCommand "
+    if encoded_marker in cmd:
+        decoded_cmd = _b64.b64decode(cmd.split(encoded_marker, 1)[1]).decode("utf-16-le")
     else:
         decoded_cmd = cmd
     assert new_portal in decoded_cmd, f"install_command phải chứa URL mới, got: {decoded_cmd}"

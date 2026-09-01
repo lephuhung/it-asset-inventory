@@ -50,14 +50,16 @@ async def test_full_enroll_heartbeat_inventory(client, seeded_env, session_facto
     import base64 as _b64
 
     _cmd = tok["install_command"]
-    if _cmd.startswith("powershell -NoProfile -EncodedCommand "):
-        _cmd = _b64.b64decode(_cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    encoded_marker = "-EncodedCommand "
+    if encoded_marker in _cmd:
+        _cmd = _b64.b64decode(_cmd.split(encoded_marker, 1)[1]).decode("utf-16-le")
     assert enroll_token in _cmd
 
-    # 2. Render install script — token hợp lệ
+    # 2. Render install script — default user-agent chọn shell script Linux.
     r = await client.get(f"/i/{enroll_token}")
     assert r.status_code == 200
-    assert "CÀI ĐẶT AGENT" in r.text
+    assert r.text.startswith("#!/usr/bin/env bash")
+    assert enroll_token in r.text
 
     # 3. Enroll — cần CSR hợp lệ (LocalCaService parse CSR)
     from cryptography import x509

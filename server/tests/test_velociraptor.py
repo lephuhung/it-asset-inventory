@@ -1,6 +1,6 @@
 """Test Velociraptor API wrapper + sync logic + routes.
 
-Mock toàn bộ HTTP sang Velociraptor (httpx.MockTransport) — không cần server thật.
+Các luồng remote VQL được mock ở boundary gRPC, không cần Velociraptor thật.
 """
 from __future__ import annotations
 
@@ -39,6 +39,11 @@ SAMPLE_CLIENTS = [
         "last_seen_at": "2026-08-05T10:00:00Z",
     },
 ]
+
+
+def _vql_client_rows(clients: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Mô phỏng shape của VQL `SELECT ... os_info.hostname AS hostname`."""
+    return [{**client, "hostname": client.get("os_info", {}).get("hostname", "")} for client in clients]
 
 
 def _build_mock_transport(handler):
@@ -336,7 +341,7 @@ async def test_sync_links_matches_by_normalized_hostname(client, session_factory
         orig_query = vmod.VelociraptorClient._vql_query
 
         async def patched_query(self, query, env=None):
-            return SAMPLE_CLIENTS
+            return _vql_client_rows(SAMPLE_CLIENTS)
 
         vmod.VelociraptorClient._vql_query = patched_query
         try:
@@ -396,7 +401,7 @@ async def test_sync_records_last_sync(client, session_factory):
         orig_query = vmod.VelociraptorClient._vql_query
 
         async def patched_query(self, query, env=None):
-            return SAMPLE_CLIENTS[:3]  # chỉ 3 client, 1 match
+            return _vql_client_rows(SAMPLE_CLIENTS[:3])  # chỉ 3 client, 1 match
 
         vmod.VelociraptorClient._vql_query = patched_query
         try:
@@ -522,23 +527,18 @@ def test_velociraptor_client_find_latest_finished_flow() -> None:
     """find_latest_finished_flow: flow FINISHED mới nhất có artifact (mới nhất trước)."""
     from app.services.velociraptor import VelociraptorClient
 
-    def handler(req: httpx.Request) -> Any:
-        assert req.url.path == "/api/v1/GetClientFlows"
-        # ⚠️ Velociraptor GetClientFlows dùng `rows` (không phải `limit`) —
-        # nếu dùng `limit` chỉ trả về 1 flow mới nhất (default rows=1)
-        assert "rows=" in str(req.url), "GetClientFlows phải truyền param rows="
-        assert "limit=" not in str(req.url)
-        return {
-            "columns": ["State", "FlowId", "Artifacts", "Rows"],
-            "rows": [
-                {"json": json.dumps(["RUNNING", "F.999", ["Windows.System.Pslist"], 0])},
-                {"json": json.dumps(["FINISHED", "F.111", ["Windows.Forensics.Prefetch"], 4])},
-                {"json": json.dumps(["FINISHED", "F.222", ["Windows.Network.Netstat", "Windows.System.Pslist"], 2])},
-            ],
-        }
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+    async def fake_query(self, vql, env=None):
+        assert "FROM flows(client_id=\"C.aaa111\")" in vql
+        assert "ORDER BY create_time DESC LIMIT 50" in vql
+        return [
+            {"State": "RUNNING", "FlowId": "F.999", "Artifacts": ["Windows.System.Pslist"], "Rows": 0},
+            {"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"], "Rows": 4},
+            {"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat", "Windows.System.Pslist"], "Rows": 2},
+        ]
+
+    client._vql_query = fake_query.__get__(client, VelociraptorClient)
 
     async def run() -> tuple[dict | None, dict | None, dict | None]:
         async with client as c:
@@ -556,24 +556,20 @@ def test_velociraptor_client_find_latest_finished_flow() -> None:
 
 
 def test_velociraptor_client_get_table_parses_rows() -> None:
-    """get_table: GET /GetTable với artifact + rows → list dict (zip columns)."""
+    """get_table: VQL source() trả nguyên rows theo schema artifact."""
     from app.services.velociraptor import VelociraptorClient
 
-    def handler(req: httpx.Request) -> Any:
-        assert req.url.path == "/api/v1/GetTable"
-        assert "artifact=Windows.Forensics.Prefetch" in str(req.url)
-        assert "rows=50" in str(req.url)
-        return {
-            "columns": ["Executable", "RunCount", "ModificationTime"],
-            "rows": [
-                {"json": json.dumps(["chrome.exe", 5, "2026-08-01T08:00:00Z"])},
-                {"json": json.dumps(["cmd.exe", 3, "2026-07-01T08:00:00Z"])},
-            ],
-            "total_rows": 2,
-        }
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+    async def fake_query(self, vql, env=None):
+        assert 'source(flow_id="F.111", artifact="Windows.Forensics.Prefetch")' in vql
+        assert vql.endswith("LIMIT 50")
+        return [
+            {"Executable": "chrome.exe", "RunCount": 5, "ModificationTime": "2026-08-01T08:00:00Z"},
+            {"Executable": "cmd.exe", "RunCount": 3, "ModificationTime": "2026-07-01T08:00:00Z"},
+        ]
+
+    client._vql_query = fake_query.__get__(client, VelociraptorClient)
 
     async def run() -> list[dict]:
         async with client as c:
@@ -598,18 +594,18 @@ def test_velociraptor_client_collect_artifact_and_wait(monkeypatch) -> None:
     monkeypatch.setattr("app.services.velociraptor.asyncio.sleep", no_sleep)
 
     details_calls = {"n": 0}
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
-    def handler(req: httpx.Request) -> Any:
-        if req.url.path == "/api/v1/CollectArtifact":
-            return {"flow_id": "F.777"}
-        if req.url.path == "/api/v1/GetFlowDetails":
+    async def fake_query(self, vql, env=None):
+        if "collect_client" in vql:
+            assert env == {"ClientId": "C.aaa111", "Artifact": "Windows.System.Pslist"}
+            return [{"Collection": {"flow_id": "F.777"}}]
+        if "FROM flows" in vql:
             details_calls["n"] += 1
-            state = "FINISHED" if details_calls["n"] >= 2 else "RUNNING"
-            return {"context": {"state": state}}
-        raise AssertionError(f"unexpected path: {req.url.path}")
+            return [{"state": "FINISHED" if details_calls["n"] >= 2 else "RUNNING"}]
+        raise AssertionError(vql)
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+    client._vql_query = fake_query.__get__(client, VelociraptorClient)
 
     async def run() -> str:
         async with client as c:
@@ -634,15 +630,16 @@ def test_velociraptor_client_collect_artifact_and_wait_timeout(monkeypatch) -> N
 
     monkeypatch.setattr("app.services.velociraptor.asyncio.sleep", no_sleep)
 
-    def handler(req: httpx.Request) -> Any:
-        if req.url.path == "/api/v1/CollectArtifact":
-            return {"flow_id": "F.999"}
-        if req.url.path == "/api/v1/GetFlowDetails":
-            return {"context": {"state": "RUNNING"}}
-        raise AssertionError(f"unexpected path: {req.url.path}")
+    client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
-    transport = _build_mock_transport(handler)
-    client = VelociraptorClient("https://veloci.test", username="admin", password="tok", transport=transport)
+    async def fake_query(self, vql, env=None):
+        if "collect_client" in vql:
+            return [{"Collection": {"flow_id": "F.999"}}]
+        if "FROM flows" in vql:
+            return [{"state": "RUNNING"}]
+        raise AssertionError(vql)
+
+    client._vql_query = fake_query.__get__(client, VelociraptorClient)
 
     async def run() -> str:
         async with client as c:
@@ -885,10 +882,10 @@ def test_extract_top10_service_respects_top_n() -> None:
     from app.services.velociraptor_top10 import extract_top10
 
     class FakeVelo:
-        async def list_client_flows(self, client_id, limit=50):  # noqa: ARG002
+        async def list_client_flows(self, client_id, limit=50):
             return [{"State": "FINISHED", "FlowId": "F.1", "Artifacts": ["Windows.Forensics.Prefetch"]}]
 
-        async def get_table(self, client_id, flow_id, artifact, rows=100):  # noqa: ARG002
+        async def get_table(self, client_id, flow_id, artifact, rows=100):
             return [
                 {"Executable": f"e{i}", "ModificationTime": f"2026-08-0{i}T00:00:00Z"}
                 for i in range(1, 6)
@@ -918,10 +915,10 @@ async def test_get_top10_respects_top_n_param(client, seeded_env):
         },
     )
 
-    async def fake_list_flows(self, client_id, limit=50):  # noqa: ARG002
+    async def fake_list_flows(self, client_id, limit=50):
         return [{"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"]}]
 
-    async def fake_get_table(self, client_id, flow_id, artifact, rows=100):  # noqa: ARG002
+    async def fake_get_table(self, client_id, flow_id, artifact, rows=100):
         return [
             {"Executable": "a.exe", "ModificationTime": "2026-01-01T00:00:00Z"},
             {"Executable": "b.exe", "ModificationTime": "2026-08-01T00:00:00Z"},

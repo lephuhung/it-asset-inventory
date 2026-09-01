@@ -141,7 +141,7 @@ async def get_or_create_root(db: AsyncSession) -> Organization:
 
 
 async def _seed_orgs(
-    db: AsyncSession, names: list[str], org_type: str
+    db: AsyncSession, names: list[str], org_type: str, *, commit: bool = True
 ) -> tuple[int, int]:
     """Seed danh sách tổ chức cùng loại dưới Root. Idempotent.
 
@@ -172,26 +172,30 @@ async def _seed_orgs(
         db.add(Organization(name=name, type=org_type, parent_id=root.id))
         created += 1
 
-    await db.commit()
+    if commit:
+        await db.commit()
     return created, skipped
 
 
-async def seed_ubnd_xa(db: AsyncSession) -> tuple[int, int]:
+async def seed_ubnd_xa(db: AsyncSession, *, commit: bool = True) -> tuple[int, int]:
     """Seed danh sách UBND cấp xã dưới Root. Idempotent."""
-    return await _seed_orgs(db, UBND_XA_NAMES, OrgType.UBND_XA.value)
+    return await _seed_orgs(db, UBND_XA_NAMES, OrgType.UBND_XA.value, commit=commit)
 
 
-async def seed_so_ban_nganh(db: AsyncSession) -> tuple[int, int]:
+async def seed_so_ban_nganh(db: AsyncSession, *, commit: bool = True) -> tuple[int, int]:
     """Seed danh sách Sở ban ngành / Văn phòng UBND tỉnh dưới Root. Idempotent."""
-    return await _seed_orgs(db, SO_BAN_NGANH_NAMES, OrgType.SO_BAN_NGANH.value)
+    return await _seed_orgs(db, SO_BAN_NGANH_NAMES, OrgType.SO_BAN_NGANH.value, commit=commit)
 
 
-async def seed_all(db: AsyncSession) -> dict[str, tuple[int, int]]:
+async def seed_all(db: AsyncSession, *, commit: bool = True) -> dict[str, tuple[int, int]]:
     """Seed toàn bộ tổ chức cấp tỉnh (UBND xã + Sở ban ngành). Idempotent."""
-    return {
-        "ubnd_xa": await seed_ubnd_xa(db),
-        "so_ban_nganh": await seed_so_ban_nganh(db),
+    result = {
+        "ubnd_xa": await seed_ubnd_xa(db, commit=False),
+        "so_ban_nganh": await seed_so_ban_nganh(db, commit=False),
     }
+    if commit:
+        await db.commit()
+    return result
 
 
 async def _main() -> None:

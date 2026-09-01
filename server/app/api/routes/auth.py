@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin
-from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
@@ -170,7 +170,7 @@ async def change_password(
     return {"ok": True}
 
 
-async def seed_admin(db: AsyncSession) -> None:
+async def seed_admin(db: AsyncSession, *, commit: bool = True) -> None:
     existing = (await db.execute(select(User).where(User.email == settings.seed_admin_email))).scalar_one_or_none()
     if existing:
         return
@@ -186,4 +186,5 @@ async def seed_admin(db: AsyncSession) -> None:
         password_hash=hash_password(settings.seed_admin_password),
     )
     db.add(user)
-    await db.commit()
+    if commit:
+        await db.commit()

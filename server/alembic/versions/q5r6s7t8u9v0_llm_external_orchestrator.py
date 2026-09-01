@@ -10,10 +10,6 @@ KHÔNG gọi LLM local. Đợi Hermes (hoặc service khác) POST kết quả v�
 """
 from __future__ import annotations
 
-import sqlalchemy as sa
-
-from alembic import op
-
 revision = "q5r6s7t8u9v0"
 down_revision = "p4q5r6s7t8u9"
 branch_labels = None
@@ -21,11 +17,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "llm_config",
-        sa.Column("external_orchestrator", sa.String(32), nullable=False, server_default=""),
-    )
+    # p4q5r6s7t8u9 already adds this column.  Keep this revision as a no-op so
+    # fresh databases can traverse the historical migration chain safely.
+    pass
 
 
 def downgrade() -> None:
-    op.drop_column("llm_config", "external_orchestrator")
+    pass

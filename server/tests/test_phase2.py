@@ -131,8 +131,9 @@ async def test_self_service_claim_flow(client, seeded_env):
     import base64 as _b64
 
     _cmd = data["install_command"]
-    if _cmd.startswith("powershell -NoProfile -EncodedCommand "):
-        _cmd = _b64.b64decode(_cmd.split("EncodedCommand ", 1)[1]).decode("utf-16-le")
+    encoded_marker = "-EncodedCommand "
+    if encoded_marker in _cmd:
+        _cmd = _b64.b64decode(_cmd.split(encoded_marker, 1)[1]).decode("utf-16-le")
     assert "irm" in _cmd
 
     # Token xuất hiện trong phễu triển khai

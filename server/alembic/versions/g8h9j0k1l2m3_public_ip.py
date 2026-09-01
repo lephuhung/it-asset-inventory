@@ -6,7 +6,7 @@ Lưu IP public (WAN) mà agent phát hiện được — dùng cho:
 - Tương quan với heartbeat IP (LAN) — phát hiện NAT/proxy
 
 Revision ID: g8h9j0k1l2m3
-Revises: f4a6c8e2b1d0
+Revises: d7e8f9a0b1c2
 Create Date: 2026-08-27 12:00:00.000000
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "g8h9j0k1l2m3"
-down_revision = "f4a6c8e2b1d0"
+down_revision = "d7e8f9a0b1c2"
 branch_labels = None
 depends_on = None
 

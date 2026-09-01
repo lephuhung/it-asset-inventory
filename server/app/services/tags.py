@@ -15,9 +15,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
-    DEFAULT_CLASSIFICATION,
     CLASSIFICATION_TAGS,
-    Machine,
+    DEFAULT_CLASSIFICATION,
     MachineTag,
     Tag,
     TagKind,
@@ -34,7 +33,7 @@ _CLASSIFICATION_COLORS: dict[str, str] = {
 }
 
 
-async def ensure_system_tags(db: AsyncSession) -> None:
+async def ensure_system_tags(db: AsyncSession, *, commit: bool = True) -> None:
     """Seed 3 tag phân loại hệ thống nếu chưa tồn tại.
 
     Gọi ở app startup (lifespan) — tự phục hồi cả khi DB tạo bằng
@@ -55,7 +54,8 @@ async def ensure_system_tags(db: AsyncSession) -> None:
                     is_system=True,
                 )
             )
-    await db.commit()
+    if commit:
+        await db.commit()
 
 
 async def get_tag_by_key(db: AsyncSession, key: str) -> Tag | None:

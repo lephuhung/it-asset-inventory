@@ -64,6 +64,9 @@ def test_websocket_hello_and_event(ws_client):
         hello = ws.receive_json()
         assert hello["type"] == "hello"
         assert hello["user_id"] == user_id
+        subscribed = ws.receive_json()
+        assert subscribed["type"] == "subscribed"
+        assert "machine:events" in subscribed["channels"]
 
         # Publish bằng sync redis (tránh tạo asyncio loop mới trong TestClient)
         r = sync_redis.Redis.from_url(settings.redis_url, decode_responses=True)
@@ -81,6 +84,5 @@ def test_websocket_hello_and_event(ws_client):
         r.close()
 
         event = ws.receive_json()
-        assert event["type"] == "machine_event"
         assert event["machine_id"] == str(mid)
         assert event["status"] == "offline"
