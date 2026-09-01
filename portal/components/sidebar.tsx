@@ -151,6 +151,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: SUPER_ADMIN_ROLES,
       },
       {
+        href: "/me/telegram",
+        label: "Cấu hình Telegram",
+        icon: MessageCircle,
+        roles: SUPER_ADMIN_ROLES,
+      },
+      {
         href: "/agent-config",
         label: "Cấu hình Agent",
         icon: ServerCog,
@@ -161,18 +167,6 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         label: "Phân loại & mục đích",
         icon: Tags,
         roles: SUPER_ADMIN_ROLES,
-      },
-      {
-        href: "/security",
-        label: "User Access",
-        icon: ShieldCheck,
-        roles: ADMIN_ROLES,
-      },
-      {
-        href: "/me/telegram",
-        label: "Liên kết Telegram",
-        icon: MessageCircle,
-        roles: ALL_ROLES,
       },
       { href: "/compliance", label: "Thông báo tuân thủ", icon: FileText },
     ],

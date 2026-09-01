@@ -9,7 +9,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
@@ -32,7 +32,9 @@ from app.schemas import (
     LoginRequest,
     LoginResponse,
     RefreshRequest,
+    SelfProfileUpdateRequest,
     TotpConfirmRequest,
+    TotpDisableRequest,
     TotpSetupResponse,
 )
 
@@ -105,7 +107,7 @@ async def me(user: User = Depends(get_current_user)):
 
 
 @router.post("/totp/setup", response_model=TotpSetupResponse)
-async def totp_setup(user: User = Depends(require_admin()), db: AsyncSession = Depends(get_db)):
+async def totp_setup(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Bật 2FA: sinh secret + backup codes."""
     secret = generate_totp_secret()
     uri = totp_uri(secret, user.email)
@@ -122,7 +124,7 @@ async def totp_setup(user: User = Depends(require_admin()), db: AsyncSession = D
 @router.post("/totp/confirm", response_model=LoginResponse)
 async def totp_confirm(
     body: TotpConfirmRequest,
-    user: User = Depends(require_admin()),
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not user.totp_secret_encrypted:
@@ -166,6 +168,46 @@ async def change_password(
         )
     user.password_hash = hash_password(body.new_password)
     await append_audit(db, action="auth.change_password", actor=str(user.id), target=str(user.id))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.patch("/me")
+async def update_my_profile(
+    body: SelfProfileUpdateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User chỉ tự thay đổi tên hiển thị; email, vai trò và đơn vị do quản trị quản lý."""
+    full_name = body.full_name.strip()
+    if not full_name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Họ và tên không được để trống")
+    user.full_name = full_name
+    await append_audit(db, action="auth.update_profile", actor=str(user.id), target=str(user.id))
+    await db.commit()
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "org_id": str(user.org_id),
+        "is_2fa_enabled": user.is_2fa_enabled,
+    }
+
+
+@router.post("/totp/disable")
+async def disable_my_totp(
+    body: TotpDisableRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tắt 2FA của chính mình sau khi xác thực lại mật khẩu hiện tại."""
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Mật khẩu hiện tại không đúng")
+    user.is_2fa_enabled = False
+    user.totp_secret_encrypted = None
+    user.backup_codes = None
+    await append_audit(db, action="auth.totp_disabled", actor=str(user.id), target=str(user.id))
     await db.commit()
     return {"ok": True}
 

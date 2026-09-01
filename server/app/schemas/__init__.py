@@ -763,6 +763,18 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
+class SelfProfileUpdateRequest(BaseModel):
+    """Thông tin cơ bản user có thể tự thay đổi."""
+
+    full_name: str = Field(..., min_length=1, max_length=255)
+
+
+class TotpDisableRequest(BaseModel):
+    """Tắt 2FA phải xác thực lại mật khẩu của phiên hiện tại."""
+
+    current_password: str = Field(..., min_length=1, max_length=128)
+
+
 # ── Cấu hình agent (portal Vận hành → Cấu hình Agent) ───────────
 
 
