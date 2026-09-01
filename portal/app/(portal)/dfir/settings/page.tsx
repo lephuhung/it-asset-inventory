@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Activity, AlertTriangle, CheckCircle2, KeyRound, Loader2, PlugZap, Save, ShieldAlert, Trash2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, FileKey2, Loader2, PlugZap, Save, ShieldAlert, Trash2, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   Badge,
@@ -20,7 +20,7 @@ import { formatDateTime, timeAgo } from "@/lib/format";
 
 /** Cài đặt Velociraptor Server (Super Admin).
  *
- *  - URL + API token (mã hoá AES-256-GCM phía server).
+ *  - URL giao diện + api_client.yaml mTLS (mã hoá AES-256-GCM phía server).
  *  - Allowlist artifact (chống lạm quyền — chỉ artifact này mới chạy được).
  *  - Test kết nối (không lưu DB) + nút Sync thủ công.
  */
@@ -33,15 +33,13 @@ export default function VelociraptorSettingsPage() {
 
   const [enabled, setEnabled] = useState(false);
   const [serverUrl, setServerUrl] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showToken, setShowToken] = useState(false);
   const [allowlistText, setAllowlistText] = useState("");
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<VelociraptorTestResult | null>(null);
-  // Xác nhận xóa token đã lưu (thay window.confirm — native confirm là anti-pattern)
+  // Xác nhận xóa cấu hình mTLS đã lưu (thay window.confirm — native confirm là anti-pattern)
   const [confirmingClear, setConfirmingClear] = useState(false);
   // True sau khi user bấm "Lưu" thành công — Test button được enable.
   // Trước khi save, credentials chưa vào DB → Test sẽ trả "Chưa cấu hình".
@@ -54,6 +52,7 @@ export default function VelociraptorSettingsPage() {
       setEnabled(s.enabled);
       setServerUrl(s.server_url ?? s.defaults_server_url ?? "");
       setAllowlistText((s.allowlist ?? []).join("\n"));
+      setHasSaved(true);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được cấu hình");
@@ -80,15 +79,8 @@ export default function VelociraptorSettingsPage() {
         server_url: serverUrl.trim(),
         allowlist,
       };
-      // Token: chỉ gửi nếu user thực sự nhập (tránh overwrite giá trị đã set)
-      if (username.trim() || password.trim()) {
-        body.username = username.trim() || null;
-        body.password = password.trim() || null;
-      }
       await api.put("/admin/velociraptor/config", body);
       setSavedMsg("Đã lưu cấu hình Velociraptor.");
-      setUsername("");
-      setPassword("");
       setHasSaved(true);
       await load();
     } catch (e) {
@@ -98,12 +90,30 @@ export default function VelociraptorSettingsPage() {
     }
   };
 
-  const clearToken = async () => {
+  const uploadClientConfig = async (file: File) => {
+    setUploading(true);
+    setSavedMsg(null);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      await api.postForm<VelociraptorConfig>("/admin/velociraptor/config/api-client/upload", form);
+      setSavedMsg("Đã tải lên và mã hoá api_client.yaml.");
+      setHasSaved(true);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Tải api_client.yaml thất bại");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const clearClientConfig = async () => {
     setSaving(true);
     try {
-      await api.put("/admin/velociraptor/config", { username: "", password: "" });
+      await api.put("/admin/velociraptor/config", { client_config: "" });
       await load();
-      setSavedMsg("Đã xóa API token.");
+      setSavedMsg("Đã xóa api_client.yaml.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Xóa thất bại");
     } finally {
@@ -130,25 +140,15 @@ export default function VelociraptorSettingsPage() {
   const syncStatus = data?.last_sync_error ? "error" : data?.last_sync_at ? "ok" : "pending";
   const allowlistCount = allowlistText.split("\n").filter((l) => l.trim()).length;
 
-  // Test button chỉ enable khi:
-  //   1. enabled = true
-  //   2. server_url điền
-  //   3. Có credentials — HOẶC đã lưu từ trước (data.basic_auth_set / client_config_set),
-  //      HOẶC đang nhập mới (username + password). Nếu không có → Test sẽ fail với
-  //      "Chưa cấu hình" vì server đọc credentials từ DB, không từ form state.
-  const hasFreshCreds = username.trim() !== "" && password.trim() !== "";
-  const hasSavedCreds = data?.basic_auth_set || data?.client_config_set;
-  const hasAnyCreds = hasFreshCreds || hasSavedCreds;
-  const canTest =
-    hasSaved && enabled && serverUrl.trim() !== "" && hasAnyCreds;
+  const canTest = hasSaved && enabled && serverUrl.trim() !== "" && Boolean(data?.client_config_set);
   const testHint = !hasSaved
     ? "Bấm 'Lưu cấu hình' trước khi Test — credentials chỉ áp dụng sau khi lưu."
     : !enabled
       ? "Bật Velociraptor trước khi Test."
       : serverUrl.trim() === ""
         ? "Nhập Server URL trước khi Test."
-        : !hasAnyCreds
-          ? "Nhập Username + Password (hoặc paste YAML Client Config) trước khi Test."
+        : !data?.client_config_set
+          ? "Tải api_client.yaml trước khi Test."
           : null;
 
   return (
@@ -196,7 +196,7 @@ export default function VelociraptorSettingsPage() {
 
             <Field
               label="Velociraptor Server URL"
-              hint="URL giao diện GUI/API của Velociraptor (vd https://veloci.example.gov.vn:8889). Click 'Test' để kiểm tra sau khi nhập."
+              hint="URL giao diện Velociraptor để mở deep-link (vd https://veloci.example.gov.vn:8889). Lưu URL trước khi Test kết nối."
             >
               <Input
                 value={serverUrl}
@@ -205,45 +205,38 @@ export default function VelociraptorSettingsPage() {
               />
             </Field>
 
-            {/* API Token — không dùng Field vì label có icon + badge (Field chỉ nhận string) */}
+            {/* api_client.yaml là nguồn cấu hình gRPC/mTLS duy nhất trên UI. */}
             <div className="block">
               <div className="mb-1.5 flex items-center gap-2 text-[13px] font-medium text-slate-700">
-                <KeyRound className="size-3.5 text-slate-500" />
-                <span>Username + Password (HTTP Basic)</span>
-                {data?.basic_auth_set && (
+                <FileKey2 className="size-3.5 text-slate-500" />
+                <span>API client config (YAML mTLS)</span>
+                {data?.client_config_set && (
                   <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">
                     <CheckCircle2 className="mr-1 size-3" /> Đã cấu hình
                   </Badge>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="admin"
-                  autoComplete="off"
+                  type="file"
+                  accept=".yaml,.yml,application/x-yaml,text/yaml"
+                  disabled={uploading || saving}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadClientConfig(file);
+                    e.currentTarget.value = "";
+                  }}
+                  className="max-w-md text-xs file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-2 file:py-1.5 file:text-xs file:font-medium file:text-brand-700 hover:file:bg-brand-100"
                 />
-                <Input
-                  type={showToken ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={data?.basic_auth_set ? "(giữ nguyên)" : "Password"}
-                  autoComplete="off"
-                  className="font-mono text-xs"
-                />
-                <Button variant="secondary" size="sm" onClick={() => setShowToken((v) => !v)}>
-                  {showToken ? "Ẩn" : "Hiện"}
-                </Button>
-                {data?.basic_auth_set && (
+                {uploading && <Loader2 className="size-4 animate-spin text-brand-600" />}
+                {data?.client_config_set && (
                   <Button variant="secondary" size="sm" onClick={() => setConfirmingClear(true)} disabled={saving}>
                     <Trash2 className="size-3.5 text-rose-600" /> Xóa
                   </Button>
                 )}
               </div>
               <p className="mt-1 text-xs leading-snug text-slate-400">
-                {data?.basic_auth_set
-                  ? "Username + password hiện tại được mã hoá AES-256-GCM. Để trống cả 2 ô nếu KHÔNG muốn đổi; nhập giá trị mới để thay thế."
-                  : "Dùng tài khoản Velociraptor admin (mặc định user 'admin' tạo qua VELOCIRAPTOR_INITIAL_ADMIN_PASSWORD lúc khởi động container)."}
+                Tải file sinh bởi <code className="rounded bg-slate-100 px-1 font-mono">velociraptor config api_client</code>. File chứa CA, client certificate, private key và gRPC target; backend chỉ lưu bản mã hoá AES-256-GCM.
               </p>
             </div>
 
@@ -377,12 +370,12 @@ export default function VelociraptorSettingsPage() {
       <ConfirmDialog
         open={confirmingClear}
         onClose={() => setConfirmingClear(false)}
-        title="Xóa API token đã lưu"
+        title="Xóa API client config đã lưu"
         danger
         loading={saving}
-        confirmLabel="Xóa token"
-        onConfirm={() => void clearToken()}
-        message="Backend sẽ ngừng sync và không cho phép chạy hunt cho tới khi nhập token mới."
+        confirmLabel="Xóa cấu hình"
+        onConfirm={() => void clearClientConfig()}
+        message="Backend sẽ ngừng sync và không cho phép chạy hunt cho tới khi tải api_client.yaml mới."
       />
     </div>
   );
