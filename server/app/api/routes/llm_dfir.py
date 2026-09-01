@@ -303,8 +303,6 @@ async def test_deepagent_mcp(
 ):
     """Kiểm tra DeepAgent rồi MCP Velociraptor bằng request read-only."""
     cfg = await _get_or_create_config(db)
-    if not cfg.deepagent_enabled:
-        return DeepAgentTestOut(ok=False, error="DeepAgent chưa được bật")
     if not settings.deepagent_url:
         return DeepAgentTestOut(ok=False, error="DeepAgent Compose chưa có URL nội bộ")
     token = settings.deepagent_api_key

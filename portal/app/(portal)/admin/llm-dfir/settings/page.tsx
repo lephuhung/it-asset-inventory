@@ -43,8 +43,6 @@ export default function LlmSettingsPage() {
   const [allowCloud, setAllowCloud] = useState(false);
   const [dailyTokenBudget, setDailyTokenBudget] = useState<number | "">("");
   const [deepAgentEnabled, setDeepAgentEnabled] = useState(false);
-  const [deepAgentUrl, setDeepAgentUrl] = useState("");
-  const [deepAgentToken, setDeepAgentToken] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -69,7 +67,6 @@ export default function LlmSettingsPage() {
       setAllowCloud(s.allow_cloud);
       setDailyTokenBudget(s.daily_token_budget ?? "");
       setDeepAgentEnabled(s.deepagent_enabled);
-      setDeepAgentUrl(s.deepagent_url ?? "");
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được cấu hình");
@@ -102,16 +99,13 @@ export default function LlmSettingsPage() {
         daily_token_budget: dailyTokenBudget === "" ? null : Number(dailyTokenBudget),
         external_orchestrator: deepAgentEnabled ? "deepagent" : "",
         deepagent_enabled: deepAgentEnabled,
-        deepagent_url: deepAgentUrl.trim() || null,
       };
       // Chỉ gửi api_key nếu user nhập mới
       if (apiKey) body.api_key = apiKey;
-      if (deepAgentToken) body.deepagent_service_token = deepAgentToken;
       const updated = await api.put<LlmConfig>("/admin/llm-dfir/config", body);
       setData(updated);
       setSavedMsg("Đã lưu cấu hình LLM.");
       setApiKey("");
-      setDeepAgentToken("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lưu thất bại");
     } finally {
@@ -363,7 +357,7 @@ export default function LlmSettingsPage() {
               <ServerCog className="mt-0.5 size-5 text-violet-700" />
               <div className="text-sm text-violet-950">
                 <p className="font-semibold">LangGraph điều phối DFIR read-only</p>
-                <p className="mt-1 text-violet-800">DeepAgent chạy riêng; lệnh MCP nằm tại máy DeepAgent. File api_client.yaml được quản lý ở trang cấu hình Velociraptor, không hiển thị tại đây.</p>
+                <p className="mt-1 text-violet-800">DeepAgent là container nội bộ của hệ thống. Cấu hình URL và api_client.yaml được kế thừa từ DFIR Velociraptor; token vận hành chỉ nằm trong Docker Compose.</p>
               </div>
             </div>
           </div>
@@ -371,20 +365,12 @@ export default function LlmSettingsPage() {
             <Toggle checked={deepAgentEnabled} onChange={setDeepAgentEnabled} label="Bật DeepAgent" />
             <span className="text-sm text-slate-600">Khi bật, investigation mới dùng orchestrator DeepAgent/LangGraph.</span>
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="DeepAgent URL" hint="Ví dụ http://10.10.0.242:8090">
-              <Input value={deepAgentUrl} onChange={(e) => setDeepAgentUrl(e.target.value)} placeholder="http://10.10.0.242:8090" />
-            </Field>
-            <Field label="DeepAgent service token" hint={data?.deepagent_service_token_set ? "Đã lưu — để trống nếu giữ nguyên" : "Token xác thực backend → DeepAgent"}>
-              <Input type="password" value={deepAgentToken} onChange={(e) => setDeepAgentToken(e.target.value)} placeholder={data?.deepagent_service_token_set ? "(giữ nguyên)" : "Nhập service token"} />
-            </Field>
-          </div>
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="outline" onClick={testDeepAgent} disabled={testingDeepAgent}>
               {testingDeepAgent ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-              Test DeepAgent → MCP → Velociraptor
+              Kiểm tra MCP → Velociraptor
             </Button>
-            {deepAgentTest && <span className={deepAgentTest.ok ? "text-sm font-medium text-emerald-700" : "text-sm font-medium text-rose-700"}>{deepAgentTest.ok ? `MCP sẵn sàng · ${deepAgentTest.tools.length} tools · ${deepAgentTest.client_count_sampled ?? 0} client mẫu` : deepAgentTest.error}</span>}
+            {deepAgentTest && <span className={deepAgentTest.ok ? "text-sm font-medium text-emerald-700" : "text-sm font-medium text-rose-700"}>{deepAgentTest.ok ? `Đã kết nối · ${deepAgentTest.tools.length} MCP tools · ${deepAgentTest.client_count_sampled ?? 0} client mẫu` : deepAgentTest.error}</span>}
           </div>
         </div>
       </Card>
