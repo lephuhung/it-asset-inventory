@@ -18,5 +18,4 @@ publish/
 
 # ── Binary agent Linux (build tự động khi build Docker) ──
 OrgInventoryAgent-linux-*
-orginventory-helper-linux-*
 OrgInventoryAgent-linux-x64

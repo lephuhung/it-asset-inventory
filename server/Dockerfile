@@ -15,24 +15,14 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS agent-builder
 
 WORKDIR /build
 
-# Copy source agent (Core + Linux + LinuxHelper)
+# Copy source agent (Core + Linux)
 COPY agent/src/OrgInventoryAgent.Core/ ./src/OrgInventoryAgent.Core/
 COPY agent/linux/src/OrgInventoryAgent.Linux/ ./linux/src/OrgInventoryAgent.Linux/
-COPY agent/src/OrgInventoryAgent.LinuxHelper/ ./src/OrgInventoryAgent.LinuxHelper/
 COPY agent/Assets/ ./Assets/
 COPY agent/Assets/ ./linux/Assets/
-COPY agent/OrgInventoryAgent.sln ./
 
-# Restore + build Linux agent (linux-x64) + helper
+# Restore + build Linux agent (linux-x64)
 RUN dotnet publish ./linux/src/OrgInventoryAgent.Linux/OrgInventoryAgent.Linux.csproj \
-      -c Release -r linux-x64 --self-contained true \
-      -p:PublishSingleFile=true \
-      -p:EnableCompressionInSingleFile=false \
-      -p:IncludeNativeLibrariesForSelfExtract=false \
-      -p:InvariantGlobalization=true \
-      -o /build/out/linux-x64
-
-RUN dotnet publish ./src/OrgInventoryAgent.LinuxHelper/OrgInventoryAgent.LinuxHelper.csproj \
       -c Release -r linux-x64 --self-contained true \
       -p:PublishSingleFile=true \
       -p:EnableCompressionInSingleFile=false \
@@ -87,8 +77,7 @@ COPY server/ ./
 # Copy agent binary đã build từ stage 1 vào agent_dist
 RUN mkdir -p agent_dist
 COPY --from=agent-builder /build/out/linux-x64/OrgInventoryAgent ./agent_dist/OrgInventoryAgent-linux-x64
-COPY --from=agent-builder /build/out/linux-x64/orginventory-helper ./agent_dist/orginventory-helper-linux-x64
-RUN chmod 0755 agent_dist/OrgInventoryAgent-linux-x64 agent_dist/orginventory-helper-linux-x64
+RUN chmod 0755 agent_dist/OrgInventoryAgent-linux-x64
 
 EXPOSE 8000
 
