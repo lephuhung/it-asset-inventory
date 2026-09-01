@@ -36,29 +36,13 @@ sequenceDiagram
 
 ## Cài đặt
 
-```bash
-cd deepagent
-cp .env.example .env
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-```
+DeepAgent được Docker Compose khởi động cùng Backend và Portal. Image tự đóng gói commit đã khóa của [mcp-velociraptor](https://github.com/lephuhung/mcp-velociraptor) trong Python environment riêng, nên dependencies của bridge không xung đột với LangGraph.
 
-Chuẩn bị MCP Velociraptor riêng theo hướng dẫn của [mcp-velociraptor](https://github.com/lephuhung/mcp-velociraptor): tạo `api_client.yaml`, cài dependencies và trỏ `DEEPAGENT_MCP_COMMAND`, `DEEPAGENT_MCP_ARGS_JSON`, `DEEPAGENT_MCP_ENV_JSON` vào bridge. Giữ `ENABLE_DANGEROUS_TOOLS=false`.
-
-Tạo API key backend có duy nhất scope `investigation:write`, rồi đặt nó vào `DEEPAGENT_BACKEND_API_KEY`. Đây là credential callback; không truyền key này qua request job hoặc commit vào Git.
-
-Khởi chạy:
-
-```bash
-cd deepagent
-.venv/bin/uvicorn deepagent.api:app --host 0.0.0.0 --port 8090
-```
+Đặt `DEEPAGENT_SERVICE_TOKEN` là chuỗi ngẫu nhiên mạnh trong `server/.env` trước khi chạy Compose. Đây là credential nội bộ giữa Backend và DeepAgent; không truyền qua Portal. Nếu dùng callback kết quả, tạo API key scope `investigation:write` và đặt vào `DEEPAGENT_BACKEND_API_KEY`.
 
 ## Kết nối Inventory Backend
 
-Trong Portal, mở **Quản trị → LLM & DFIR → DeepAgent & Velociraptor MCP**, bật DeepAgent, nhập URL của service và service token, sau đó bấm **Test DeepAgent → MCP → Velociraptor**. Backend mã hóa token khi lưu và chỉ gọi endpoint test đọc-only (`list_clients`, tối đa một bản ghi). Lệnh MCP và biến môi trường bridge thuộc máy chạy DeepAgent; `api_client.yaml` vẫn được quản lý tại trang cấu hình Velociraptor riêng, không xuất hiện tại trang này.
-
-Các biến `DEEPAGENT_ENABLED`, `DEEPAGENT_URL` và `DEEPAGENT_API_KEY` trong `server/.env` vẫn được hỗ trợ như cấu hình dự phòng cho triển khai cũ. Khi Super Admin bấm **Điều tra AI**, backend tạo investigation, dispatch bất đồng bộ sang DeepAgent và Portal tiếp tục đọc báo cáo Markdown từ investigation hiện hữu. Không cần truy vấn qua Velociraptor UI.
+Trong Portal, mở **Quản trị → LLM & DFIR → DeepAgent & Velociraptor MCP**, bật DeepAgent khi muốn investigation mới dùng LangGraph, rồi bấm **Kiểm tra MCP → Velociraptor**. URL container và service token do Compose quản lý. Backend lấy `api_client.yaml` đã mã hóa từ cấu hình Velociraptor, gửi nó chỉ qua Docker network tới DeepAgent và xóa tệp tạm ngay sau khi bridge hoàn tất.
 
 ## API
 
@@ -80,7 +64,7 @@ Các biến `DEEPAGENT_ENABLED`, `DEEPAGENT_URL` và `DEEPAGENT_API_KEY` trong `
 
 Theo dõi job bằng `GET /v1/jobs/{job_id}`. Kết quả chính thức luôn nằm ở `GET /api/admin/llm-dfir/investigations/{id}` của backend.
 
-`POST /v1/mcp/test` cũng yêu cầu service token. Endpoint chỉ nạp các MCP tools và gọi `list_clients` với `limit=1`; nó không tạo hunt, không thu thập file và không chạy VQL tùy ý.
+`POST /v1/mcp/test` cũng yêu cầu service token và nhận `velociraptor_api_client_yaml` chỉ trong request nội bộ. Endpoint chỉ nạp MCP tools và gọi `list_clients` với `limit=1`; nó không tạo hunt, không thu thập file và không chạy VQL tùy ý.
 
 ## Kiểm thử
 

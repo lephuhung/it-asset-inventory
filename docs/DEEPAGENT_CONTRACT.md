@@ -14,7 +14,7 @@ Mỗi job được định danh bởi `investigation_id` (idempotency scope) và
 
 ## Dispatch
 
-`POST {DEEPAGENT_URL}/v1/investigations` với `Authorization: Bearer <service-token>`.
+`POST http://deepagent:8090/v1/investigations` trong Docker network với `Authorization: Bearer <service-token>`. URL và token do Compose quản lý, không phải input Portal.
 
 ```json
 {
@@ -49,4 +49,4 @@ Body gồm `report_markdown`, `severity`, `findings_count`, `findings`, `iocs`, 
 
 ## Cấu hình Velociraptor
 
-Super Admin nhập URL bằng `PUT /api/admin/velociraptor/config` và upload `api_client.yaml` qua `POST /api/admin/velociraptor/config/api-client/upload`. Backend validate, mã hoá file và không trả private key. Test trực tiếp Velociraptor qua `POST /api/admin/velociraptor/test`; MCP test cần chạy `list_clients` read-only qua DeepAgent.
+Super Admin nhập URL bằng `PUT /api/admin/velociraptor/config` và upload `api_client.yaml` qua `POST /api/admin/velociraptor/config/api-client/upload`. Backend validate, mã hoá file và không trả private key. Nút **Kiểm tra MCP → Velociraptor** gọi backend, backend gửi YAML chỉ qua network Docker tới DeepAgent, và DeepAgent chạy `list_clients(limit=1)` read-only trước khi xóa tệp tạm.

@@ -7,7 +7,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone https://github.com/lephuhung/mcp-velociraptor.git /opt/mcp-velociraptor \
     && git -C /opt/mcp-velociraptor checkout "$MCP_VELOCIRAPTOR_REF" \
-    && pip install --no-cache-dir -r /opt/mcp-velociraptor/requirements.txt
+    && python -m venv /opt/mcp-venv \
+    && /opt/mcp-venv/bin/pip install --no-cache-dir -r /opt/mcp-velociraptor/requirements.txt
 COPY pyproject.toml ./
 COPY deepagent ./deepagent
 RUN pip install --no-cache-dir .

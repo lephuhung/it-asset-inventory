@@ -42,7 +42,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://inventory:inventory@postgres:5432/inventory
-      REDIS_URL: redis://redis:6381/0
+      # Trong Docker network dùng cổng của service, không phải cổng publish ra host.
+      REDIS_URL: redis://redis:6379/0
       CA_MODE: local
       DEEPAGENT_ENABLED: "true"
       DEEPAGENT_URL: http://deepagent:8090
@@ -54,6 +55,9 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
 
   deepagent:
     build:
@@ -64,7 +68,7 @@ services:
       DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
       DEEPAGENT_BACKEND_URL: http://api:8000
       DEEPAGENT_BACKEND_API_KEY: ${DEEPAGENT_BACKEND_API_KEY:-}
-      DEEPAGENT_MCP_COMMAND: python
+      DEEPAGENT_MCP_COMMAND: /opt/mcp-venv/bin/python
       DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
       DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false"}'
     depends_on:
@@ -75,21 +79,50 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
-    command: >
-      sh -c "alembic upgrade head &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+  portal:
+    build:
+      context: ../../portal
+      dockerfile: Dockerfile
+      args:
+        API_BASE: http://api:8000
+    image: asset-inventory-portal:latest
+    environment:
+      API_BASE: http://api:8000
+      COOKIE_SECURE: "true"
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:3000"
+
+  certs:
+    image: alpine:3.20
+    volumes:
+      - nginx-certs:/certs
+      - ./nginx/init-dev-certs.sh:/usr/local/bin/init-dev-certs.sh:ro
+    command: ["/bin/sh", "/usr/local/bin/init-dev-certs.sh"]
 
   nginx:
     image: nginx:1.27-alpine
     ports:
       - "443:443"
       - "80:80"
+      - "9443:9443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # - ./nginx/certs:/etc/nginx/certs:ro     # TLS cert server
-      # - ./nginx/crl:/etc/nginx/crl:ro          # CRL từ step-ca
+      - nginx-certs:/etc/nginx/certs:ro
     depends_on:
-      - api
+      api:
+        condition: service_started
+      portal:
+        condition: service_started
+      certs:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
+  nginx-certs:
+
+networks:
+  default:
+    name: asset-inventory-network
