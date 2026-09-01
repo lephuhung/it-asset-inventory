@@ -1179,6 +1179,9 @@ class LlmConfigOut(BaseModel):
     max_context_chars: int
     allow_cloud: bool
     external_orchestrator: str = ""  # "" = local LLM | "hermes" = đợi Hermes push kết quả
+    deepagent_enabled: bool = False
+    deepagent_url: str | None = None
+    deepagent_service_token_set: bool = False
     daily_token_budget: int | None
     tokens_used_today: int
     test_status: str | None
@@ -1202,6 +1205,9 @@ class LlmConfigUpdate(BaseModel):
     max_context_chars: int | None = None
     allow_cloud: bool | None = None
     external_orchestrator: str | None = None
+    deepagent_enabled: bool | None = None
+    deepagent_url: str | None = None
+    deepagent_service_token: str | None = None
     daily_token_budget: int | None = None
 
 
@@ -1209,6 +1215,15 @@ class LlmTestConnectionOut(BaseModel):
     ok: bool
     latency_ms: int
     models: list[str]
+    error: str | None = None
+
+
+class DeepAgentTestOut(BaseModel):
+    ok: bool
+    service_ok: bool = False
+    mcp_ok: bool = False
+    tools: list[str] = Field(default_factory=list)
+    client_count_sampled: int | None = None
     error: str | None = None
 
 

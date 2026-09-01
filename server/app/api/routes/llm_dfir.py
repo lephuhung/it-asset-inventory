@@ -9,6 +9,8 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,7 @@ from app.schemas import (
     LlmConfigOut,
     LlmConfigUpdate,
     LlmTestConnectionOut,
+    DeepAgentTestOut,
 )
 from app.services import dfir_investigation as inv_svc
 from app.services.llm import LlmClient, LlmError, mask_api_key
@@ -89,6 +92,9 @@ def _config_to_out(
         max_context_chars=cfg.max_context_chars,
         allow_cloud=cfg.allow_cloud,
         external_orchestrator=cfg.external_orchestrator,
+        deepagent_enabled=cfg.deepagent_enabled,
+        deepagent_url=cfg.deepagent_url,
+        deepagent_service_token_set=bool(_decrypt_for_display(cfg.deepagent_service_token_encrypted)),
         daily_token_budget=cfg.daily_token_budget,
         tokens_used_today=cfg.tokens_used_today or 0,
         test_status=cfg.test_status,
@@ -229,6 +235,22 @@ async def update_llm_config(
             raise HTTPException(422, f"external_orchestrator không hợp lệ: {ext}")
         cfg.external_orchestrator = ext
         changes["external_orchestrator"] = ext
+    if body.deepagent_enabled is not None:
+        cfg.deepagent_enabled = body.deepagent_enabled
+        changes["deepagent_enabled"] = body.deepagent_enabled
+    if body.deepagent_url is not None:
+        url = body.deepagent_url.strip().rstrip("/")
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(422, "deepagent_url phải bắt đầu bằng http:// hoặc https://")
+        cfg.deepagent_url = url or None
+        changes["deepagent_url"] = cfg.deepagent_url
+    if body.deepagent_service_token is not None:
+        if body.deepagent_service_token.strip():
+            cfg.deepagent_service_token_encrypted = encrypt_aes_gcm(body.deepagent_service_token.strip())
+            changes["deepagent_service_token"] = "set"
+        else:
+            cfg.deepagent_service_token_encrypted = None
+            changes["deepagent_service_token"] = "cleared"
     if body.daily_token_budget is not None:
         cfg.daily_token_budget = body.daily_token_budget if body.daily_token_budget > 0 else None
 
@@ -270,6 +292,37 @@ async def test_llm_connection(
         models=result.get("models", []),
         error=result.get("error"),
     )
+
+
+@router.post("/deepagent/test", response_model=DeepAgentTestOut)
+async def test_deepagent_mcp(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_super_admin()),
+):
+    """Kiểm tra DeepAgent rồi MCP Velociraptor bằng request read-only."""
+    cfg = await _get_or_create_config(db)
+    if not cfg.deepagent_enabled:
+        return DeepAgentTestOut(ok=False, error="DeepAgent chưa được bật")
+    if not cfg.deepagent_url:
+        return DeepAgentTestOut(ok=False, error="Chưa nhập DeepAgent URL")
+    token = _decrypt_for_display(cfg.deepagent_service_token_encrypted)
+    if not token:
+        return DeepAgentTestOut(ok=False, error="Chưa nhập DeepAgent service token")
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            health = await client.get(f"{cfg.deepagent_url}/health")
+            health.raise_for_status()
+            result = await client.post(f"{cfg.deepagent_url}/v1/mcp/test", headers=headers)
+            result.raise_for_status()
+        payload = result.json()
+        return DeepAgentTestOut(
+            ok=bool(payload.get("ok")), service_ok=True, mcp_ok=bool(payload.get("ok")),
+            tools=payload.get("tools") or [], client_count_sampled=payload.get("client_count_sampled"),
+            error=payload.get("error"),
+        )
+    except httpx.HTTPError as exc:
+        return DeepAgentTestOut(ok=False, error=f"DeepAgent không phản hồi: {exc}")
 
 
 # ── Investigation endpoints ──────────────────────────────────────

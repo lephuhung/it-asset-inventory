@@ -717,6 +717,10 @@ export interface LlmConfig {
   request_timeout: number;
   max_context_chars: number;
   allow_cloud: boolean;
+  external_orchestrator: string;
+  deepagent_enabled: boolean;
+  deepagent_url: string | null;
+  deepagent_service_token_set: boolean;
   daily_token_budget: number | null;
   tokens_used_today: number;
   test_status: string | null;
@@ -739,6 +743,10 @@ export interface LlmConfigUpdate {
   request_timeout?: number | null;
   max_context_chars?: number | null;
   allow_cloud?: boolean | null;
+  external_orchestrator?: string | null;
+  deepagent_enabled?: boolean | null;
+  deepagent_url?: string | null;
+  deepagent_service_token?: string | null;
   daily_token_budget?: number | null;
 }
 
@@ -746,6 +754,15 @@ export interface LlmTestResult {
   ok: boolean;
   latency_ms: number;
   models: string[];
+  error: string | null;
+}
+
+export interface DeepAgentTestResult {
+  ok: boolean;
+  service_ok: boolean;
+  mcp_ok: boolean;
+  tools: string[];
+  client_count_sampled: number | null;
   error: string | null;
 }
 

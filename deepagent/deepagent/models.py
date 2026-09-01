@@ -116,3 +116,10 @@ class JobStatus(BaseModel):
     error: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+class McpTestResult(BaseModel):
+    ok: bool
+    tools: list[str] = Field(default_factory=list)
+    client_count_sampled: int | None = None
+    error: str | None = None

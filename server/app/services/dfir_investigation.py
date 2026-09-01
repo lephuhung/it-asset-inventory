@@ -214,8 +214,6 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
 
 async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) -> None:
     """Dispatch idempotent một investigation sang DeepAgent LangGraph."""
-    if not settings.deepagent_enabled or not settings.deepagent_api_key:
-        raise LlmError("DeepAgent chưa được bật hoặc chưa có DEEPAGENT_API_KEY")
     if not inv.velociraptor_client_id:
         raise LlmError("Investigation thiếu Velociraptor client_id")
 
@@ -229,6 +227,11 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     api_key = _decrypt_api_key(llm_cfg.api_key_encrypted)
     if not api_key:
         raise LlmError("LLM runtime thiếu API key")
+    deepagent_enabled = llm_cfg.deepagent_enabled or settings.deepagent_enabled
+    deepagent_url = llm_cfg.deepagent_url or settings.deepagent_url
+    deepagent_token = _decrypt_api_key(llm_cfg.deepagent_service_token_encrypted) or settings.deepagent_api_key
+    if not deepagent_enabled or not deepagent_token:
+        raise LlmError("DeepAgent chưa được bật hoặc chưa có service token")
     velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
     if not velo_cfg or not velo_cfg.client_config_encrypted:
         raise LlmError("Chưa upload api_client.yaml cho Velociraptor")
@@ -253,8 +256,8 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     try:
         async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
             response = await client.post(
-                f"{settings.deepagent_url.rstrip('/')}/v1/investigations",
-                headers={"Authorization": f"Bearer {settings.deepagent_api_key}"},
+                f"{deepagent_url.rstrip('/')}/v1/investigations",
+                headers={"Authorization": f"Bearer {deepagent_token}"},
                 json=request_body,
             )
         response.raise_for_status()

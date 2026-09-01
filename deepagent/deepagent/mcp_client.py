@@ -97,6 +97,26 @@ class VelociraptorMCP:
                 return row
         raise MCPPolicyError(f"client_id {client_id} không tồn tại hoặc ngoài org được cấu hình")
 
+    async def test_connection(self) -> dict[str, Any]:
+        """Xác minh bridge MCP bằng một truy vấn read-only tối đa một client."""
+        tools = await self._load_tools()
+        list_clients = tools.get("list_clients")
+        if list_clients is None:
+            raise MCPPolicyError("MCP không cung cấp tool list_clients")
+        raw = await list_clients.ainvoke(
+            {"search": "", "limit": 1, "org_id": self.settings.velociraptor_org_id}
+        )
+        payload = _decode_envelope(raw)
+        if not payload.get("ok"):
+            raise MCPPolicyError(str(payload.get("error") or "MCP list_clients thất bại"))
+        data = payload.get("data")
+        if isinstance(data, dict):
+            data = data.get("clients") or data.get("items") or data.get("rows") or [data]
+        return {
+            "tools": sorted(tools),
+            "client_count_sampled": min(len(data), 1) if isinstance(data, list) else 0,
+        }
+
     async def collect(
         self,
         *,

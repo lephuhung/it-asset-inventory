@@ -56,17 +56,9 @@ cd deepagent
 
 ## Kết nối Inventory Backend
 
-Trong `server/.env`:
+Trong Portal, mở **Quản trị → LLM & DFIR → DeepAgent & Velociraptor MCP**, bật DeepAgent, nhập URL của service và service token, sau đó bấm **Test DeepAgent → MCP → Velociraptor**. Backend mã hóa token khi lưu và chỉ gọi endpoint test đọc-only (`list_clients`, tối đa một bản ghi). Lệnh MCP và biến môi trường bridge thuộc máy chạy DeepAgent; `api_client.yaml` vẫn được quản lý tại trang cấu hình Velociraptor riêng, không xuất hiện tại trang này.
 
-```dotenv
-LLM_EXTERNAL_ORCHESTRATOR=deepagent
-DEEPAGENT_ENABLED=true
-DEEPAGENT_URL=http://127.0.0.1:8090
-DEEPAGENT_API_KEY=<DEEPAGENT_SERVICE_TOKEN>
-DEEPAGENT_DEFAULT_LOOKBACK_HOURS=24
-```
-
-Sau đó đặt `external_orchestrator` thành `deepagent` trong cấu hình LLM qua Portal/API. Khi Super Admin bấm **Điều tra AI**, backend tạo investigation, dispatch bất đồng bộ sang DeepAgent và Portal tiếp tục đọc báo cáo Markdown từ investigation hiện hữu. Không cần truy vấn qua Velociraptor UI.
+Các biến `DEEPAGENT_ENABLED`, `DEEPAGENT_URL` và `DEEPAGENT_API_KEY` trong `server/.env` vẫn được hỗ trợ như cấu hình dự phòng cho triển khai cũ. Khi Super Admin bấm **Điều tra AI**, backend tạo investigation, dispatch bất đồng bộ sang DeepAgent và Portal tiếp tục đọc báo cáo Markdown từ investigation hiện hữu. Không cần truy vấn qua Velociraptor UI.
 
 ## API
 
@@ -87,6 +79,8 @@ Sau đó đặt `external_orchestrator` thành `deepagent` trong cấu hình LLM
 ```
 
 Theo dõi job bằng `GET /v1/jobs/{job_id}`. Kết quả chính thức luôn nằm ở `GET /api/admin/llm-dfir/investigations/{id}` của backend.
+
+`POST /v1/mcp/test` cũng yêu cầu service token. Endpoint chỉ nạp các MCP tools và gọi `list_clients` với `limit=1`; nó không tạo hunt, không thu thập file và không chạy VQL tùy ý.
 
 ## Kiểm thử
 

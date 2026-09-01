@@ -15,7 +15,7 @@ from deepagent.analysis_model import OpenAIAnalysisModel
 from deepagent.callback import BackendCallbackClient
 from deepagent.config import Settings, get_settings
 from deepagent.mcp_client import VelociraptorMCP
-from deepagent.models import CallbackPayload, InvestigationRequest, JobStatus
+from deepagent.models import CallbackPayload, InvestigationRequest, JobStatus, McpTestResult
 from deepagent.runner import InvestigationRunner
 
 app = FastAPI(title="DeepAgent DFIR", version="0.1.0")
@@ -96,6 +96,16 @@ async def _execute(request: InvestigationRequest, job_id: str, settings: Setting
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "app": "deepagent-dfir"}
+
+
+@app.post("/v1/mcp/test", response_model=McpTestResult, dependencies=[Depends(_auth)])
+async def test_mcp_connection(settings: Settings = Depends(get_settings)) -> McpTestResult:
+    """Safe diagnostic: nạp MCP tools và gọi list_clients tối đa một row."""
+    try:
+        result = await VelociraptorMCP(settings).test_connection()
+        return McpTestResult(ok=True, **result)
+    except Exception as exc:  # noqa: BLE001 - trả diagnostics vận hành, không lộ secrets
+        return McpTestResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
 
 @app.post(
