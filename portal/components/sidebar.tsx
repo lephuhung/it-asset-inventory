@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   BarChart3,
   Bell,
+  BellOff,
   Building2,
   CalendarClock,
   ClipboardCheck,
@@ -149,6 +150,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         label: "Cấu hình bot Telegram",
         icon: MessageCircle,
         roles: SUPER_ADMIN_ROLES,
+      },
+      {
+        href: "/me/notification-prefs",
+        label: "Cài đặt nhận thông báo",
+        icon: BellOff,
+        roles: ADMIN_ROLES,
       },
       {
         href: "/agent-config",
