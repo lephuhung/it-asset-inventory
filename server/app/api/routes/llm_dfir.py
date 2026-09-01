@@ -172,7 +172,7 @@ async def update_llm_config(
         changes["enabled"] = body.enabled
     if body.provider is not None:
         p = body.provider.strip().lower()
-        if p not in ("ollama", "openai", "localai", "vllm", "custom", "qwen", "deepseek", "hermes"):
+        if p not in ("ollama", "openai", "localai", "vllm", "custom", "qwen", "deepseek"):
             raise HTTPException(422, f"provider không hợp lệ: {p}")
         cfg.provider = p
         changes["provider"] = p
@@ -225,7 +225,7 @@ async def update_llm_config(
         changes["allow_cloud"] = body.allow_cloud
     if body.external_orchestrator is not None:
         ext = body.external_orchestrator.strip().lower()
-        if ext not in ("", "hermes"):
+        if ext not in ("", "hermes", "deepagent"):
             raise HTTPException(422, f"external_orchestrator không hợp lệ: {ext}")
         cfg.external_orchestrator = ext
         changes["external_orchestrator"] = ext

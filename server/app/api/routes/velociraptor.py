@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -66,6 +66,35 @@ from app.services.velociraptor import (
 logger = logging.getLogger("api.velociraptor")
 
 router = APIRouter(prefix="/api/admin/velociraptor", tags=["velociraptor"])
+
+
+@router.post("/config/api-client/upload", response_model=VelociraptorConfigOut)
+async def upload_api_client_config(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin()),
+):
+    """Nhận `velociraptor config api_client` YAML, validate rồi mã hoá trong DB."""
+    if not file.filename or not file.filename.lower().endswith((".yaml", ".yml")):
+        raise HTTPException(422, "Chỉ chấp nhận file YAML api_client")
+    content = await file.read()
+    if not content or len(content) > 256_000:
+        raise HTTPException(422, "api_client YAML phải có kích thước từ 1 đến 256KB")
+    try:
+        yaml_content = content.decode("utf-8")
+        parsed = parse_client_config_yaml(yaml_content)
+        cert_info = inspect_client_cert(parsed["client_cert"])
+    except (UnicodeDecodeError, TypeError, ValueError) as exc:
+        raise HTTPException(422, f"api_client YAML không hợp lệ: {exc}") from exc
+    cfg = await _ensure_config(db)
+    cfg.client_config_encrypted = encrypt_aes_gcm(yaml_content)
+    cfg.client_cert_info = cert_info
+    cfg.updated_at = datetime.now(UTC)
+    cfg.updated_by = admin.id
+    await db.commit()
+    await append_audit(db, action="velociraptor.api_client.upload", actor=str(admin.id), target="velociraptor_config:1")
+    await db.commit()
+    return _config_to_out(cfg)
 
 
 # ── Helpers ─────────────────────────────────────────────────────
@@ -181,6 +210,7 @@ async def _build_velociraptor_client(
             client_cert_pem=parsed["client_cert"],
             client_key_pem=parsed["client_private_key"],
             ca_cert_pem=parsed["ca_cert"],
+            api_connection_string=parsed["api_connection_string"],
             **common_kwargs,
         )
         return client, cfg
@@ -210,7 +240,6 @@ async def _build_velociraptor_client(
     if cfg.api_token_encrypted:
         try:
             token = decrypt_aes_gcm(cfg.api_token_encrypted)
-            api_connection_string=parsed["api_connection_string"],
         except Exception as e:
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -30,11 +30,35 @@ from app.schemas import (
     ExternalInvestigationAckOut,
     ExternalInvestigationPendingOut,
     ExternalInvestigationResultIn,
+    ExternalInvestigationStatusIn,
 )
 
 logger = logging.getLogger("llm.dfir.external")
 
 router = APIRouter(prefix="/api/external/llm-dfir", tags=["external-llm-dfir"])
+
+
+@router.post("/investigations/{inv_id}/status")
+async def update_investigation_status(
+    inv_id: str, body: ExternalInvestigationStatusIn, request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Lưu heartbeat/progress của DeepAgent, không gửi notification."""
+    await _auth_api_key(db, request, "investigation:write")
+    inv = (await db.execute(select(DfirInvestigation).where(DfirInvestigation.id == _parse_inv_id_or_404(inv_id)))).scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Investigation không tồn tại")
+    if not inv.external_orchestrator or inv.status in ("completed", "failed"):
+        return {"id": str(inv.id), "status": inv.status, "accepted": False}
+    inv.external_job_id = body.external_job_id
+    inv.hermes_status = body.phase
+    inv.hermes_response = {
+        "phase": body.phase, "progress_percent": body.progress_percent,
+        "current_step": body.current_step, "total_steps": body.total_steps,
+        "message": body.message, "updated_at": datetime.now(UTC).isoformat(),
+    }
+    await db.commit()
+    return {"id": str(inv.id), "status": inv.status, "accepted": True}
 
 
 def _extract_bearer(request: Request) -> str | None:

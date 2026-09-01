@@ -497,9 +497,14 @@ async def notify_investigation_completed_from_dict(
     if machine and machine.hostname:
         hostname = machine.hostname
 
-    severity = (inv_dict.get("severity") or "info").lower()
-    if severity not in ("info", "success", "warning", "error", "critical"):
-        severity = "info"
+    dfir_severity = (inv_dict.get("severity") or "info").lower()
+    severity = {
+        "critical": "critical",
+        "high": "error",
+        "medium": "warning",
+        "low": "info",
+        "info": "info",
+    }.get(dfir_severity, "info")
     title = f"Điều tra hoàn thành · {inv_dict.get('severity') or 'info'}"
     body_lines = [
         f"**Máy:** {hostname}",

@@ -41,9 +41,12 @@ flowchart LR
 | [`server/`](server/) | FastAPI, model dữ liệu, migration, background services và Docker Compose cho hạ tầng |
 | [`portal/`](portal/) | Portal Next.js, BFF route handlers và giao diện quản trị |
 | [`agent/`](agent/) | Agent .NET 8, test, MSI và package Linux `.deb`/`.rpm` |
+| [`deepagent/`](deepagent/) | Orchestrator LangGraph truy vấn Velociraptor qua MCP và callback báo cáo DFIR |
 | [`deploy/`](deploy/) | Chứng chỉ dev, step-ca và stack Velociraptor |
 | [`docs/`](docs/) | API contract, schema inventory, runbook và tài liệu DFIR/LLM |
 | [`build-all.sh`](build-all.sh) | Kiểm tra build cả server, agent và portal |
+
+Contract giao tiếp giữa Backend, DeepAgent LangGraph và Velociraptor MCP: [`docs/DEEPAGENT_CONTRACT.md`](docs/DEEPAGENT_CONTRACT.md).
 
 ## Yêu cầu phát triển
 
@@ -192,6 +195,7 @@ Không dùng nguyên cấu hình dev hoặc các secret mặc định cho produc
 - [Cơ chế đồng bộ cấu hình Agent](docs/AGENT_CONFIG_SYNC.md)
 - [Cài đồng thời OrgInventory Agent và Velociraptor](docs/INSTALL_BOTH_AGENTS.md)
 - [Tổng quan LLM cho DFIR](docs/llm-dfir/00_TONG_QUAN.md)
+- [Triển khai DeepAgent LangGraph](deepagent/README.md)
 - [Thiết kế hệ thống](KE_HOACH_HE_THONG_QUAN_LY_MAY_TINH.md)
 - [Kế hoạch thực hiện](PLAN_THUC_HIEN.md)
 

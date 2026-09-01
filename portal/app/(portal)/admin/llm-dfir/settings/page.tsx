@@ -194,8 +194,7 @@ export default function LlmSettingsPage() {
                   setProvider(v);
                   // Auto-suggest model mặc định theo provider (trừ khi user đã tự sửa)
                   if (!modelTouched) {
-                    if (v === "hermes") setModel("hermes-agent");
-                    else if (v === "ollama") setModel("qwen2.5:14b-instruct-q4_K_M");
+                    if (v === "ollama") setModel("qwen2.5:14b-instruct-q4_K_M");
                     else if (v === "openai") setModel("gpt-4o-mini");
                     else if (v === "qwen") setModel("qwen-plus");
                     else if (v === "deepseek") setModel("deepseek-chat");
@@ -203,7 +202,6 @@ export default function LlmSettingsPage() {
                 }}
               >
                 <option value="ollama">Ollama (local, privacy-first)</option>
-                <option value="hermes">Hermes Agent (Nous Research) — OpenAI-compatible</option>
                 <option value="localai">LocalAI</option>
                 <option value="vllm">vLLM (high-perf server)</option>
                 <option value="openai">OpenAI</option>
@@ -334,17 +332,17 @@ export default function LlmSettingsPage() {
         </div>
       </Card>
 
-      {/* System prompt */}
-      <Card title="System Prompt (nâng cao)">
+      {/* Agent profile */}
+      <Card title="System Prompt của LangGraph">
         <div className="space-y-2">
           <p className="text-xs text-slate-400">
-            Để trống = dùng prompt mặc định tiếng Việt (chuyên gia DFIR, định dạng markdown).
+            Đây là cấu hình chung cho DeepAgent, áp dụng cho mọi cuộc điều tra mới. Policy DFIR và allowlist của hệ thống luôn được giữ nguyên.
           </p>
           <Textarea
             rows={8}
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
-            placeholder="Bạn là chuyên gia DFIR..."
+            placeholder="Ưu tiên đánh giá hành vi PowerShell, persistence và kết nối C2; trình bày kết luận ngắn gọn cho quản trị viên."
           />
         </div>
       </Card>

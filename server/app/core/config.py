@@ -164,6 +164,16 @@ class Settings(BaseSettings):
         "Windows.Registry.Recursive",
     ]
 
+    # ── DeepAgent LangGraph (external DFIR orchestrator) ───────
+    # Khi LlmConfig.external_orchestrator="deepagent", backend dispatch một
+    # job có client_id + time range sang service độc lập. Service này tự gọi
+    # Velociraptor MCP và callback report Markdown về endpoint external.
+    deepagent_enabled: bool = False
+    deepagent_url: str = "http://127.0.0.1:8090"
+    deepagent_api_key: str = ""
+    deepagent_request_timeout_seconds: int = 30
+    deepagent_default_lookback_hours: int = 24
+
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)
     smtp_host: str = ""

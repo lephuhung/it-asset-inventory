@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import httpx
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,7 @@ from app.db.models import (
     DfirInvestigationMessage,
     LlmConfig,
     Machine,
+    VelociraptorConfig,
     VelociraptorLink,
 )
 from app.services.llm import (
@@ -104,13 +107,17 @@ async def create_investigation(
     # 1) Nếu admin truyền use_external_orchestrator=True/False → dùng giá trị đó (override)
     # 2) Ngược lại → đọc từ LlmConfig.external_orchestrator (DB) hoặc env settings.llm_external_orchestrator
     cfg = await _load_llm_config(db)
+    configured_external = (
+        getattr(cfg, "external_orchestrator", "") if cfg else ""
+    ) or settings.llm_external_orchestrator
     if use_external_orchestrator is True:
-        ext_orch = "hermes"
+        ext_orch = configured_external or "hermes"
     elif use_external_orchestrator is False:
         ext_orch = None
     else:
-        cfg_ext = getattr(cfg, "external_orchestrator", "") if cfg else ""
-        ext_orch = "hermes" if (cfg_ext or settings.llm_external_orchestrator) == "hermes" else None
+        ext_orch = configured_external or None
+    if ext_orch not in (None, "hermes", "deepagent"):
+        raise LlmError("external_orchestrator chỉ hỗ trợ hermes hoặc deepagent")
 
     inv = DfirInvestigation(
         machine_id=machine_id,
@@ -130,6 +137,7 @@ async def create_investigation(
         machine_id,
         link.client_id,
         len(artifacts),
+        ext_orch,
     )
     return _inv_to_dict(inv)
 
@@ -188,6 +196,12 @@ async def run_pending_investigations() -> dict:
 
 
 async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
+    # DeepAgent tự truy vấn Velociraptor qua MCP. Không collect artifact ở
+    # backend trước, để graph điều phối việc thu thập theo dấu hiệu nghi ngờ.
+    if inv.external_orchestrator == "deepagent":
+        if inv.status == "pending":
+            await _state_dispatch_deepagent(db, inv)
+        return
     if inv.status == "pending":
         await _state_start(db, inv)
     elif inv.status == "running":
@@ -196,6 +210,70 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
         await _state_poll_collect(db, inv)  # tiếp tục poll
     elif inv.status == "analyzing":
         await _state_analyze(db, inv)
+
+
+async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) -> None:
+    """Dispatch idempotent một investigation sang DeepAgent LangGraph."""
+    if not settings.deepagent_enabled or not settings.deepagent_api_key:
+        raise LlmError("DeepAgent chưa được bật hoặc chưa có DEEPAGENT_API_KEY")
+    if not inv.velociraptor_client_id:
+        raise LlmError("Investigation thiếu Velociraptor client_id")
+
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == inv.machine_id))
+    ).scalar_one_or_none()
+    hostname = machine.hostname if machine and machine.hostname else str(inv.machine_id)
+    llm_cfg = await _load_llm_config(db)
+    if not llm_cfg or not llm_cfg.enabled or not llm_cfg.base_url or not llm_cfg.model:
+        raise LlmError("LLM runtime chưa được cấu hình")
+    api_key = _decrypt_api_key(llm_cfg.api_key_encrypted)
+    if not api_key:
+        raise LlmError("LLM runtime thiếu API key")
+    velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
+    if not velo_cfg or not velo_cfg.client_config_encrypted:
+        raise LlmError("Chưa upload api_client.yaml cho Velociraptor")
+    api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
+    now = datetime.now(UTC)
+    time_from = now - timedelta(hours=settings.deepagent_default_lookback_hours)
+    request_body = {
+        "schema_version": "dfir.deepagent.request/1.1",
+        "investigation_id": str(inv.id),
+        "client_id": inv.velociraptor_client_id,
+        "hostname": hostname,
+        "time_range": {"from": time_from.isoformat(), "to": now.isoformat()},
+        "suspicious_activity": inv.custom_instructions
+        or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
+        "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt},
+        "velociraptor_api_client_yaml": api_client_yaml,
+    }
+    inv.status = "analyzing"
+    inv.hermes_status = "dispatching"
+    inv.started_at = now
+    await db.commit()
+    try:
+        async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
+            response = await client.post(
+                f"{settings.deepagent_url.rstrip('/')}/v1/investigations",
+                headers={"Authorization": f"Bearer {settings.deepagent_api_key}"},
+                json=request_body,
+            )
+        response.raise_for_status()
+        body = response.json()
+        inv.external_job_id = body.get("job_id") or inv.external_job_id
+        inv.hermes_status = "dispatched"
+        inv.hermes_response = {
+            "job_id": inv.external_job_id,
+            "status": body.get("status"),
+        }
+        await db.commit()
+        logger.info("Investigation %s dispatched to DeepAgent job=%s", inv.id, inv.external_job_id)
+    except Exception as exc:
+        inv.status = "failed"
+        inv.hermes_status = "dispatch_failed"
+        inv.error = f"DeepAgent dispatch: {type(exc).__name__}: {exc}"[:2000]
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        raise
 
 
 async def _state_start(db: AsyncSession, inv: DfirInvestigation) -> None:
@@ -342,6 +420,9 @@ async def _state_poll_collect(db: AsyncSession, inv: DfirInvestigation) -> None:
 
 async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
     """analyzing: gọi LLM → completed."""
+    if inv.external_orchestrator:
+        # Kết quả external chỉ được chấp nhận qua callback đã xác thực.
+        return
     cfg = await _load_llm_config(db)
     if not cfg:
         inv.status = "failed"
@@ -579,7 +660,7 @@ async def list_pending_for_external(
         select(DfirInvestigation)
         .where(
             DfirInvestigation.status == "analyzing",
-            DfirInvestigation.external_orchestrator.is_not(None),
+            DfirInvestigation.external_orchestrator == "hermes",
         )
         .order_by(DfirInvestigation.created_at)
         .limit(limit)
@@ -674,7 +755,7 @@ async def submit_external_result(
 
     # Success path
     sev = (severity or "info").lower()
-    if sev not in ("info", "success", "warning", "error", "critical"):
+    if sev not in ("critical", "high", "medium", "low", "info"):
         sev = "info"
     inv.severity = sev
     inv.findings = findings or []

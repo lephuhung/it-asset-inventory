@@ -1271,6 +1271,16 @@ class ExternalInvestigationResultIn(BaseModel):
     raw_response: dict | None = None  # full response để audit
 
 
+class ExternalInvestigationStatusIn(BaseModel):
+    """Cập nhật tiến độ từ external orchestrator; không hoàn tất investigation."""
+    external_job_id: str
+    phase: str = Field(min_length=1, max_length=64)
+    progress_percent: int = Field(ge=0, le=100)
+    current_step: int | None = Field(default=None, ge=0)
+    total_steps: int | None = Field(default=None, ge=0)
+    message: str | None = Field(default=None, max_length=1000)
+
+
 class ExternalInvestigationPendingOut(BaseModel):
     """Item trong list pending — Hermes consume."""
     id: uuid.UUID
