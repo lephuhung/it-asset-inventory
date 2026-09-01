@@ -129,6 +129,25 @@ def test_validate_template_vars_returns_unknown():
 # ── user_notification_prefs ──────────────────────────────────────
 
 
+@pytest.fixture
+async def seeded_templates(db):
+    """Seed 7 templates chuẩn từ migration (test DB không chạy alembic)."""
+    from pathlib import Path
+    import importlib.util
+    import sys
+
+    path = Path(__file__).parents[1] / "alembic/versions/t8u9v0w1x2y3_alert_engine.py"
+    spec = importlib.util.spec_from_file_location("alert_engine_migration", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    for t in mod.SEED_TEMPLATES:
+        db.add(AlertTemplate(**t))
+    await db.commit()
+    return db
+
+
 from app.services.user_notification_prefs import (
     get_pref,
     get_prefs_with_template,
@@ -163,7 +182,7 @@ async def test_upsert_prefs_respects_opt_out_controls(db, session_factory, seede
     assert exc.value.status_code == 422
 
 
-async def test_upsert_prefs_sets_min_severity_when_allowed(db, session_factory, seeded_env):
+async def test_upsert_prefs_sets_min_severity_when_allowed(db, session_factory, seeded_env, seeded_templates):
     from app.db.models import User
 
     admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
@@ -177,7 +196,7 @@ async def test_upsert_prefs_sets_min_severity_when_allowed(db, session_factory, 
     assert pref.muted is False
 
 
-async def test_get_prefs_with_template_returns_meta(db, session_factory, seeded_env):
+async def test_get_prefs_with_template_returns_meta(db, session_factory, seeded_env, seeded_templates):
     from app.db.models import User
 
     admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
