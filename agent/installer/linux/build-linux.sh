@@ -12,11 +12,6 @@ for RID in linux-x64 linux-arm64; do
       -p:IncludeNativeLibrariesForSelfExtract=false \
       -o "$DIST/$RID" -p:ApplicationIcon=
 
-    dotnet publish "$HERE/../../src/OrgInventoryAgent.LinuxHelper/OrgInventoryAgent.LinuxHelper.csproj" \
-      -c Release -r "$RID" --self-contained true \
-      -p:PublishSingleFile=true \
-      -p:EnableCompressionInSingleFile=false \
-      -o "$DIST/$RID"
 done
 
 echo "Built in $DIST/{linux-x64,linux-arm64}/"

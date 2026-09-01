@@ -277,12 +277,10 @@ sudo ORGINV_TOKEN="t_Ab3xK9mQ2vR8nL4p" \
      bash installer/linux/postinstall-enable.sh
 ```
 
-Script `postinstall-enable.sh` thực hiện 5 bước:
-1. Verify helper socket `/run/orginventory/helper.sock` (active, owner=root:orginventory, mode 660).
-2. Self-test helper bằng `{"operation":"dmi","args":{"field":"bios_version"}}` — phải trả `{"ok":true,"data":"..."}`.
-3. Ghi `/etc/orginventory/config.json` (mode 0640, group `orginventory`) với token + endpoint.
-4. `systemctl enable --now orginventory-agent.service` + reload daemon.
-5. In trạng thái + hướng dẫn tiếp theo.
+Script `postinstall-enable.sh` thực hiện 3 bước:
+1. Ghi `/etc/orginventory/config.json` (mode 0640, group `orginventory`) với token + endpoint.
+2. `systemctl enable --now orginventory-agent.service` + reload daemon.
+3. In trạng thái + hướng dẫn tiếp theo.
 
 Nếu KHÔNG truyền `ORGINV_TOKEN` / `ORGINV_HOST`, script ghi config mẫu với token rỗng — admin sửa file sau rồi `sudo systemctl restart orginventory-agent`.
 
@@ -299,9 +297,9 @@ sudo dnf install -y ./orginventory-agent-1.1.0-1.x86_64.rpm
 Package tự động:
 - Tạo system user + group `orginventory` (UID/GID từ sysusers.d range 100-999).
 - Tạo directories: `/var/lib/orginventory`, `/var/log/orginventory`, `/etc/orginventory`, `/run/orginventory` (mode 0750).
-- Copy binary `/opt/orginventory/OrgInventoryAgent` + helper vào `/opt/orginventory/`.
-- Cài 3 systemd unit: `orginventory-agent.service`, `orginventory-helper.socket`, `orginventory-helper.service`.
-- Enable helper socket (KHÔNG enable agent service — cần enroll trước).
+- Copy binary `/opt/orginventory/OrgInventoryAgent` vào `/opt/orginventory/`.
+- Cài systemd unit: `orginventory-agent.service`.
+- Không start agent service tự động — cần enroll trước.
 
 ### One-liner online install (online server)
 
@@ -331,23 +329,12 @@ sudo /opt/orginventory/OrgInventoryAgent \
 sudo systemctl enable --now orginventory-agent.service
 ```
 
-### Kiểm tra helper
+### Kiểm tra agent
 
 ```bash
-# Trạng thái socket
-ls -la /run/orginventory/helper.sock
-systemctl status orginventory-helper.socket
-
-# Self-test (chạy trực tiếp, bypass systemd socket)
-echo '{"operation":"dmi","args":{"field":"bios_version"}}' | sudo /opt/orginventory/orginventory-helper
-# Kỳ vọng: {"ok":true,"data":"<bios_version>","error":null}
-
-# Test qua systemd socket
-echo '{"operation":"dmi","args":{"field":"bios_version"}}' | sudo socat - UNIX-CONNECT:/run/orginventory/helper.sock
-
-# Các operation allowlist: smartctl | dmi | luks
-echo '{"operation":"smartctl","args":{"device":"/dev/sda"}}' | sudo /opt/orginventory/orginventory-helper
-echo '{"operation":"luks","args":{"device":"/dev/sda1"}}' | sudo /opt/orginventory/orginventory-helper
+# Trạng thái
+systemctl status orginventory-agent
+journalctl -u orginventory-agent -f
 ```
 
 ### Pilot checklist
@@ -382,8 +369,5 @@ ls dist/rpm/RPMS/x86_64/*.rpm
 | Lỗi | Nguyên nhân | Cách xử lý |
 |---|---|---|
 | `Service start fail` | Sai token / endpoint trong config.json | Sửa `/etc/orginventory/config.json`, `systemctl restart orginventory-agent` |
-| `Helper socket không tồn tại` | `orginventory-helper.socket` chưa start | `systemctl enable --now orginventory-helper.socket` |
-| `Helper ok:false` | Operation không có trong allowlist hoặc device path không match | Chỉ dùng `/dev/sd*`, `/dev/nvme*`, `/dev/vd*`; chỉ operation `smartctl`/`dmi`/`luks` |
-| `dhelper: end of file` | Input rỗng | Request phải có `{"operation":"..."}` |
 | Agent log spam "enroll retry" | Token hết hạn hoặc sai | Sinh token mới từ Portal, cập nhật config, restart |
 

@@ -8,7 +8,7 @@ PKGROOT="$OUT/pkgroot-$RID"
 rm -rf "$PKGROOT"
 mkdir -p "$PKGROOT/opt/orginventory" "$PKGROOT/etc/orginventory" "$PKGROOT/lib/systemd/system" "$PKGROOT/DEBIAN"
 
-# Publish agent + helper self-contained
+# Publish agent self-contained
 dotnet publish "$HERE/../../linux/src/OrgInventoryAgent.Linux/OrgInventoryAgent.Linux.csproj" \
   -c Release -r "$RID" --self-contained true \
   -p:PublishSingleFile=true \
@@ -16,15 +16,7 @@ dotnet publish "$HERE/../../linux/src/OrgInventoryAgent.Linux/OrgInventoryAgent.
   -p:IncludeNativeLibrariesForSelfExtract=false \
   -o "$PKGROOT/opt/orginventory" -p:ApplicationIcon=
 
-dotnet publish "$HERE/../../src/OrgInventoryAgent.LinuxHelper/OrgInventoryAgent.LinuxHelper.csproj" \
-  -c Release -r "$RID" --self-contained true \
-  -p:PublishSingleFile=true \
-  -p:EnableCompressionInSingleFile=false \
-  -o "$PKGROOT/opt/orginventory"
-
 cp "$HERE/systemd/orginventory-agent.service" "$PKGROOT/lib/systemd/system/"
-cp "$HERE/systemd/orginventory-helper.socket" "$PKGROOT/lib/systemd/system/"
-cp "$HERE/systemd/orginventory-helper.service" "$PKGROOT/lib/systemd/system/"
 
 cp "$HERE/debian/control" "$PKGROOT/DEBIAN/"
 [ -f "$HERE/debian/conffiles" ] && cp "$HERE/debian/conffiles" "$PKGROOT/DEBIAN/"

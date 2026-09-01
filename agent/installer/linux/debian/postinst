@@ -11,8 +11,6 @@ chown -R orginventory:orginventory /var/lib/orginventory /var/log/orginventory /
 chmod 0750 /var/lib/orginventory /var/log/orginventory /run/orginventory
 chmod 0755 /etc/orginventory
 systemctl daemon-reload
-systemctl enable orginventory-helper.socket
-systemctl start orginventory-helper.socket
 # Service chính KHÔNG start tự động — cần enroll trước qua token.
 #DEBHELPER#
 exit 0

@@ -15,10 +15,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.Core", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.Core.Tests", "tests\OrgInventoryAgent.Core.Tests\OrgInventoryAgent.Core.Tests.csproj", "{99EDFCB9-F565-4296-B8B0-A20581661D11}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.LinuxHelper", "src\OrgInventoryAgent.LinuxHelper\OrgInventoryAgent.LinuxHelper.csproj", "{0B07B4C0-8C79-433D-A8E2-E654F4317C4B}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrgInventoryAgent.LinuxHelper.Tests", "tests\OrgInventoryAgent.LinuxHelper.Tests\OrgInventoryAgent.LinuxHelper.Tests.csproj", "{291E0B0D-DEAF-46D9-869F-0BB86CF6E340}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,21 +40,11 @@ Global
 		{99EDFCB9-F565-4296-B8B0-A20581661D11}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{99EDFCB9-F565-4296-B8B0-A20581661D11}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{99EDFCB9-F565-4296-B8B0-A20581661D11}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0B07B4C0-8C79-433D-A8E2-E654F4317C4B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0B07B4C0-8C79-433D-A8E2-E654F4317C4B}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0B07B4C0-8C79-433D-A8E2-E654F4317C4B}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0B07B4C0-8C79-433D-A8E2-E654F4317C4B}.Release|Any CPU.Build.0 = Release|Any CPU
-		{291E0B0D-DEAF-46D9-869F-0BB86CF6E340}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{291E0B0D-DEAF-46D9-869F-0BB86CF6E340}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{291E0B0D-DEAF-46D9-869F-0BB86CF6E340}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{291E0B0D-DEAF-46D9-869F-0BB86CF6E340}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{03EFA96D-FA50-4F00-B2AD-6EE950F40360} = {53F9E0B0-481E-4583-A38E-FC1EDACBC5D5}
 		{7A1B2C3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D} = {83B7E9F1-23A4-4458-9A7B-3DFB5F0E5D61}
 		{E10703A8-858B-46F5-9665-281647F27CE5} = {53F9E0B0-481E-4583-A38E-FC1EDACBC5D5}
 		{99EDFCB9-F565-4296-B8B0-A20581661D11} = {83B7E9F1-23A4-4458-9A7B-3DFB5F0E5D61}
-		{0B07B4C0-8C79-433D-A8E2-E654F4317C4B} = {53F9E0B0-481E-4583-A38E-FC1EDACBC5D5}
-		{291E0B0D-DEAF-46D9-869F-0BB86CF6E340} = {83B7E9F1-23A4-4458-9A7B-3DFB5F0E5D61}
 	EndGlobalSection
 EndGlobal

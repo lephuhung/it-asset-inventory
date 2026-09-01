@@ -106,8 +106,7 @@ curl -fsSL https://portal.gov.vn/i/<token> | sudo bash
 1. Phát hiện distro (Debian/Ubuntu ↔ `.deb`, RHEL/Rocky ↔ `.rpm`) + architecture.
 2. **OrgInventory Agent**:
    - Tải binary self-contained từ `/download/agent-linux-x64` + SHA256 → verify.
-   - Tạo user `orginventory`, data dir `/var/lib/orginventory`, helper socket
-     `/run/orginventory/helper.sock`.
+   - Tạo user `orginventory`, data dir `/var/lib/orginventory`.
    - Ghi `/etc/orginventory/config.json` với token + endpoints; tạo + enable systemd unit
      `orginventory-agent.service`.
 3. **Velociraptor Client**: tải gói từ `/download/velociraptor-linux-amd64.{deb,rpm}` →

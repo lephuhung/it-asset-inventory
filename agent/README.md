@@ -180,7 +180,7 @@ systemctl status orginventory-agent.service
 tail -f /var/log/orginventory/agent.log
 ```
 
-Service chạy bằng user `orginventory` (không root), dữ liệu tại `/var/lib/orginventory`, log tại `/var/log/orginventory`, helper socket tại `/run/orginventory/helper.sock`.
+Service chạy bằng user `orginventory` (không root), dữ liệu tại `/var/lib/orginventory`, log tại `/var/log/orginventory`.
 
 ### One-liner online
 
