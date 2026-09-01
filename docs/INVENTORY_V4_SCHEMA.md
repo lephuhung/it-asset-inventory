@@ -112,7 +112,7 @@ Cột v4 chỉ fill nếu **object v4 tồn tại** trong payload. Nếu agent g
 
 ### 3.1. Linux agent (`OrgInventoryAgent.Linux`)
 
-**Trạng thái:** ✅ Đã hoàn thiện (nhánh `feature/linux-agent`, version `1.1.0`, HEAD `1835c10`). Toàn bộ services được implement config-driven, không còn mục "còn thiếu":
+**Trạng thái:** ✅ Đã hoàn thiện (nhánh `feature/linux-agent`, version `1.1.0`, HEAD `7e705e6`). Toàn bộ services được implement config-driven, không còn mục "còn thiếu":
 
 - **HeartbeatService**: heartbeat mặc định 30±8s (jitter), interval/jitter/renew_after đồng bộ từ response server (mặc định `30±8s`).
 - **InventoryService**: inventory định kỳ 24h (hoặc `inventory_interval_hours` server trả), offline cache khi mất kết nối, `rescan_requested`.
@@ -251,7 +251,7 @@ Có thể để tương lai — server fallback vẫn đang hoạt động.
 | 3 | Portal `/machines` | Reload trang | Row `30HUYTU` hiển thị logo Windows (4 ô vuông xanh) |
 | 4 | Portal `/machines/[id]` | Click vào `30HUYTU` → SecuritySection | Hiển thị Windows security (BitLocker, RDP, Windows Update) |
 | 5 | `AI` (Linux) | `sudo /opt/orginventory/OrgInventoryAgent --send-inventory` | Inventory HTTP 200 OK |
-| 6 | DB | Cùng query như bước 2 | `platform='linux'`, `agent_version='1.0.0'` |
+| 6 | DB | Cùng query như bước 2 | `platform='linux'`, `agent_version='1.1.0'` (build 1.1.0) |
 | 7 | Portal | Reload `/machines` | Row `AI` hiển thị logo Tux |
 
 ### 4.2. Smoke test payload
