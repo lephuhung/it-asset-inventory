@@ -15,7 +15,13 @@ from deepagent.analysis_model import OpenAIAnalysisModel
 from deepagent.callback import BackendCallbackClient
 from deepagent.config import Settings, get_settings
 from deepagent.mcp_client import VelociraptorMCP
-from deepagent.models import CallbackPayload, InvestigationRequest, JobStatus, McpTestResult
+from deepagent.models import (
+    CallbackPayload,
+    InvestigationRequest,
+    JobStatus,
+    McpTestRequest,
+    McpTestResult,
+)
 from deepagent.runner import InvestigationRunner
 
 app = FastAPI(title="DeepAgent DFIR", version="0.1.0")
@@ -99,13 +105,30 @@ async def health() -> dict:
 
 
 @app.post("/v1/mcp/test", response_model=McpTestResult, dependencies=[Depends(_auth)])
-async def test_mcp_connection(settings: Settings = Depends(get_settings)) -> McpTestResult:
+async def test_mcp_connection(
+    request: McpTestRequest, settings: Settings = Depends(get_settings)
+) -> McpTestResult:
     """Safe diagnostic: nạp MCP tools và gọi list_clients tối đa một row."""
+    api_client_path: str | None = None
     try:
-        result = await VelociraptorMCP(settings).test_connection()
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".yaml", delete=False
+        ) as handle:
+            handle.write(request.velociraptor_api_client_yaml)
+            api_client_path = handle.name
+        mcp_env = settings.mcp_env()
+        mcp_env["VELOCIRAPTOR_API_CONFIG"] = api_client_path
+        test_settings = settings.model_copy(update={"mcp_env_json": json.dumps(mcp_env)})
+        result = await VelociraptorMCP(test_settings).test_connection()
         return McpTestResult(ok=True, **result)
     except Exception as exc:  # noqa: BLE001 - trả diagnostics vận hành, không lộ secrets
         return McpTestResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+    finally:
+        if api_client_path:
+            try:
+                os.unlink(api_client_path)
+            except FileNotFoundError:
+                pass
 
 
 @app.post(

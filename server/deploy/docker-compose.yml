@@ -44,6 +44,9 @@ services:
       DATABASE_URL: postgresql+asyncpg://inventory:inventory@postgres:5432/inventory
       REDIS_URL: redis://redis:6381/0
       CA_MODE: local
+      DEEPAGENT_ENABLED: "true"
+      DEEPAGENT_URL: http://deepagent:8090
+      DEEPAGENT_API_KEY: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +54,27 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+
+  deepagent:
+    build:
+      context: ../../deepagent
+      dockerfile: Dockerfile
+    image: asset-inventory-deepagent:latest
+    environment:
+      DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
+      DEEPAGENT_BACKEND_URL: http://api:8000
+      DEEPAGENT_BACKEND_API_KEY: ${DEEPAGENT_BACKEND_API_KEY:-}
+      DEEPAGENT_MCP_COMMAND: python
+      DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
+      DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false"}'
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"

@@ -123,3 +123,9 @@ class McpTestResult(BaseModel):
     tools: list[str] = Field(default_factory=list)
     client_count_sampled: int | None = None
     error: str | None = None
+
+
+class McpTestRequest(BaseModel):
+    """Velociraptor config is supplied only for the lifetime of an MCP check."""
+
+    velociraptor_api_client_yaml: str = Field(min_length=32, max_length=256_000)
