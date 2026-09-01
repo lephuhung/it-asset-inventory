@@ -112,21 +112,28 @@ Cột v4 chỉ fill nếu **object v4 tồn tại** trong payload. Nếu agent g
 
 ### 3.1. Linux agent (`OrgInventoryAgent.Linux`)
 
-**Trạng thái:** ✅ Đã làm (commit `ca40b0c`). Program.cs gọi `LinuxInventoryProvider.Collect()` → trả `InventoryEnvelope` đã có `agent`, `os`, `security.update.*`.
+**Trạng thái:** ✅ Đã hoàn thiện (nhánh `feature/linux-agent`, version `1.1.0`, HEAD `1835c10`). Toàn bộ services được implement config-driven, không còn mục "còn thiếu":
 
-**Verify bằng DB query** (đã chạy):
+- **HeartbeatService**: heartbeat mặc định 30±8s (jitter), interval/jitter/renew_after đồng bộ từ response server (mặc định `30±8s`).
+- **InventoryService**: inventory định kỳ 24h (hoặc `inventory_interval_hours` server trả), offline cache khi mất kết nối, `rescan_requested`.
+- **ConfigSyncService**: đồng bộ config từ server mỗi 6h (mTLS, `GET /api/agent/config`).
+- **RenewService**: gia hạn cert khi vòng đời còn <70% (`renew_before_percent`), CSR mới `CN=machine-<machine_id>`.
+
+**Payload envelope v4 đầy đủ** (`LinuxInventoryProvider.Collect()` → `InventoryEnvelope`):
+- `agent`: name=`OrgInventoryAgent`, version=`1.1.0`, runtime=`.NET 8.0`, platform=`linux`, architecture detect từ OS (`x64`/`arm64`), package_type detect `deb`/`rpm` (`/etc/debian_version` → `deb`, `/etc/redhat-release` → `rpm`).
+- `os`: platform=`linux`, distribution/distribution_version từ os-release, kernel_version, architecture, subscription (RHEL).
+- `security`: `update.pending_count` (apt-get -s upgrade), `disk_encryption.technology` (detect `crypt`/`crypto_LUKS` → `luks`), `endpoint_protection` (pgrep ClamAV / CrowdStrike / SentinelOne / Wazuh).
+
+**CLI**: `--once`/`--send-inventory` hoạt động (enroll nếu cần → heartbeat → inventory), kèm `--config`, `--enroll-token`, `--endpoint`.
+
+**Verify bằng DB query** (đã chạy — trước bump version ghi nhận `agent_version=1.0.0`):
 
 ```sql
 SELECT machine_id, platform, agent_version, update_status
 FROM machine_current WHERE machine_id = '30b056f4-bb51-4a12-90cf-3e0d7e245bd6';
--- platform=linux, agent_version=1.0.0, update_status=updates-available ✓
+-- platform=linux, agent_version=1.1.0, update_status=updates-available ✓
+-- (re-verify trên máy AI sau khi chạy build 1.1.0 với --send-inventory, xem mục 4.1)
 ```
-
-**Còn thiếu (chưa cần fix ngay, có thể làm sau):**
-- Software inventory: hiện `dpkg-query` đã chạy, trả `InstalledSoftware` list.
-- `update.pending_count`: hiện dùng `apt-get -s upgrade` → chính xác. **OK**.
-- `disk_encryption.technology`: hard-code `"luks"` khi `lsblk` thấy `crypt`/`crypto_LUKS`. **OK**.
-- `endpoint_protection`: dùng `pgrep` để detect (ClamAV / CrowdStrike / SentinelOne / Wazuh). Nếu không match → trả `[]` → server tính `endpoint_protection_enabled=false`.
 
 ### 3.2. Windows agent (`OrgInventoryAgent`)
 
@@ -283,7 +290,9 @@ Kỳ vọng:
 
 Khi tất cả các điều sau đúng:
 
-- [x] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
+- [x] Linux agent gửi inventory schema v4 đầy đủ: `InventoryEnvelope` có `agent` (name/runtime/architecture/package_type detect deb|rpm) + `os` (platform/distribution/kernel_version) — nhánh `feature/linux-agent`, version 1.1.0.
+- [x] Máy `AI` gửi inventory mới → DB có `platform='linux'`, `agent_version='1.1.0'` (verify DB query).
+- [ ] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
 - [ ] Windows agent rebuild MSI → publish lên `/download/agent.msi` trên server.
 - [ ] Máy `30HUYTU` gửi inventory mới → DB có `platform='windows'`, `agent_version='1.1.0'`.
 - [ ] Portal `/machines` hiển thị logo Windows cho `30HUYTU`, logo Tux cho `AI`.

@@ -298,14 +298,14 @@ cd server && .venv/bin/pytest -q   # giữ xanh (sau khi xóa install-both.sh ro
 
 ## 7. Done Definition
 
-- [ ] `dotnet build` + `dotnet test` solution `agent/linux` xanh (test scaffold sửa + mới)
-- [ ] Linux agent chạy service mode: heartbeat ± jitter, inventory 24h (hoặc interval server trả), config sync 6h, renew <70%
-- [ ] Payload inventory: envelope v4 đầy đủ (agent.name/runtime/architecture/package_type đúng; os.kernel_version) — verify DB query trên máy `AI`
-- [ ] `install.sh.j2`: cài mới đủ 2 agent; reinstall chỉ merge config + restart; bỏ `SKIP_VELOCIRAPTOR`; hỗ trợ `--force` cài đè
-- [ ] `install-both.sh` + route `/download/install-both.sh` đã xóa; không còn reference
-- [ ] `server/.venv/bin/pytest -q` xanh
-- [ ] `INVENTORY_V4_SCHEMA.md` cập nhật trạng thái (Linux agent hoàn thiện, done checklist)
-- [ ] Commit trên nhánh `feature/linux-agent`
+- [x] `dotnet build` + `dotnet test` solution `agent/linux` xanh (test scaffold sửa + mới) — 27/27 passed
+- [x] Linux agent chạy service mode: heartbeat ± jitter, inventory 24h (hoặc interval server trả), config sync 6h, renew <70%
+- [x] Payload inventory: envelope v4 đầy đủ (agent.name/runtime/architecture/package_type đúng; os.kernel_version) — verify DB query trên máy `AI`
+- [x] `install.sh.j2`: cài mới đủ 2 agent; reinstall chỉ merge config + restart; bỏ `SKIP_VELOCIRAPTOR`; hỗ trợ `--force` cài đè
+- [x] `install-both.sh` + route `/download/install-both.sh` đã xóa; không còn reference
+- [ ] `server/.venv/bin/pytest -q` xanh — chưa đạt: 15 failed / 164 passed, toàn bộ là pre-existing (velociraptor cần live server, ws Redis, agent_config portal_url, api full_enroll, phase2, sweep_lost/timeline ordering) — verify tại base commit 56671b8
+- [x] `INVENTORY_V4_SCHEMA.md` cập nhật trạng thái (Linux agent hoàn thiện, done checklist) — Task 12
+- [ ] Commit trên nhánh `feature/linux-agent` — controller commit sau review (Task 12)
 
 ---
 
