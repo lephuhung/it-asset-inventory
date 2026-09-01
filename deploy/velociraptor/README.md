@@ -99,10 +99,11 @@ Xem trạng thái sync ở **/dfir** (panel "Số máy đã link Velociraptor").
 
 Velociraptor Client **không** qua agent inventory — cài theo cách riêng của đơn vị (GPO, MSI deploy thủ công, …).
 
-> ✅ **Cài gộp 2 agent bằng 1 lệnh:** đã có script `install-both.ps1` (Windows) / `install-both.sh`
-> (Linux) cài **đồng thời** OrgInventory Agent + Velociraptor Client — xem
+> ✅ **Cài gộp 2 agent bằng 1 lệnh:** Windows dùng `install-both.ps1`; Linux dùng one-liner
+> `curl -fsSL <portal>/i/<token> | sudo bash` (template `install.sh.j2` — cài đủ
+> OrgInventory Agent + Velociraptor Client, reinstall chỉ merge config) — xem
 > [`docs/INSTALL_BOTH_AGENTS.md`](../docs/INSTALL_BOTH_AGENTS.md). Script được Inventory Server
-> phục vụ tại `/download/install-both.ps1` và `/download/install-both.sh`.
+> phục vụ tại `/download/install-both.ps1` (Windows).
 
 Trong Velociraptor GUI:
 1. **Settings → Clients → Add new client** (hoặc download cấu hình + binary từ nút Download ở góc).

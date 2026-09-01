@@ -199,5 +199,5 @@ hostname ↔ client_id ở portal **/dfir** (do Inventory Server sync mỗi 5 ph
   phải ký Authenticode (xem `agent/installer/build-msi.ps1 -Sign`).
 - Trên Linux, agent thu thập hardware/OS qua sysfs; các collector dùng WMI (security posture,
   danh sách phần mềm Windows) trả về null — đã được guard bằng `OperatingSystem.IsWindows()`.
-- Giữ bản `agent/install-both.*` và `server/app/templates/install-both.*` **đồng bộ** (bản
-  template là bản serve cho one-liner).
+- Linux cài gộp 2 agent qua one-liner `curl -fsSL <portal>/i/<token> | sudo bash`
+  (template `server/app/templates/install.sh.j2` — canonical; `install-both.sh` đã xóa).
