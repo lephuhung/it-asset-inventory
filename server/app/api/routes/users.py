@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import require_role
+from app.api.deps import require_role, require_super_admin
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.security import hash_password
 from app.db.models import Organization, User, UserRole
 from app.db.session import get_db
@@ -211,3 +212,51 @@ async def reset_2fa(
     await append_audit(db, action="user.reset_2fa", actor=str(admin.id), target=str(u.id))
     await db.commit()
     return {"ok": True}
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user(
+    user_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Xóa vĩnh viễn 1 user. Chỉ Super Admin.
+
+    Bảo vệ:
+    - Không xóa chính mình.
+    - Không xóa super_admin cuối cùng.
+    - Audit log giữ nguyên (action='user.delete') — không cascade xóa.
+    """
+    target = (
+        await db.execute(select(User).where(User.id == user_id))
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Người dùng không tồn tại")
+    if target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Không thể tự xóa tài khoản đang đăng nhập")
+
+    if target.role in SUPER_ROLES:
+        other_super = (
+            await db.execute(
+                select(sa_func.count())
+                .select_from(User)
+                .where(User.role.in_(SUPER_ROLES), User.id != target.id, User.is_active.is_(True))
+            )
+        ).scalar_one()
+        if int(other_super) == 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Không thể xóa Super Admin cuối cùng còn hoạt động",
+            )
+
+    await append_audit(
+        db,
+        action="user.delete",
+        actor=str(admin.id),
+        target=str(target.id),
+        ip=get_client_ip(request),
+    )
+    await db.delete(target)
+    await db.commit()
+    return None

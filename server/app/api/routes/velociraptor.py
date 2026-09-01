@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1376,3 +1376,34 @@ async def resolve_dfir_alert(
     await db.commit()
     await db.refresh(alert)
     return DfirAlertOut.model_validate(alert)
+
+
+@router.delete("/hunts/{hunt_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_dfir_hunt(
+    hunt_id: str,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Xóa 1 bản ghi DFIR hunt (DB only — không gọi Velociraptor Server).
+
+    Chỉ Super Admin. Dùng để dọn dẹp các hunt lỗi / test.
+    Audit log (audit_log) giữ nguyên — không xóa.
+    """
+    row = (
+        await db.execute(select(DfirHunt).where(DfirHunt.hunt_id == hunt_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hunt không tồn tại")
+    mid = row.machine_id
+    await append_audit(
+        db,
+        action="dfir.hunt.delete",
+        actor=str(admin.id),
+        target=str(row.id),
+        machine_id=mid,
+        ip=get_client_ip(request),
+    )
+    await db.delete(row)
+    await db.commit()
+    return None

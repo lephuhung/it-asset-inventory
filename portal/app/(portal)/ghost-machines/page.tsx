@@ -22,6 +22,7 @@ import {
   TR_HOVER,
 } from "@/components/ui";
 import { MACHINE_STATUS_META, formatDateTime, timeAgo } from "@/lib/format";
+import { DeleteButton } from "@/components/delete-button";
 
 const DAY_MS = 86_400_000;
 
@@ -137,12 +138,20 @@ export default function GhostMachinesPage() {
                       </span>
                     </td>
                     <td className={TD}>
-                      <Link
-                        href={`/machines/${m.id}`}
-                        className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
-                      >
-                        Kiểm tra <ChevronRight className="size-3.5" />
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={`/machines/${m.id}`}
+                          className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
+                        >
+                          Kiểm tra <ChevronRight className="size-3.5" />
+                        </Link>
+                        <DeleteButton
+                          resource="máy"
+                          itemName={m.hostname ?? m.machine_uuid}
+                          deletePath={`/machines/${m.id}`}
+                          onDeleted={() => void load()}
+                        />
+                      </div>
                     </td>
                   </tr>
                 );

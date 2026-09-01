@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader, Spinner } from "@/components/ui";
 import type { DfirHunt } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/format";
+import { DeleteButton } from "@/components/delete-button";
 
 /** Lịch sử hunt / collect đã chạy (audit log local). */
 export default function DfirHuntsPage() {
@@ -73,6 +74,7 @@ export default function DfirHuntsPage() {
                   <th className="px-4 py-3 text-left">Trạng thái</th>
                   <th className="px-4 py-3 text-left">Velociraptor</th>
                   <th className="px-4 py-3 text-left">Ghi chú</th>
+                  <th className="px-4 py-3 text-right">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -124,6 +126,16 @@ export default function DfirHuntsPage() {
                     </td>
                     <td className="px-4 py-3 max-w-xs truncate text-xs text-slate-600" title={h.notes ?? ""}>
                       {h.notes || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {h.hunt_id && (
+                        <DeleteButton
+                          resource="hunt"
+                          itemName={`${h.artifact} (${h.hunt_id.slice(0, 8)})`}
+                          deletePath={`/admin/velociraptor/hunts/${h.hunt_id}`}
+                          onDeleted={() => void load()}
+                        />
+                      )}
                     </td>
                   </tr>
                 ))}

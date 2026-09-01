@@ -31,6 +31,7 @@ import type {
   TokenListItem,
 } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
+import { DeleteButton } from "@/components/delete-button";
 import { OsPicker, type OsId } from "@/components/os-picker";
 import {
   Button,
@@ -512,6 +513,12 @@ export default function TokensPage() {
                                 Thu hồi
                               </Button>
                             )}
+                            <DeleteButton
+                              resource="token"
+                              itemName={t.full_name || t.email || t.id}
+                              deletePath={`/tokens/${t.id}`}
+                              onDeleted={() => void loadTokens(true)}
+                            />
                           </div>
                         </td>
                       </tr>

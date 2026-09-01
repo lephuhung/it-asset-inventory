@@ -29,6 +29,7 @@ import {
 } from "@/components/ui";
 import { LIFECYCLE_META, MACHINE_STATUS_META, ORG_TYPE_META, classificationTag, flattenOrgTree, formatDateTime, purposeTags, tagBadgeClass, timeAgo } from "@/lib/format";
 import { useAuth } from "@/components/auth-context";
+import { DeleteButton } from "@/components/delete-button";
 
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Tất cả trạng thái" },
@@ -367,12 +368,20 @@ export default function MachinesPage() {
                     <td className={`${TD} text-xs`}>{formatDateTime(m.last_seen_at)}</td>
                     <td className={`${TD} text-xs`}>{formatDateTime(m.enrolled_at)}</td>
                     <td className={TD}>
-                      <Link
-                        href={`/machines/${m.id}`}
-                        className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
-                      >
-                        Chi tiết <ChevronRight className="size-3.5" />
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          href={`/machines/${m.id}`}
+                          className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
+                        >
+                          Chi tiết <ChevronRight className="size-3.5" />
+                        </Link>
+                        <DeleteButton
+                          resource="máy"
+                          itemName={m.hostname ?? m.machine_uuid}
+                          deletePath={`/machines/${m.id}`}
+                          onDeleted={() => void load(true)}
+                        />
+                      </div>
                     </td>
                   </tr>
                 );

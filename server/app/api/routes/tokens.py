@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_admin, visible_org_ids
+from app.api.deps import require_admin, require_super_admin, visible_org_ids
 from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
@@ -434,3 +434,46 @@ async def reissue_token(
         install_url_warnings=warnings,
         expires_at=new_row.expires_at,
     )
+
+
+@router.delete("/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_token(
+    token_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Xóa vĩnh viễn 1 token (kể cả pending/used/revoked/expired).
+    Chỉ Super Admin — dùng để dọn dẹp danh sách.
+    Token đang ở trạng thái `used` vẫn xóa được; máy đã cài agent vẫn hoạt động
+    bình thường (token chỉ dùng 1 lần khi enroll)."""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    row = (
+        await db.execute(select(EnrollToken).where(EnrollToken.id == token_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Token không tồn tại")
+    _log.info(
+        "token.delete id=%s status=%s actor=%s",
+        row.id, row.status, admin.id,
+    )
+    try:
+        await append_audit(
+            db,
+            action="token.delete",
+            actor=str(admin.id),
+            target=str(row.id),
+            ip=get_client_ip(request),
+        )
+        await db.delete(row)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 — log chi tiết để debug
+        _log.exception("token.delete failed for id=%s: %s", row.id, exc)
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Không xóa được token: {exc.__class__.__name__}: {str(exc)[:200]}",
+        )
+    return None

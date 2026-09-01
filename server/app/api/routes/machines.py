@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_admin, visible_org_ids
+from app.api.deps import get_current_user, require_admin, require_super_admin, visible_org_ids
 from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
@@ -779,3 +779,91 @@ async def request_rescan(
     await append_audit(db, action="machine.rescan_requested", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
     await db.commit()
     return {"ok": True, "message": "Đã yêu cầu agent thu thập lại cấu hình (khi máy online)"}
+
+@router.delete("/{machine_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_machine(
+    machine_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Xóa vĩnh viễn 1 máy (kèm cascade specs, software, tags — qua ORM relationship).
+
+    Chỉ Super Admin. Dùng để dọn dẹp máy ảo test / máy cài lại nhiều lần / trùng UUID.
+    Audit log (audit_log) và DfirInvestigation giữ nguyên — set FK về NULL trước khi xóa
+    để giữ lịch sử audit (chỉ mất liên kết tới máy).
+    """
+    from sqlalchemy import delete as sql_delete, update
+
+    from app.db.models import (
+        AuditLog,
+        DfirInvestigation,
+        DfirInvestigationRequest,
+        EnrollToken,
+        FingerprintDrift,
+        Heartbeat,
+        MachineCurrent,
+        MachineSoftware,
+        MachineSpec,
+        MachineTag,
+        VelociraptorLink,
+    )
+
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == machine_id))
+    ).scalar_one_or_none()
+    if machine is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Máy không tồn tại")
+    mid = machine.id
+
+    # ── FK NULL (giữ lịch sử) ──────────────────────────────────────
+    # Audit log: set machine_id = NULL (giữ action/target/actor để tra cứu).
+    await db.execute(
+        update(AuditLog).where(AuditLog.machine_id == mid).values(machine_id=None)
+    )
+    # EnrollToken.used_by: set NULL (giữ lịch sử token đã dùng enroll máy này).
+    await db.execute(
+        update(EnrollToken)
+        .where(EnrollToken.used_by == mid)
+        .values(used_by=None)
+    )
+
+    # ── FK cứng NOT NULL (xoá vì gắn liền với máy cụ thể) ──────────
+    # DfirInvestigation (LLM): cuộc điều tra gắn với máy này.
+    await db.execute(
+        sql_delete(DfirInvestigation).where(DfirInvestigation.machine_id == mid)
+    )
+    # DfirInvestigationRequest (Velociraptor approve flow): yêu cầu điều tra gắn với máy này.
+    await db.execute(
+        sql_delete(DfirInvestigationRequest).where(
+            DfirInvestigationRequest.machine_id == mid
+        )
+    )
+
+    # ── FK cứng (xoá vì gắn liền với máy này) ────────────────────
+    # Heartbeat: dữ liệu nhịp tim máy → không còn ý nghĩa nếu máy xoá.
+    await db.execute(sql_delete(Heartbeat).where(Heartbeat.machine_id == mid))
+    # FingerprintDrift: lịch sử thay đổi phần cứng của máy cụ thể này.
+    await db.execute(
+        sql_delete(FingerprintDrift).where(FingerprintDrift.machine_id == mid)
+    )
+    # VelociraptorLink: liên kết 1-1 giữa máy và Velociraptor client.
+    await db.execute(sql_delete(VelociraptorLink).where(VelociraptorLink.machine_id == mid))
+    # MachineTag (M-N): các tag đã gán cho máy. ORM cascade ở Machine.tags
+    # (delete-orphan) chỉ hoạt động khi load trước — ở đây ta xoá thẳng để chắc chắn.
+    await db.execute(sql_delete(MachineTag).where(MachineTag.machine_id == mid))
+    # Snapshot/specs/software: dữ liệu snapshot của máy cụ thể này.
+    await db.execute(sql_delete(MachineCurrent).where(MachineCurrent.machine_id == mid))
+    await db.execute(sql_delete(MachineSoftware).where(MachineSoftware.machine_id == mid))
+    await db.execute(sql_delete(MachineSpec).where(MachineSpec.machine_id == mid))
+
+    await append_audit(
+        db,
+        action="machine.delete",
+        actor=str(admin.id),
+        target=str(mid),
+        ip=get_client_ip(request),
+    )
+    await db.delete(machine)
+    await db.commit()
+    return None
