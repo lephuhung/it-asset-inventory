@@ -482,48 +482,127 @@ class AgentConfigResponse(BaseModel):
     agent_config_hash: str | None = None
 
 
-# ── Alert rules (Phase 2) ────────────────────────────────────────
+# ── Alert engine redesign (Phase 2 v2) ─────────────────────────
+
+
+class AlertTemplateOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    description: str | None
+    category: str
+    default_severity: str
+    title_template: str
+    body_template: str | None
+    opt_out_controls: list[str]
+    allowed_vars: list[str]
+    default_config: dict
+    enabled: bool
+    updated_at: datetime
+
+
+class AlertTemplateUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    category: str | None = None
+    default_severity: str | None = Field(default=None, pattern="^(info|success|warning|error|critical)$")
+    title_template: str | None = Field(default=None, min_length=1)
+    body_template: str | None = None
+    opt_out_controls: list[str] | None = None
+    allowed_vars: list[str] | None = None
+    default_config: dict | None = None
+    enabled: bool | None = None
+
+
+class AlertTemplatePreviewIn(BaseModel):
+    """Context mẫu để render thử template (không lưu)."""
+
+    context: dict = Field(default_factory=dict)
+
+
+class AlertTemplatePreviewOut(BaseModel):
+    title: str
+    body: str | None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AlertRuleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    rule_type: str = Field(..., description="machine_new | machine_lost | software_new | hardware_changed")
-    org_id: uuid.UUID | None = Field(default=None, description="None = toàn hệ thống")
+    template_code: str = Field(..., min_length=1, max_length=64)
+    org_id: uuid.UUID | None = None
+    scope_mode: str = Field(default="org_only", pattern="^(org_only|org_tree|system)$")
+    recipient_mode: str = Field(default="org_admins_and_super", pattern="^(org_admins_and_super)$")
+    config: dict = Field(default_factory=dict)
     enabled: bool = True
-    threshold_days: int | None = Field(default=None, ge=1, le=365, description="machine_lost")
-    channels: list[str] = Field(default_factory=lambda: ["email"])
-    notify_targets: list[str] = Field(default_factory=list)
 
 
 class AlertRuleUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    template_code: str | None = None
+    org_id: uuid.UUID | None = None
+    scope_mode: str | None = Field(default=None, pattern="^(org_only|org_tree|system)$")
+    recipient_mode: str | None = Field(default=None, pattern="^(org_admins_and_super)$")
+    config: dict | None = None
     enabled: bool | None = None
-    threshold_days: int | None = None
-    channels: list[str] | None = None
-    notify_targets: list[str] | None = None
 
 
 class AlertRuleOut(BaseModel):
     id: uuid.UUID
     name: str
-    rule_type: str
+    template_code: str
+    template_name: str | None = None
     org_id: uuid.UUID | None
+    scope_mode: str
+    recipient_mode: str
+    config: dict
     enabled: bool
-    threshold_days: int | None
-    channels: list[str]
-    notify_targets: list[str]
     created_at: datetime
+
+
+class AlertRuleTestOut(BaseModel):
+    """Dry-run: render + resolve recipients, KHÔNG gửi."""
+
+    template_code: str
+    title: str
+    body: str | None
+    recipients: list[dict] = Field(default_factory=list)  # [{user_id, email, full_name, telegram_linked}]
+    total_recipients: int
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AlertEventOut(BaseModel):
     id: int
     rule_id: uuid.UUID
+    template_code: str
     machine_id: uuid.UUID | None
+    org_id: uuid.UUID | None
     severity: str
-    message: str
-    channels: list[str]
-    delivered: bool
+    title: str
+    body: str | None
+    recipient_user_ids: list[str]
     created_at: datetime
+
+
+class UserNotificationPrefOut(BaseModel):
+    """Pref của user hiện tại + metadata template (để UI render control)."""
+
+    template_code: str
+    template_name: str
+    category: str
+    default_severity: str
+    opt_out_controls: list[str]
+    muted: bool
+    min_severity: str | None
+
+
+class UserNotificationPrefItem(BaseModel):
+    template_code: str
+    muted: bool = False
+    min_severity: str | None = None
+
+
+class UserNotificationPrefUpdateIn(BaseModel):
+    prefs: list[UserNotificationPrefItem] = Field(default_factory=list)
 
 
 # ── Self-service (chế độ B) ─────────────────────────────────────
