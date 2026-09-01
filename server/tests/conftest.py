@@ -12,6 +12,46 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+# ── Alert engine fixture (dùng chung cho test_alert_engine + test_phase2) ──
+
+
+@pytest.fixture
+async def seeded_templates(db):
+    """Seed 7 templates chuẩn từ migration (test DB không chạy alembic)."""
+    from importlib import util
+    from pathlib import Path
+    import sys
+
+    from app.db.models import AlertTemplate
+
+    path = Path(__file__).parents[1] / "alembic/versions/t8u9v0w1x2y3_alert_engine.py"
+    spec = util.spec_from_file_location("alert_engine_migration", path)
+    mod = util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    for t in mod.SEED_TEMPLATES:
+        db.add(AlertTemplate(**t))
+    await db.commit()
+    return db
+
+
+@pytest.fixture
+async def seeded_telegram_bot(db):
+    """Seed telegram_bot_config (id=1) — để _maybe_deliver_telegram chạy thật."""
+    from app.core.security import encrypt_aes_gcm
+    from app.db.models import TelegramBotConfig
+
+    row = TelegramBotConfig(
+        id=1,
+        bot_token_encrypted=encrypt_aes_gcm("123456789:AA-test-token"),
+        bot_username="test_bot",
+        enabled=True,
+    )
+    db.add(row)
+    await db.commit()
+    return db
+
 # ── Cấu hình test ─────────────────────────────────────────────
 POSTGRES_HOST = os.environ.get("POSTGRES_TEST_HOST", "127.0.0.1")
 POSTGRES_PORT = os.environ.get("POSTGRES_TEST_PORT", "5432")
@@ -60,10 +100,15 @@ asyncio.run(_create_test_db_if_missing())
 
 @pytest_asyncio.fixture
 async def db_engine() -> AsyncEngine:
+    from sqlalchemy import pool as sa_pool
+
     from app.db import models  # noqa: F401
     from app.db.base import Base
 
-    engine = create_async_engine(TEST_DB)
+    # NullPool: mỗi kết nối tạo mới trên loop hiện tại — tránh lỗi
+    # 'Future attached to a different loop' khi test dùng _scan_alerts (mở
+    # AsyncSessionLocal) rồi test sau mượn lại connection từ pool của loop cũ.
+    engine = create_async_engine(TEST_DB, poolclass=sa_pool.NullPool)
     async with engine.begin() as conn:
         # Fresh schema mỗi test
         await conn.run_sync(Base.metadata.drop_all)

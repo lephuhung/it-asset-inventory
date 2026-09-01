@@ -26,7 +26,7 @@ def _auth(token):
 # ── Alert rules ────────────────────────────────────────────────
 
 
-async def test_alert_rule_crud(client, seeded_env):
+async def test_alert_rule_crud(client, seeded_env, seeded_templates):
     token = await _login(client, seeded_env["email"], seeded_env["password"])
     org_id = seeded_env["org_id"]
 
@@ -34,11 +34,10 @@ async def test_alert_rule_crud(client, seeded_env):
         "/api/alert-rules",
         json={
             "name": "Mất liên lạc 7 ngày",
-            "rule_type": "machine_lost",
+            "template_code": "machine_lost",
             "org_id": org_id,
-            "threshold_days": 7,
-            "channels": ["email", "telegram"],
-            "notify_targets": ["it@example.gov.vn"],
+            "scope_mode": "org_only",
+            "config": {"threshold_days": 7},
         },
         headers=_auth(token),
     )
@@ -57,22 +56,22 @@ async def test_alert_rule_crud(client, seeded_env):
     r = await client.delete(f"/api/alert-rules/{rule_id}", headers=_auth(token))
     assert r.status_code == 200
 
-    # type không hợp lệ → 422
+    # template không tồn tại → 422
     r = await client.post(
         "/api/alert-rules",
-        json={"name": "X", "rule_type": "whatever", "org_id": org_id},
+        json={"name": "X", "template_code": "whatever", "org_id": org_id},
         headers=_auth(token),
     )
     assert r.status_code == 422
 
 
-async def test_alert_job_fires_and_no_duplicate(client, session_factory, seeded_env):
+async def test_alert_job_fires_and_no_duplicate(client, session_factory, seeded_env, seeded_templates):
     token = await _login(client, seeded_env["email"], seeded_env["password"])
     org_id = uuid.UUID(seeded_env["org_id"])
 
     r = await client.post(
         "/api/alert-rules",
-        json={"name": "Máy mới", "rule_type": "machine_new", "org_id": str(org_id), "channels": []},
+        json={"name": "Máy mới", "template_code": "machine_new", "org_id": str(org_id), "scope_mode": "org_only"},
         headers=_auth(token),
     )
     rule_id = uuid.UUID(r.json()["id"])
@@ -93,7 +92,7 @@ async def test_alert_job_fires_and_no_duplicate(client, session_factory, seeded_
     async with session_factory() as s:
         events = (await s.execute(select(AlertEvent).where(AlertEvent.rule_id == rule_id))).scalars().all()
         assert len(events) == 1
-        assert events[0].message.startswith("Máy mới enroll")
+        assert events[0].title.startswith("[")  # đã render template
         r = await client.get("/api/alert-rules/events", headers=_auth(token))
         assert r.status_code == 200
         assert len(r.json()["items"]) >= 1

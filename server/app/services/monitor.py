@@ -10,18 +10,17 @@ Không dùng ARQ (Phase 2) — đủ cho Sprint 3 realtime; task đơn giản, 1
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from app.core.config import settings
-from app.db.models import AlertEvent, AlertRule, Machine, MachineStatus
-from app.db.session import AsyncSessionLocal
+from app.db.models import Machine, MachineStatus
+from app.db import session as db_session
+from app.services import dfir_investigation
 from app.services.partition import ensure_heartbeat_partitions
 from app.services.realtime import publish_machine_event
-from app.services import dfir_investigation
 
 logger = logging.getLogger("monitor")
 
@@ -40,7 +39,7 @@ LLM_DFIR_WORKER_SECONDS = settings.llm_investigation_interval_seconds  # 30 giâ
 async def _sweep_offline() -> None:
     """Máy last_seen quá hạn mà đang online → chuyển offline + publish."""
     cutoff = datetime.now(UTC) - OFFLINE_THRESHOLD
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         rows = (
             (
                 await db.execute(
@@ -57,6 +56,27 @@ async def _sweep_offline() -> None:
             m.status = MachineStatus.OFFLINE.value
             logger.info("Machine %s → offline (last_seen %s)", m.id, m.last_seen_at)
             await publish_machine_event(m.id, MachineStatus.OFFLINE.value, m.hostname)
+            # Alert real-time: máy offline (best-effort, không block sweep)
+            try:
+                from app.db.models import AlertRule as AR
+                from app.services.alert_engine import trigger_alert
+
+                has_rule = (await db.execute(
+                    select(AR.id).where(
+                        AR.template_code == "machine_offline",
+                        AR.enabled.is_(True),
+                    ).limit(1)
+                )).scalar_one_or_none()
+                if has_rule:
+                    await trigger_alert(
+                        db,
+                        template_code="machine_offline",
+                        org_id=m.org_id,
+                        machine_id=m.id,
+                        context={"hostname": m.hostname or m.machine_uuid[:12]},
+                    )
+            except Exception:  # noqa: BLE001 — non-critical
+                logger.debug("trigger machine_offline failed")
         if rows:
             await db.commit()
 
@@ -71,7 +91,7 @@ async def _sweep_lost() -> None:
     được admin/webhook chuyển về `online` (qua API).
     """
     cutoff = datetime.now(UTC) - timedelta(days=settings.lost_after_days)
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         try:
             rows = (
                 (
@@ -105,7 +125,7 @@ async def _sweep_lost() -> None:
 
 async def _ensure_partitions() -> None:
     try:
-        async with AsyncSessionLocal() as db:
+        async with db_session.AsyncSessionLocal() as db:
             raw = await db.connection()
             from sqlalchemy import text
 
@@ -127,76 +147,41 @@ async def _ensure_partitions() -> None:
         logger.debug("Heartbeat partition setup skipped (không phải PG partition table)")
 
 
-async def _deliver_alert(rule: AlertRule, event: AlertEvent) -> bool:
-    """Gửi alert qua các kênh đã cấu hình. Trả True nếu gửi được ≥ 1 kênh."""
-    delivered = False
-    channels = rule.channels or []
-    targets = rule.notify_targets or []
-    subject = f"[IT Asset] {event.message}"
-
-    if "email" in channels and settings.smtp_host and targets:
-        try:
-            from email.message import EmailMessage
-
-            import aiosmtplib
-
-            msg = EmailMessage()
-            msg["Subject"] = subject
-            msg["From"] = settings.smtp_from
-            msg["To"] = ", ".join(targets)
-            msg.set_content(f"{event.message}\n\nHệ thống quản lý tài sản máy tính")
-            await aiosmtplib.send(
-                msg,
-                hostname=settings.smtp_host,
-                port=settings.smtp_port,
-                username=settings.smtp_user or None,
-                password=settings.smtp_password or None,
-                use_tls=settings.smtp_use_tls,
-            )
-            delivered = True
-        except Exception as exc:  # noqa: BLE001 — lỗi gửi không làm chết job
-            logger.warning("Alert email failed: %s", exc)
-
-    if "telegram" in channels and settings.telegram_bot_token and settings.telegram_chat_id:
-        try:
-            import httpx
-
-            url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-            async with httpx.AsyncClient() as client:
-                r = await client.post(
-                    url,
-                    json={"chat_id": settings.telegram_chat_id, "text": subject},
-                    timeout=10,
-                )
-                delivered = delivered or r.status_code == 200
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Alert telegram failed: %s", exc)
-
-    if "zalo" in channels and settings.zalo_oa_token:
-        logger.info("Zalo OA chưa được cấu hình đầy đủ — chỉ ghi event")
-
-    return delivered
-
-
 async def _scan_alerts() -> None:
-    """Quét rule → tạo AlertEvent (không trùng lặp) + gửi kênh cấu hình."""
+    """Quét rule → tìm máy khớp → gọi alert_engine.trigger_alert.
+
+    machine_new: máy enrolled trong MACHINE_NEW_WINDOW_MINUTES phút.
+    machine_lost: máy LOST quá threshold_days (config hoặc default template).
+    software_new / hardware_changed: Phase 3 — chưa có trigger.
+    """
     now = datetime.now(UTC)
-    async with AsyncSessionLocal() as db:
-        rules = (await db.execute(select(AlertRule).where(AlertRule.enabled.is_(True)))).scalars().all()
+    async with db_session.AsyncSessionLocal() as db:
+        from app.db.models import AlertRule as AR
+        from app.services.alert_engine import trigger_alert
+        from app.services.alert_templates import get_template
+        from app.services.org_scope import scope_orgs
+
+        rules = (await db.execute(select(AR).where(AR.enabled.is_(True)))).scalars().all()
         if not rules:
             return
 
         for rule in rules:
-            messages: list[tuple[str, str, Machine]] = []  # (machine_id, message, machine)
+            tpl = await get_template(db, rule.template_code)
+            if tpl is None:
+                continue
 
-            if rule.rule_type == "machine_new":
+            scope_ids = await scope_orgs(db, org_id=rule.org_id, scope_mode=rule.scope_mode)
+            if not scope_ids:
+                continue
+
+            if rule.template_code == "machine_new":
                 cutoff = now - timedelta(minutes=MACHINE_NEW_WINDOW_MINUTES)
                 machines = (
                     (
                         await db.execute(
                             select(Machine).where(
                                 Machine.enrolled_at >= cutoff,
-                                *([Machine.org_id == rule.org_id] if rule.org_id else []),
+                                Machine.org_id.in_(scope_ids),
                             )
                         )
                     )
@@ -204,17 +189,27 @@ async def _scan_alerts() -> None:
                     .all()
                 )
                 for m in machines:
-                    messages.append((str(m.id), f"Máy mới enroll: {m.hostname or m.machine_uuid[:12]}", m))
+                    await trigger_alert(
+                        db,
+                        template_code="machine_new",
+                        org_id=m.org_id,
+                        machine_id=m.id,
+                        context={
+                            "hostname": m.hostname or m.machine_uuid[:12],
+                            "enrolled_at": m.enrolled_at.isoformat() if m.enrolled_at else None,
+                        },
+                    )
 
-            elif rule.rule_type == "machine_lost" and rule.threshold_days:
-                cutoff = now - timedelta(days=rule.threshold_days)
+            elif rule.template_code == "machine_lost":
+                threshold = int((rule.config or {}).get("threshold_days", 7))
+                cutoff = now - timedelta(days=threshold)
                 machines = (
                     (
                         await db.execute(
                             select(Machine).where(
                                 Machine.status == MachineStatus.LOST.value,
                                 (Machine.last_seen_at.is_(None)) | (Machine.last_seen_at < cutoff),
-                                *([Machine.org_id == rule.org_id] if rule.org_id else []),
+                                Machine.org_id.in_(scope_ids),
                             )
                         )
                     )
@@ -222,40 +217,17 @@ async def _scan_alerts() -> None:
                     .all()
                 )
                 for m in machines:
-                    messages.append(
-                        (str(m.id), f"Mất liên lạc > {rule.threshold_days} ngày: {m.hostname or m.machine_uuid[:12]}", m)
+                    await trigger_alert(
+                        db,
+                        template_code="machine_lost",
+                        org_id=m.org_id,
+                        machine_id=m.id,
+                        context={
+                            "hostname": m.hostname or m.machine_uuid[:12],
+                            "threshold_days": threshold,
+                        },
                     )
-
-            # software_new / hardware_changed — cần diff snapshot (Phase 3 khi có cơ chế so sánh)
-            if not messages:
-                continue
-
-            existing = {
-                row[0]
-                for row in (
-                    await db.execute(
-                        select(AlertEvent.fingerprint).where(AlertEvent.rule_id == rule.id)
-                    )
-                ).all()
-            }
-
-            for machine_id, message, machine in messages:
-                fingerprint = hashlib.sha256(
-                    f"{rule.id}:{machine_id}:{now.strftime('%Y-%m-%d')}".encode()
-                ).hexdigest()
-                if fingerprint in existing:
-                    continue
-                event = AlertEvent(
-                    rule_id=rule.id,
-                    machine_id=machine.id,
-                    fingerprint=fingerprint,
-                    severity="warning" if rule.rule_type == "machine_lost" else "info",
-                    message=message,
-                    channels=rule.channels or [],
-                )
-                event.delivered = await _deliver_alert(rule, event)
-                db.add(event)
-                logger.info("Alert %s → %s (delivered=%s)", rule.rule_type, machine_id, event.delivered)
+        await db.commit()
 
         await db.commit()
 
@@ -338,10 +310,10 @@ async def _scan_dfir_schedules() -> None:
     from datetime import datetime as dt
     from sqlalchemy import select as sa_select, update
     from app.db.models import DfirSchedule, DfirHunt, VelociraptorLink
-    from app.db.session import AsyncSessionLocal
+    from app.db import session as db_session
     from app.services.velociraptor import VelociraptorClient, VelociraptorError
 
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         now = dt.now(UTC)
         due = (
             await db.execute(
@@ -451,7 +423,7 @@ async def _scan_sensitive_flows() -> None:
 
     # Lấy các hunt gần đây (24h) có artifact match sensitive patterns
     cutoff = dt.now(UTC) - timedelta(hours=24)
-    async with AsyncSessionLocal() as db:
+    async with db_session.AsyncSessionLocal() as db:
         for pattern, severity, description in SENSITIVE_ARTIFACT_PATTERNS:
             # Match artifact name theo glob pattern (vd "Windows.Persistence.Permanent*")
             artifact_prefix = pattern.rstrip("*")

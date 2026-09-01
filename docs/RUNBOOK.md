@@ -371,3 +371,42 @@ ls dist/rpm/RPMS/x86_64/*.rpm
 | `Service start fail` | Sai token / endpoint trong config.json | Sửa `/etc/orginventory/config.json`, `systemctl restart orginventory-agent` |
 | Agent log spam "enroll retry" | Token hết hạn hoặc sai | Sinh token mới từ Portal, cập nhật config, restart |
 
+
+## 11. VẬN HÀNH ALERT (Telegram)
+
+### 11.1 Cấu hình bot Telegram (Super Admin)
+
+1. Vào `/admin/telegram-bot` (đã move từ `/me/telegram`).
+2. Tạo bot qua @BotFather → lấy token.
+3. Nhập token + username + webhook secret → **Test kết nối** (gọi `getMe`).
+4. Set webhook: chạy snippet `curl` hiển thị trong trang (bắt buộc server có HTTPS public reachable từ Telegram).
+
+### 11.2 User link Telegram
+
+- User vào **Tài khoản → tab Telegram** → bấm link → mở bot → gửi `/start <token>`.
+- `telegram_chat_id` lưu ở `users` — Super Admin xem danh sách tại `/admin/telegram-bot` → "Linked users".
+
+### 11.3 Tạo rule alert
+
+1. `/notifications-alerts` → tab **Subscriptions**.
+2. Chọn template (Máy mới / Mất liên lạc / Máy offline / Điều tra...) + phạm vi (`org_only` / `org_tree` / `system`).
+3. Bấm **Test** để dry-run: xem nội dung render + danh sách người nhận (ai đã link Telegram) — KHÔNG gửi thật.
+4. Bật rule. Job scan chạy mỗi phút (machine_new/lost) hoặc real-time (offline).
+
+### 11.4 Org Admin tắt nhận
+
+- Vào `/me/notification-prefs` — UI render theo `opt_out_controls` của từng template:
+  - Template có `template` → checkbox "Tắt nhận template này".
+  - Template có `severity` → dropdown "Chỉ nhận từ mức X".
+- Super Admin không thể tắt — luôn nhận mọi alert.
+
+### 11.5 Debug khi không nhận được alert
+
+1. `/notifications-alerts` → tab **Lịch sử**: kiểm tra event đã tạo chưa (có `recipient_user_ids`).
+2. Nếu event có nhưng không nhận Telegram: kiểm tra user có `telegram_chat_id` (trang linked-users) + bot `enabled` tại `/admin/telegram-bot`.
+3. Nếu event không tạo: kiểm tra rule enabled + máy trong phạm vi + template enabled.
+4. Telegram delivery best-effort — nếu bot lỗi tạm thời, alert vẫn hiển thị qua cổng in-app bell trên portal.
+
+### 11.6 Lưu ý migration
+
+Migration `t8u9v0w1x2y3` **drop bảng alert_rules/alert_events cũ** (clean replace) — cần recreate rule sau upgrade. Không migrate data cũ.

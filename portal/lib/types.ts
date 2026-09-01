@@ -224,23 +224,26 @@ export type AlertRuleType = "machine_new" | "machine_lost" | "software_new" | "h
 export interface AlertRule {
   id: string;
   name: string;
-  rule_type: AlertRuleType;
+  template_code: string;
+  template_name: string | null;
   org_id: string | null;
+  scope_mode: "org_only" | "org_tree" | "system";
+  recipient_mode: string;
+  config: Record<string, unknown>;
   enabled: boolean;
-  threshold_days: number | null;
-  channels: string[];
-  notify_targets: string[];
   created_at: string;
 }
 
 export interface AlertEvent {
   id: number;
   rule_id: string;
+  template_code: string;
   machine_id: string | null;
-  severity: "info" | "warning" | "critical";
-  message: string;
-  channels: string[];
-  delivered: boolean;
+  org_id: string | null;
+  severity: string;
+  title: string;
+  body: string | null;
+  recipient_user_ids: string[];
   created_at: string;
 }
 
@@ -941,4 +944,52 @@ export interface DfirInvestigationStats {
   avg_duration_seconds: number | null;
   daily_counts: DfirStatsDaily[];
   top_findings: DfirStatsTopFinding[];
+}
+
+// ── Alert engine redesign (templates / scope / recipients) ─────
+
+export interface AlertTemplate {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  category: string; // machine | investigation | security | system
+  default_severity: string;
+  title_template: string;
+  body_template: string | null;
+  opt_out_controls: string[]; // ["template"] | ["severity"] | [...]
+  allowed_vars: string[];
+  default_config: Record<string, unknown>;
+  enabled: boolean;
+  updated_at: string;
+}
+
+export interface AlertTemplatePreview {
+  title: string;
+  body: string | null;
+  warnings: string[];
+}
+
+export interface AlertRuleTestResult {
+  template_code: string;
+  title: string;
+  body: string | null;
+  recipients: Array<{
+    user_id: string;
+    email: string;
+    full_name: string;
+    telegram_linked: boolean;
+  }>;
+  total_recipients: number;
+  warnings: string[];
+}
+
+export interface UserNotificationPref {
+  template_code: string;
+  template_name: string;
+  category: string;
+  default_severity: string;
+  opt_out_controls: string[];
+  muted: boolean;
+  min_severity: string | null;
 }

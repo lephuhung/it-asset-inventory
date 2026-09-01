@@ -621,3 +621,62 @@ Admin click **Mở Velociraptor GUI** trên portal → mở tab mới sang Veloc
 | 409 | Machine chưa link Velociraptor | Đợi sync (≤5p) hoặc bấm sync thủ công |
 | 422 | URL không hợp lệ / scope không đúng | Sửa input |
 | 502 | Velociraptor API lỗi (network/auth) | Xem `last_sync_error` ở `/dfir/settings` |
+
+## 9. Alert Engine (redesign — 3 trục: templates / scope / recipients)
+
+Chỉ hỗ trợ 2 delivery channel: **in-app notification** (`notifications` table + WebSocket) và **Telegram** (qua bot do Super Admin cấu hình). KHÔNG email/Zalo/webhook.
+
+### 9.1 Templates (Super Admin)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/admin/alert-templates` | Danh sách template |
+| GET | `/api/admin/alert-templates/{code}` | Chi tiết 1 template |
+| PATCH | `/api/admin/alert-templates/{code}` | Sửa name/title/body/opt_out_controls/allowed_vars/severity/enabled |
+| POST | `/api/admin/alert-templates/{code}/preview` | Render thử với context mẫu (body `{"context": {...}}`) |
+
+Template fields: `code` (unique), `category` (`machine`/`investigation`/`security`/`system`), `default_severity`, `title_template`/`body_template` (biến `{var}` whitelist qua `allowed_vars`), `opt_out_controls` (`["template"]`/`["severity"]`/cả hai/`[]`), `default_config`, `enabled`.
+
+Seed 7 templates: `machine_new`, `machine_lost`, `machine_offline`, `investigation_completed`, `investigation_failed`, `software_new`, `hardware_changed`.
+
+### 9.2 Subscriptions (alert rules)
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/alert-rules` | Danh sách rule (theo quyền visible_org_ids) |
+| POST | `/api/alert-rules` | Tạo rule: `name`, `template_code`, `org_id`, `scope_mode` (`org_only`/`org_tree`/`system`), `recipient_mode` (`org_admins_and_super`), `config`, `enabled` |
+| PATCH | `/api/alert-rules/{id}` | Sửa rule |
+| DELETE | `/api/alert-rules/{id}` | Xóa rule |
+| POST | `/api/alert-rules/{id}/test` | Dry-run: render + resolve recipients (KHÔNG gửi) |
+| GET | `/api/alert-rules/events` | Lịch sử alert events |
+
+Scope semantics:
+- `org_only`: chỉ máy thuộc đúng 1 org
+- `org_tree`: org + toàn bộ đơn vị trực thuộc (cây con)
+- `system`: toàn hệ thống (chỉ Super Admin tạo được)
+
+### 9.3 User notification prefs
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/me/notification-prefs` | Prefs của user + metadata template (`opt_out_controls` để UI render control) |
+| PATCH | `/api/me/notification-prefs` | Upsert prefs: `{"prefs": [{"template_code", "muted", "min_severity"}]}` — validate theo template `opt_out_controls` |
+
+### 9.4 Recipients & delivery
+
+- Mặc định: **Org Admin** của scope (`role IN ('org_admin','admin_org')`) + **Super Admin** (`role IN ('super_admin','admin_global')`).
+- Org Admin có thể mute per template (`muted=true` khi template có control `template`) hoặc đặt ngưỡng `min_severity` (khi template có control `severity`).
+- **Super Admin luôn nhận** — không bị filter bởi prefs.
+- In-app notification luôn tạo; Telegram gửi qua `telegram_runtime.get_bot_config` tới `user.telegram_chat_id` nếu user đã link (best-effort, không retry).
+- Idempotency: event dedup theo `sha256(rule_id:machine_id:template_code:YYYY-MM-DD)` — cùng rule + máy + ngày chỉ 1 event.
+
+### 9.5 Trigger points
+
+| Sự kiện | template_code | Nguồn |
+|---|---|---|
+| Máy enroll mới (window 30 phút) | `machine_new` | `monitor._scan_alerts` (60s) |
+| Máy LOST quá threshold_days | `machine_lost` | `monitor._scan_alerts` (60s) |
+| Máy chuyển offline (real-time) | `machine_offline` | `monitor._sweep_offline` (30s) |
+| Điều tra DFIR hoàn thành | `investigation_completed` | `dfir_investigation` |
+| Điều tra DFIR thất bại | `investigation_failed` | `dfir_investigation` |
+| Phần mềm lạ / phần cứng đổi | `software_new` / `hardware_changed` | Phase 3 (chưa có job scan) |
