@@ -266,6 +266,9 @@ export default function VelociraptorSettingsPage() {
             </div>
 
             <div className="flex flex-col gap-2 pt-1">
+              <p className="text-[11px] text-slate-500">
+                DeepAgent/MCP là dịch vụ nội bộ, luôn bật. Sau khi Velociraptor kết nối thành công, hệ thống tự kiểm tra MCP bằng api_client.yaml đã lưu.
+              </p>
               <div className="flex items-center gap-3">
                 <Button onClick={save} size="sm" disabled={saving}>
                   {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
@@ -289,19 +292,29 @@ export default function VelociraptorSettingsPage() {
                 </p>
               )}
               {testResult && (
-                <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${testResult.ok ? "text-emerald-700" : "text-rose-700"}`}>
-                  {testResult.ok ? (
-                    <>
+                <div className="space-y-2 text-xs font-medium">
+                  <span className={`inline-flex items-center gap-1.5 ${testResult.ok ? "text-emerald-700" : "text-rose-700"}`}>
+                    {testResult.ok ? (
+                      <>
                       <CheckCircle2 className="size-4" />
                       Kết nối thành công ({testResult.client_count_sampled ?? 0} client mẫu)
-                    </>
-                  ) : (
-                    <>
+                      </>
+                    ) : (
+                      <>
                       <XCircle className="size-4" />
                       {testResult.error ?? "Thất bại"}
-                    </>
+                      </>
+                    )}
+                  </span>
+                  {testResult.ok && testResult.mcp && (
+                    <span className={`inline-flex items-center gap-1.5 ${testResult.mcp.ok ? "text-emerald-700" : "text-rose-700"}`}>
+                      {testResult.mcp.ok ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+                      {testResult.mcp.ok
+                        ? `MCP DeepAgent đã kết nối (${testResult.mcp.tools.length} tools, ${testResult.mcp.client_count_sampled ?? 0} client mẫu)`
+                        : `MCP DeepAgent: ${testResult.mcp.error ?? "Thất bại"}`}
+                    </span>
                   )}
-                </span>
+                </div>
               )}
             </div>
           </div>

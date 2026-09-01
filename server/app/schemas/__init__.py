@@ -945,6 +945,7 @@ class VelociraptorTestConnectionOut(BaseModel):
     error: str | None = None
     client_count_sampled: int | None = None
     server_url: str | None = None
+    mcp: "DeepAgentTestOut | None" = None
 
 
 class VelociraptorLinkOut(BaseModel):
@@ -1225,6 +1226,10 @@ class DeepAgentTestOut(BaseModel):
     tools: list[str] = Field(default_factory=list)
     client_count_sampled: int | None = None
     error: str | None = None
+
+
+class LlmModelsOut(BaseModel):
+    models: list[str] = Field(default_factory=list)
 
 
 class DfirInvestigationCreate(BaseModel):

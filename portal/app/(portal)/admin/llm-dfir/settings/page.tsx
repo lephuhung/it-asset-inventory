@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, CheckCircle2, Loader2, PlugZap, Save, ServerCog, ShieldCheck, XCircle } from "lucide-react";
+import { Activity, CheckCircle2, Loader2, PlugZap, RefreshCw, Save, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   Badge,
@@ -15,7 +15,7 @@ import {
   Textarea,
   Toggle,
 } from "@/components/ui";
-import type { DeepAgentTestResult, LlmConfig, LlmConfigUpdate, LlmTestResult } from "@/lib/types";
+import type { LlmConfig, LlmConfigUpdate, LlmModelsResult, LlmTestResult } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
 
 /** Cấu hình LLM (Super Admin) — Ollama local / OpenAI / Qwen / vLLM.
@@ -42,13 +42,12 @@ export default function LlmSettingsPage() {
   const [maxContextChars, setMaxContextChars] = useState(200000);
   const [allowCloud, setAllowCloud] = useState(false);
   const [dailyTokenBudget, setDailyTokenBudget] = useState<number | "">("");
-  const [deepAgentEnabled, setDeepAgentEnabled] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<LlmTestResult | null>(null);
-  const [deepAgentTest, setDeepAgentTest] = useState<DeepAgentTestResult | null>(null);
-  const [testingDeepAgent, setTestingDeepAgent] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -66,7 +65,7 @@ export default function LlmSettingsPage() {
       setMaxContextChars(s.max_context_chars);
       setAllowCloud(s.allow_cloud);
       setDailyTokenBudget(s.daily_token_budget ?? "");
-      setDeepAgentEnabled(s.deepagent_enabled);
+      setAvailableModels(s.available_models ?? []);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được cấu hình");
@@ -97,8 +96,8 @@ export default function LlmSettingsPage() {
         max_context_chars: maxContextChars,
         allow_cloud: allowCloud,
         daily_token_budget: dailyTokenBudget === "" ? null : Number(dailyTokenBudget),
-        external_orchestrator: deepAgentEnabled ? "deepagent" : "",
-        deepagent_enabled: deepAgentEnabled,
+        external_orchestrator: "deepagent",
+        deepagent_enabled: true,
       };
       // Chỉ gửi api_key nếu user nhập mới
       if (apiKey) body.api_key = apiKey;
@@ -113,15 +112,16 @@ export default function LlmSettingsPage() {
     }
   };
 
-  const testDeepAgent = async () => {
-    setTestingDeepAgent(true);
-    setDeepAgentTest(null);
+  const loadModels = async () => {
+    setLoadingModels(true);
+    setError(null);
     try {
-      setDeepAgentTest(await api.post<DeepAgentTestResult>("/admin/llm-dfir/deepagent/test"));
+      const result = await api.post<LlmModelsResult>("/admin/llm-dfir/config/models");
+      setAvailableModels(result.models);
     } catch (e) {
-      setDeepAgentTest({ ok: false, service_ok: false, mcp_ok: false, tools: [], client_count_sampled: null, error: e instanceof Error ? e.message : "Test thất bại" });
+      setError(e instanceof Error ? e.message : "Không tải được danh sách model");
     } finally {
-      setTestingDeepAgent(false);
+      setLoadingModels(false);
     }
   };
 
@@ -251,17 +251,23 @@ export default function LlmSettingsPage() {
           </Field>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="Model chính">
-              <Input
-                list="llm-models"
-                value={model}
-                onChange={(e) => {
-                  setModel(e.target.value);
-                  setModelTouched(true);
-                }}
-                placeholder="qwen2.5:14b-instruct-q4_K_M"
-              />
+              <div className="flex gap-2">
+                <Input
+                  list="llm-models"
+                  value={model}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setModelTouched(true);
+                  }}
+                  placeholder="qwen2.5:14b-instruct-q4_K_M"
+                />
+                <Button type="button" variant="outline" onClick={loadModels} disabled={loadingModels} title="Nạp model từ cấu hình LLM đã lưu">
+                  {loadingModels ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                  Tải model
+                </Button>
+              </div>
               <datalist id="llm-models">
-                {(data?.available_models ?? []).map((m) => (
+                {availableModels.map((m) => (
                   <option key={m} value={m} />
                 ))}
               </datalist>
@@ -275,12 +281,9 @@ export default function LlmSettingsPage() {
               />
             </Field>
           </div>
-        </div>
-        </Card>
-
-        {/* Tham số */}
-        <Card title="Tham số">
-        <div className="space-y-4">
+          <div className="border-t border-slate-200 pt-4">
+            <h3 className="mb-4 text-sm font-semibold text-slate-900">Tham số</h3>
+            <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <Field label="Max Tokens">
               <Input
@@ -345,30 +348,7 @@ export default function LlmSettingsPage() {
               Cho phép gọi cloud API (OpenAI/Qwen) — cần bật để đặt API key cho endpoint public
             </span>
           </div>
-        </div>
-        </Card>
-
-        <Card title="DeepAgent & MCP Velociraptor">
-        <div className="space-y-4">
-          <div className="rounded-lg bg-violet-50 p-4 ring-1 ring-inset ring-violet-200">
-            <div className="flex items-start gap-3">
-              <ServerCog className="mt-0.5 size-5 text-violet-700" />
-              <div className="text-sm text-violet-950">
-                <p className="font-semibold">LangGraph điều phối DFIR read-only</p>
-                <p className="mt-1 text-violet-800">DeepAgent là container nội bộ của hệ thống. Cấu hình URL và api_client.yaml được kế thừa từ DFIR Velociraptor; token vận hành chỉ nằm trong Docker Compose.</p>
-              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Toggle checked={deepAgentEnabled} onChange={setDeepAgentEnabled} label="Bật DeepAgent" />
-            <span className="text-sm text-slate-600">Khi bật, investigation mới dùng orchestrator DeepAgent/LangGraph.</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="outline" onClick={testDeepAgent} disabled={testingDeepAgent}>
-              {testingDeepAgent ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-              Kiểm tra MCP → Velociraptor
-            </Button>
-            {deepAgentTest && <span className={deepAgentTest.ok ? "text-sm font-medium text-emerald-700" : "text-sm font-medium text-rose-700"}>{deepAgentTest.ok ? `Đã kết nối · ${deepAgentTest.tools.length} MCP tools · ${deepAgentTest.client_count_sampled ?? 0} client mẫu` : deepAgentTest.error}</span>}
           </div>
         </div>
         </Card>

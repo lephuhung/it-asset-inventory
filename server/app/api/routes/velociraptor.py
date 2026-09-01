@@ -56,6 +56,7 @@ from app.schemas import (
     VelociraptorTop10CollectOut,
     VelociraptorTop10Out,
 )
+from app.api.routes.llm_dfir import test_deepagent_mcp_for_yaml
 from app.services.velociraptor import (
     VelociraptorClient,
     VelociraptorError,
@@ -394,12 +395,22 @@ async def test_velociraptor_connection(
     client, cfg = built
     async with client as velo:
         result = await velo.test_connection()
-    return VelociraptorTestConnectionOut(
+    velo_result = VelociraptorTestConnectionOut(
         ok=result.get("ok", False),
         error=result.get("error"),
         client_count_sampled=result.get("client_count_sampled"),
         server_url=cfg.server_url,
     )
+    if not velo_result.ok:
+        return velo_result
+    if not cfg.client_config_encrypted:
+        velo_result.mcp = {"ok": False, "error": "Chưa upload api_client.yaml trong cấu hình Velociraptor"}
+        return velo_result
+    try:
+        velo_result.mcp = await test_deepagent_mcp_for_yaml(decrypt_aes_gcm(cfg.client_config_encrypted))
+    except Exception:
+        velo_result.mcp = {"ok": False, "error": "Không thể đọc api_client.yaml đã lưu"}
+    return velo_result
 
 
 @router.post("/sync")

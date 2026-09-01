@@ -486,6 +486,7 @@ export interface VelociraptorTestResult {
   error: string | null;
   client_count_sampled: number | null;
   server_url: string | null;
+  mcp?: DeepAgentTestResult | null;
 }
 
 export interface VelociraptorLink {
@@ -755,6 +756,10 @@ export interface LlmTestResult {
   latency_ms: number;
   models: string[];
   error: string | null;
+}
+
+export interface LlmModelsResult {
+  models: string[];
 }
 
 export interface DeepAgentTestResult {

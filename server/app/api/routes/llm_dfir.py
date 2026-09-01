@@ -37,6 +37,7 @@ from app.schemas import (
     LlmConfigOut,
     LlmConfigUpdate,
     LlmTestConnectionOut,
+    LlmModelsOut,
     DeepAgentTestOut,
 )
 from app.services import dfir_investigation as inv_svc
@@ -61,6 +62,8 @@ async def _get_or_create_config(db: AsyncSession) -> LlmConfig:
             provider="ollama",
             base_url="http://127.0.0.1:11434/v1",
             model="qwen2.5:14b-instruct-q4_K_M",
+            deepagent_enabled=True,
+            external_orchestrator="deepagent",
         )
         db.add(cfg)
         await db.commit()
@@ -94,7 +97,7 @@ def _config_to_out(
         max_context_chars=cfg.max_context_chars,
         allow_cloud=cfg.allow_cloud,
         external_orchestrator=cfg.external_orchestrator,
-        deepagent_enabled=cfg.deepagent_enabled,
+        deepagent_enabled=True,
         deepagent_url=cfg.deepagent_url,
         deepagent_service_token_set=bool(_decrypt_for_display(cfg.deepagent_service_token_encrypted)),
         daily_token_budget=cfg.daily_token_budget,
@@ -155,15 +158,22 @@ async def get_llm_config(
     _admin: User = Depends(require_super_admin()),
 ):
     cfg = await _get_or_create_config(db)
-    models: list[str] = []
-    if cfg.base_url:
-        try:
-            api_key = _decrypt_for_display(cfg.api_key_encrypted)
-            async with LlmClient(cfg.base_url, api_key, cfg.model, timeout=5) as llm:
-                models = await llm.list_models()
-        except Exception:  # noqa: BLE001
-            pass
-    return _config_to_out(cfg, models)
+    return _config_to_out(cfg)
+
+
+@router.post("/config/models", response_model=LlmModelsOut)
+async def list_llm_models(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_super_admin()),
+):
+    """Nạp model theo cấu hình LLM đã lưu, không nhận API key từ trình duyệt."""
+    cfg = await _get_or_create_config(db)
+    api_key = _decrypt_for_display(cfg.api_key_encrypted)
+    try:
+        async with LlmClient(cfg.base_url, api_key, cfg.model, timeout=15) as llm:
+            return LlmModelsOut(models=await llm.list_models())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Không tải được danh sách model: {exc}") from exc
 
 
 @router.put("/config", response_model=LlmConfigOut)
@@ -296,29 +306,13 @@ async def test_llm_connection(
     )
 
 
-@router.post("/deepagent/test", response_model=DeepAgentTestOut)
-async def test_deepagent_mcp(
-    db: AsyncSession = Depends(get_db),
-    _admin: User = Depends(require_super_admin()),
-):
-    """Kiểm tra DeepAgent rồi MCP Velociraptor bằng request read-only."""
-    cfg = await _get_or_create_config(db)
+async def test_deepagent_mcp_for_yaml(api_client_yaml: str) -> DeepAgentTestOut:
+    """Kiểm tra DeepAgent/MCP bằng YAML đã được giải mã ở server."""
     if not settings.deepagent_url:
         return DeepAgentTestOut(ok=False, error="DeepAgent Compose chưa có URL nội bộ")
     token = settings.deepagent_api_key
     if not token:
         return DeepAgentTestOut(ok=False, error="DeepAgent Compose chưa có service token")
-    velo_cfg = (
-        await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))
-    ).scalar_one_or_none()
-    if not velo_cfg or not velo_cfg.client_config_encrypted:
-        return DeepAgentTestOut(
-            ok=False, error="Chưa upload api_client.yaml trong cấu hình Velociraptor"
-        )
-    try:
-        api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
-    except Exception:
-        return DeepAgentTestOut(ok=False, error="Không thể đọc api_client.yaml đã lưu")
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -338,6 +332,21 @@ async def test_deepagent_mcp(
         )
     except httpx.HTTPError as exc:
         return DeepAgentTestOut(ok=False, error=f"DeepAgent không phản hồi: {exc}")
+
+
+@router.post("/deepagent/test", response_model=DeepAgentTestOut)
+async def test_deepagent_mcp(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_super_admin()),
+):
+    """Tương thích endpoint cũ; UI mới gọi kiểm tra này qua Velociraptor."""
+    velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
+    if not velo_cfg or not velo_cfg.client_config_encrypted:
+        return DeepAgentTestOut(ok=False, error="Chưa upload api_client.yaml trong cấu hình Velociraptor")
+    try:
+        return await test_deepagent_mcp_for_yaml(decrypt_aes_gcm(velo_cfg.client_config_encrypted))
+    except Exception:
+        return DeepAgentTestOut(ok=False, error="Không thể đọc api_client.yaml đã lưu")
 
 
 # ── Investigation endpoints ──────────────────────────────────────
