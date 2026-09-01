@@ -120,8 +120,8 @@ Cột v4 chỉ fill nếu **object v4 tồn tại** trong payload. Nếu agent g
 - **RenewService**: gia hạn cert khi vòng đời còn <70% (`renew_before_percent`), CSR mới `CN=machine-<machine_id>`.
 
 **Payload envelope v4 đầy đủ** (`LinuxInventoryProvider.Collect()` → `InventoryEnvelope`):
-- `agent`: name=`OrgInventoryAgent`, version=`1.1.0`, runtime=`.NET 8.0`, platform=`linux`, architecture detect từ OS (`x64`/`arm64`), package_type detect `deb`/`rpm` (`/etc/debian_version` → `deb`, `/etc/redhat-release` → `rpm`).
-- `os`: platform=`linux`, distribution/distribution_version từ os-release, kernel_version, architecture, subscription (RHEL).
+- `agent`: name=`OrgInventory Agent`, version=`1.1.0`, runtime=`.NET 8.0`, platform=`linux`, architecture detect từ OS (`x64`/`arm64`), package_type detect `deb`/`rpm` (`/etc/debian_version` → `deb`, `/etc/redhat-release` → `rpm`).
+- `os`: platform=`linux`, distribution/distribution_version từ os-release, kernel_version, architecture (subscription chưa populate — luôn `null`).
 - `security`: `update.pending_count` (apt-get -s upgrade), `disk_encryption.technology` (detect `crypt`/`crypto_LUKS` → `luks`), `endpoint_protection` (pgrep ClamAV / CrowdStrike / SentinelOne / Wazuh).
 
 **CLI**: `--once`/`--send-inventory` hoạt động (enroll nếu cần → heartbeat → inventory), kèm `--config`, `--enroll-token`, `--endpoint`.
@@ -131,8 +131,8 @@ Cột v4 chỉ fill nếu **object v4 tồn tại** trong payload. Nếu agent g
 ```sql
 SELECT machine_id, platform, agent_version, update_status
 FROM machine_current WHERE machine_id = '30b056f4-bb51-4a12-90cf-3e0d7e245bd6';
--- platform=linux, agent_version=1.1.0, update_status=updates-available ✓
--- (re-verify trên máy AI sau khi chạy build 1.1.0 với --send-inventory, xem mục 4.1)
+-- platform=linux, agent_version=1.0.0, update_status=updates-available ✓ (bản ghi trước bump version)
+-- (sau khi chạy build 1.1.0 với --send-inventory trên máy AI: agent_version=1.1.0 — re-verify, xem mục 4.1)
 ```
 
 ### 3.2. Windows agent (`OrgInventoryAgent`)
@@ -291,7 +291,14 @@ Kỳ vọng:
 Khi tất cả các điều sau đúng:
 
 - [x] Linux agent gửi inventory schema v4 đầy đủ: `InventoryEnvelope` có `agent` (name/runtime/architecture/package_type detect deb|rpm) + `os` (platform/distribution/kernel_version) — nhánh `feature/linux-agent`, version 1.1.0.
+<<<<<<< HEAD
 - [x] Máy `AI` gửi inventory mới → DB có `platform='linux'`, `agent_version='1.1.0'` (verify DB query).
+=======
+- [ ] Máy `AI` gửi inventory mới (build 1.1.0, `--send-inventory`) → DB có `platform='linux'`, `agent_version='1.1.0'` — **re-verify DB query** (bản ghi hiện tại là 1.0.0).
+
+> Các mục còn lại (Windows agent + portal + DB 2 row + server tests) chưa tick — Windows agent ngoài phạm vi nhánh `feature/linux-agent`.
+
+>>>>>>> 7e705e6 (docs: sửa overstatement — agent_version 1.0.0 chưa re-verify DB, subscription chưa populate, tên agent có space)
 - [ ] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
 - [ ] Windows agent rebuild MSI → publish lên `/download/agent.msi` trên server.
 - [ ] Máy `30HUYTU` gửi inventory mới → DB có `platform='windows'`, `agent_version='1.1.0'`.
