@@ -15,6 +15,7 @@ import {
 import { api } from "@/lib/api";
 import type { ManagedUser, Organization, UserCreatePayload, UserRole } from "@/lib/types";
 import { useAuth } from "@/components/auth-context";
+import { DeleteButton } from "@/components/delete-button";
 import {
   Badge,
   Button,
@@ -36,7 +37,7 @@ import {
   THEAD,
   TR_HOVER,
 } from "@/components/ui";
-import { ROLE_META, formatDateTime } from "@/lib/format";
+import { ORG_TYPE_META, ROLE_META, flattenOrgTree, formatDateTime } from "@/lib/format";
 
 const ROLE_OPTIONS: Array<{ value: UserRole; label: string }> = [
   { value: "super_admin", label: "Super Admin (toàn hệ thống)" },
@@ -260,6 +261,14 @@ export default function UsersPage() {
                           {u.is_active ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                           {u.is_active ? "Khóa" : "Kích hoạt"}
                         </Button>
+                        <DeleteButton
+                          resource="tài khoản"
+                          itemName={u.email}
+                          deletePath={`/users/${u.id}`}
+                          onDeleted={() => void load(true)}
+                          disabled={u.id === me?.id}
+                          disabledReason="Không thể tự xóa tài khoản đang đăng nhập"
+                        />
                       </div>
                     </td>
                   </tr>
@@ -326,9 +335,16 @@ export default function UsersPage() {
                 required
               >
                 <option value="">Chọn tổ chức…</option>
-                {(orgs ?? []).map((o) => (
-                  <option key={o.id} value={o.id}>{o.name}</option>
-                ))}
+                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                  const meta = ORG_TYPE_META[org.type];
+                  return (
+                    <option key={org.id} value={org.id}>
+                      {"— ".repeat(depth)}
+                      {org.name}
+                      {meta ? ` (${meta.label})` : ""}
+                    </option>
+                  );
+                })}
               </Select>
             </Field>
           </div>
