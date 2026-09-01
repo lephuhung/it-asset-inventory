@@ -38,3 +38,56 @@ async def test_alert_template_model_roundtrip(db, session_factory):
         assert row.opt_out_controls == ["template"]
         assert row.allowed_vars == ["hostname", "ip", "org_name"]
         assert row.title_template == "[{org_name}] {hostname}"
+
+
+# ── org_scope ────────────────────────────────────────────────────
+
+
+async def test_scope_orgs_org_only_excludes_descendants(db, session_factory):
+    from app.db.models import Organization
+
+    root = Organization(name="Root Scope", type="don_vi")
+    db.add(root)
+    await db.flush()
+    child = Organization(name="Child Scope", type="don_vi", parent_id=root.id)
+    db.add(child)
+    await db.commit()
+
+    from app.services.org_scope import scope_orgs
+
+    ids = await scope_orgs(db, org_id=root.id, scope_mode="org_only")
+    assert ids == [root.id]
+    assert child.id not in ids
+
+
+async def test_scope_orgs_org_tree_includes_descendants(db, session_factory):
+    from app.db.models import Organization
+
+    root = Organization(name="Root Tree", type="don_vi")
+    db.add(root)
+    await db.flush()
+    child = Organization(name="Child Tree", type="don_vi", parent_id=root.id)
+    db.add(child)
+    await db.flush()
+    grand = Organization(name="Grand Tree", type="don_vi", parent_id=child.id)
+    db.add(grand)
+    await db.commit()
+
+    from app.services.org_scope import scope_orgs
+
+    ids = await scope_orgs(db, org_id=root.id, scope_mode="org_tree")
+    assert set(ids) == {root.id, child.id, grand.id}
+
+
+async def test_scope_orgs_system_returns_all(db, session_factory):
+    from app.db.models import Organization
+
+    org_a = Organization(name="System A", type="don_vi")
+    org_b = Organization(name="System B", type="don_vi")
+    db.add_all([org_a, org_b])
+    await db.commit()
+
+    from app.services.org_scope import all_org_ids
+
+    ids = await all_org_ids(db)
+    assert org_a.id in ids and org_b.id in ids
