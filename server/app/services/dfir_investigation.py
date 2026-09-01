@@ -227,9 +227,9 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     api_key = _decrypt_api_key(llm_cfg.api_key_encrypted)
     if not api_key:
         raise LlmError("LLM runtime thiếu API key")
-    deepagent_enabled = llm_cfg.deepagent_enabled or settings.deepagent_enabled
-    deepagent_url = llm_cfg.deepagent_url or settings.deepagent_url
-    deepagent_token = _decrypt_api_key(llm_cfg.deepagent_service_token_encrypted) or settings.deepagent_api_key
+    deepagent_enabled = llm_cfg.deepagent_enabled and settings.deepagent_enabled
+    deepagent_url = settings.deepagent_url
+    deepagent_token = settings.deepagent_api_key
     if not deepagent_enabled or not deepagent_token:
         raise LlmError("DeepAgent chưa được bật hoặc chưa có service token")
     velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()

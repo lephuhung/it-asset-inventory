@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, require_super_admin
 from app.core.audit import append_audit
+from app.core.config import settings
 from app.core.security import decrypt_aes_gcm, encrypt_aes_gcm
 from app.db.models import (
     DfirInvestigation,
@@ -24,6 +25,7 @@ from app.db.models import (
     LlmConfig,
     Machine,
     User,
+    VelociraptorConfig,
 )
 from app.schemas import (
     DfirInvestigationChatIn,
@@ -303,17 +305,32 @@ async def test_deepagent_mcp(
     cfg = await _get_or_create_config(db)
     if not cfg.deepagent_enabled:
         return DeepAgentTestOut(ok=False, error="DeepAgent chưa được bật")
-    if not cfg.deepagent_url:
-        return DeepAgentTestOut(ok=False, error="Chưa nhập DeepAgent URL")
-    token = _decrypt_for_display(cfg.deepagent_service_token_encrypted)
+    if not settings.deepagent_url:
+        return DeepAgentTestOut(ok=False, error="DeepAgent Compose chưa có URL nội bộ")
+    token = settings.deepagent_api_key
     if not token:
-        return DeepAgentTestOut(ok=False, error="Chưa nhập DeepAgent service token")
+        return DeepAgentTestOut(ok=False, error="DeepAgent Compose chưa có service token")
+    velo_cfg = (
+        await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))
+    ).scalar_one_or_none()
+    if not velo_cfg or not velo_cfg.client_config_encrypted:
+        return DeepAgentTestOut(
+            ok=False, error="Chưa upload api_client.yaml trong cấu hình Velociraptor"
+        )
+    try:
+        api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
+    except Exception:
+        return DeepAgentTestOut(ok=False, error="Không thể đọc api_client.yaml đã lưu")
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            health = await client.get(f"{cfg.deepagent_url}/health")
+            health = await client.get(f"{settings.deepagent_url.rstrip('/')}/health")
             health.raise_for_status()
-            result = await client.post(f"{cfg.deepagent_url}/v1/mcp/test", headers=headers)
+            result = await client.post(
+                f"{settings.deepagent_url.rstrip('/')}/v1/mcp/test",
+                headers=headers,
+                json={"velociraptor_api_client_yaml": api_client_yaml},
+            )
             result.raise_for_status()
         payload = result.json()
         return DeepAgentTestOut(

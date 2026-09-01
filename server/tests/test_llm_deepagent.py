@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from app.core.security import encrypt_aes_gcm
+from app.db.models import VelociraptorConfig
 
 
 async def _admin_headers(client, seeded_env):
@@ -13,7 +15,7 @@ async def _admin_headers(client, seeded_env):
 
 
 @pytest.mark.asyncio
-async def test_deepagent_config_is_masked_and_persisted(client, seeded_env):
+async def test_deepagent_enablement_is_persisted_without_service_credentials(client, seeded_env):
     headers = await _admin_headers(client, seeded_env)
 
     response = await client.put(
@@ -21,8 +23,6 @@ async def test_deepagent_config_is_masked_and_persisted(client, seeded_env):
         headers=headers,
         json={
             "deepagent_enabled": True,
-            "deepagent_url": "http://deepagent.internal:8090/",
-            "deepagent_service_token": "deepagent-service-token",
             "external_orchestrator": "deepagent",
         },
     )
@@ -30,31 +30,43 @@ async def test_deepagent_config_is_masked_and_persisted(client, seeded_env):
     assert response.status_code == 200
     payload = response.json()
     assert payload["deepagent_enabled"] is True
-    assert payload["deepagent_url"] == "http://deepagent.internal:8090"
-    assert payload["deepagent_service_token_set"] is True
+    assert payload["deepagent_service_token_set"] is False
     assert payload["external_orchestrator"] == "deepagent"
     assert "deepagent-service-token" not in response.text
 
     response = await client.get("/api/admin/llm-dfir/config", headers=headers)
     assert response.status_code == 200
-    assert response.json()["deepagent_service_token_set"] is True
+    assert response.json()["deepagent_service_token_set"] is False
 
 
 @pytest.mark.asyncio
-async def test_deepagent_test_proxies_read_only_result(client, seeded_env, monkeypatch):
+async def test_deepagent_test_sends_saved_velociraptor_yaml(
+    client, seeded_env, session_factory, monkeypatch
+):
     headers = await _admin_headers(client, seeded_env)
+    yaml_content = (
+        "ca_certificate: test-ca\nclient_cert: test-cert\n"
+        "client_private_key: test-private-key\n"
+    )
+    async with session_factory() as db:
+        db.add(
+            VelociraptorConfig(
+                id=1,
+                enabled=True,
+                client_config_encrypted=encrypt_aes_gcm(yaml_content),
+            )
+        )
+        await db.commit()
     response = await client.put(
         "/api/admin/llm-dfir/config",
         headers=headers,
         json={
             "deepagent_enabled": True,
-            "deepagent_url": "http://deepagent.internal:8090",
-            "deepagent_service_token": "deepagent-service-token",
         },
     )
     assert response.status_code == 200
 
-    calls: list[tuple[str, str, dict[str, str] | None]] = []
+    calls: list[tuple[str, str, dict | None]] = []
 
     class FakeResponse:
         def raise_for_status(self):
@@ -81,11 +93,15 @@ async def test_deepagent_test_proxies_read_only_result(client, seeded_env, monke
             calls.append(("GET", url, None))
             return FakeResponse()
 
-        async def post(self, url, *, headers):
-            calls.append(("POST", url, headers))
+        async def post(self, url, *, headers, json):
+            calls.append(("POST", url, {"headers": headers, "json": json}))
             return FakeResponse()
 
     monkeypatch.setattr("app.api.routes.llm_dfir.httpx.AsyncClient", FakeAsyncClient)
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deepagent_url", "http://deepagent:8090")
+    monkeypatch.setattr(settings, "deepagent_api_key", "compose-service-token")
 
     response = await client.post("/api/admin/llm-dfir/deepagent/test", headers=headers)
 
@@ -99,10 +115,13 @@ async def test_deepagent_test_proxies_read_only_result(client, seeded_env, monke
         "error": None,
     }
     assert calls == [
-        ("GET", "http://deepagent.internal:8090/health", None),
+        ("GET", "http://deepagent:8090/health", None),
         (
             "POST",
-            "http://deepagent.internal:8090/v1/mcp/test",
-            {"Authorization": "Bearer deepagent-service-token"},
+            "http://deepagent:8090/v1/mcp/test",
+            {
+                "headers": {"Authorization": "Bearer compose-service-token"},
+                "json": {"velociraptor_api_client_yaml": yaml_content},
+            },
         ),
     ]
