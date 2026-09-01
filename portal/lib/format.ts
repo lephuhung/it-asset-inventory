@@ -112,8 +112,10 @@ export const ALERT_CHANNEL_META: Record<string, string> = {
 
 export const ALERT_SEVERITY_META: Record<string, { label: string; badge: string }> = {
   info: { label: "Thông tin", badge: "bg-sky-50 text-sky-700 ring-sky-600/20" },
+  success: { label: "Thành công", badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
   warning: { label: "Cảnh báo", badge: "bg-amber-50 text-amber-700 ring-amber-600/20" },
-  critical: { label: "Nghiêm trọng", badge: "bg-rose-50 text-rose-700 ring-rose-600/20" },
+  error: { label: "Lỗi", badge: "bg-rose-50 text-rose-700 ring-rose-600/20" },
+  critical: { label: "Nghiêm trọng", badge: "bg-rose-100 text-rose-700 ring-rose-600/20" },
 };
 
 /* ── Tags máy (phân loại + mục đích) ──────────────────────────── */
@@ -258,3 +260,16 @@ export function tokenExpiry(iso: string | undefined | null): TokenExpiry | null 
   }
   return { expired: false, label: `Còn ${Math.ceil(hoursLeft / 24)} ngày`, hoursLeft };
 }
+// ── Alert engine (templates) ───────────────────────────────────
+
+export const ALERT_CATEGORY_META: Record<string, { label: string; badge: string }> = {
+  machine: { label: "Máy", badge: "bg-blue-50 text-blue-700 ring-blue-600/20" },
+  investigation: { label: "Điều tra", badge: "bg-violet-50 text-violet-700 ring-violet-600/20" },
+  security: { label: "Bảo mật", badge: "bg-rose-50 text-rose-700 ring-rose-600/20" },
+  system: { label: "Hệ thống", badge: "bg-slate-100 text-slate-600 ring-slate-500/20" },
+};
+
+export const OPT_OUT_LABELS: Record<string, string> = {
+  template: "Tắt nhận template này",
+  severity: "Chọn mức severity tối thiểu",
+};
