@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # ============================================================================
-# install.sh — Cài OrgInventory Agent trên Linux (Ubuntu/Debian + RHEL/Rocky).
-# Rendered dynamically bởi server từ token trong URL — KHÔNG cần arg dòng lệnh.
+# install.sh — Cài / cập nhật 2 agent trên Linux (OrgInventory + Velociraptor).
+# Rendered động bởi server từ token — KHÔNG cần arg dòng lệnh.
 #
 # Cách dùng (1 lệnh từ user):
 #   curl -fsSL {{ portal_url }}/i/{{ token }} | sudo bash
 #
-# Flow:
-#   1. Phát hiện distro + architecture
-#   2. Tải binary self-contained OrgInventoryAgent (single-file .NET 8) + SHA256
-#   3. Tạo user/group orginventory, thư mục data/log/run
-#   4. Cài binary, tạo systemd service (orginventory-agent)
-#   5. Ghi /etc/orginventory/config.json với token + endpoints
-#   6. Enable + start services
+# 2 TÌNH HUỐNG:
+#   [CÀI MỚI]  Máy chưa cài agent → tải binary/package + tạo user + systemd +
+#              config + start. Nếu 1 trong 2 agent fail → KHÔNG được tính là xong.
+#   [CÀI LẠI]  Máy đã cài agent (OrgInventory HOẶC Velociraptor) → CHỈ merge
+#              config (giữ identity/machine_id — tránh re-enroll 401) + restart.
+#              KHÔNG tải lại binary/package trừ khi dùng --force.
+#
+# Tùy chọn:
+#   --force   → cài đè binary/package (go bản cũ + cài mới). Chỉ khi package hỏng.
+#   SKIP_VELOCIRAPTOR=1 → bỏ qua Velociraptor (không khuyến nghị — hệ thống
+#              mặc định bắt buộc đủ 2 agent).
 # ============================================================================
 set -euo pipefail
 
@@ -21,27 +25,31 @@ PORTAL_URL="{{ portal_url }}"
 AGENT_SERVER_URL="{{ agent_server_url }}"
 DATA_DIR="/var/lib/orginventory"
 
+# ── Args / env ────────────────────────────────────────────────────────────
 FORCE_REINSTALL=0
 if [[ "${1:-}" == "--force" || "${INSTALL_FORCE:-0}" == "1" ]]; then
     FORCE_REINSTALL=1
 fi
+SKIP_VELOCIRAPTOR="${SKIP_VELOCIRAPTOR:-0}"
 
-# Defaults trống để trap EXIT (rm -rf) không lỗi "unbound variable" khi reinstall branch bỏ qua mktemp.
+# ── Trap EXIT — dọn temp (TMP/TMP_VR có thể rỗng nếu branch không tạo) ──
 TMP=""
 TMP_VR=""
+trap 'rm -rf "$TMP" "$TMP_VR"' EXIT
 
+# ── Colors ────────────────────────────────────────────────────────────────
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[0;33m'
 CYAN=$'\033[0;36m'
 NC=$'\033[0m'
 
-log_step()  { echo -e "${CYAN}[*] $1${NC}"; }
-log_ok()    { echo -e "  ${GREEN}[OK]${NC} $1"; }
-log_fail()  { echo -e "  ${RED}[FAIL]${NC} $1"; }
-log_warn()  { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
+log_step() { echo -e "${CYAN}[*] $1${NC}"; }
+log_ok()   { echo -e "  ${GREEN}[OK]${NC} $1"; }
+log_fail() { echo -e "  ${RED}[FAIL]${NC} $1"; }
+log_warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; }
 
-# ── Detect trạng thái ────────────────────────────────────────────
+# ── Detect trạng thái hiện tại ────────────────────────────────────────────
 OI_INSTALLED=0
 if [[ -x /opt/orginventory/OrgInventoryAgent ]] && systemctl cat orginventory-agent.service >/dev/null 2>&1; then
     OI_INSTALLED=1
@@ -51,9 +59,9 @@ if (dpkg -l velociraptor-client >/dev/null 2>&1 || rpm -q velociraptor-client >/
    && systemctl cat velociraptor_client.service >/dev/null 2>&1; then
     VR_INSTALLED=1
 fi
-VR_OK=1  # 0 = Velociraptor (DFIR) thất bại → bắt buộc đủ 2 agent: exit 1
+VR_OK=1  # 0 = Velociraptor thất bại → exit 1 (bắt buộc đủ 2 agent)
 
-# ── Merge config: giữ identity (enrolled/machineId/thumbprint), chỉ thay endpoints (giữ identity) ──
+# ── Merge config: giữ identity (enrolled/machineId/thumbprint), chỉ thay endpoints/token ──
 merge_oi_config() {
     local cfg=/etc/orginventory/config.json
     mkdir -p /etc/orginventory
@@ -103,70 +111,68 @@ case "$ARCH" in
     *) log_fail "Kiến trúc không hỗ trợ: $ARCH"; exit 1 ;;
 esac
 
-# Detect package format (.deb cho Debian/Ubuntu, .rpm cho RHEL/Rocky).
 case "${ID:-}" in
     ubuntu|debian) PKG_EXT="deb" ;;
     rhel|rocky|almalinux|centos|fedora) PKG_EXT="rpm" ;;
-    *) PKG_EXT="bin" ;;  # fallback: tải binary OrgInventoryAgent + chạy thẳng.
+    *) PKG_EXT="bin" ;;
 esac
 
+log_step "Phát hiện: $ID $VERSION_ID ($ARCH) — OrgInventory=${OI_INSTALLED:-chưa cài} Velociraptor=${VR_INSTALLED:-chưa cài}"
+
+# ══════════════════════════════════════════════════════════════════════════
+# PHẦN A — ORGINVENTORY AGENT
+# ══════════════════════════════════════════════════════════════════════════
+# Tình huống 2 (CÀI LẠI): đã cài, không --force → chỉ merge config + restart.
 if [[ $OI_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
-    log_step "OrgInventory Agent đã cài → chỉ MERGE config + restart (KHÔNG tải binary)."
+    log_step "[CÀI LẠI] OrgInventory Agent đã cài → merge config + restart (KHÔNG tải binary)."
     AGENT_SERVER_URL="$AGENT_SERVER_URL" ENROLL_TOKEN="$TOKEN" merge_oi_config
-    systemctl restart orginventory-agent.service || true
+    systemctl daemon-reload
+    systemctl restart orginventory-agent.service 2>/dev/null || true
     sleep 2
     if systemctl is-active --quiet orginventory-agent.service; then
-        log_ok "Service orginventory-agent đang chạy (config mới)"
+        log_ok "Service orginventory-agent đang chạy (config mới — identity giữ nguyên, không re-enroll)"
     else
         log_warn "orginventory-agent start fail — xem: journalctl -u orginventory-agent -n 50"
     fi
 else
+    # Tình huống 1 (CÀI MỚI) hoặc --force → cài đầy đủ.
     if [[ $FORCE_REINSTALL -eq 1 ]]; then
-        log_warn "--force: cài đè binary OrgInventoryAgent"
+        log_warn "--force: cài đè binary OrgInventoryAgent (stop + thay mới)"
         systemctl stop orginventory-agent.service 2>/dev/null || true
     fi
-    # ── 3. Tải binary self-contained + SHA256 ───────────────────────────────
+
+    # ── 3. Tải binary self-contained ─────────────────────────────────────────
+    log_step "[CÀI MỚI] Tải binary từ $PORTAL_URL/download/agent-$RID ..."
     TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+    if ! curl -fsSL --max-time 120 -o "$TMP/OrgInventoryAgent" "$PORTAL_URL/download/agent-$RID"; then
+        log_fail "Không tải được binary. Kiểm tra URL và token."
+        exit 1
+    fi
+    chmod 0755 "$TMP/OrgInventoryAgent"
+    log_ok "Đã tải $(du -h "$TMP/OrgInventoryAgent" | cut -f1)"
 
-BINARY_URL="$PORTAL_URL/download/agent-$RID"
-BINARY_PATH="/opt/orginventory/OrgInventoryAgent"
+    # ── 4. Tạo user/group + thư mục ─────────────────────────────────────────
+    log_step "Tạo user orginventory và thư mục..."
+    if ! getent group orginventory >/dev/null; then
+        groupadd --system orginventory
+    fi
+    if ! getent passwd orginventory >/dev/null; then
+        useradd --system --no-create-home --home "$DATA_DIR" --gid orginventory orginventory
+    fi
+    mkdir -p "$DATA_DIR" /var/log/orginventory /etc/orginventory /run/orginventory
+    chown -R orginventory:orginventory "$DATA_DIR" /var/log/orginventory /run/orginventory
+    chmod 0750 "$DATA_DIR" /var/log/orginventory /run/orginventory
+    chmod 0755 /etc/orginventory
 
-log_step "Phát hiện: $ID $VERSION_ID ($ARCH)"
-log_step "Tải binary từ $BINARY_URL ..."
+    # ── 5. Cài binary ───────────────────────────────────────────────────────
+    log_step "Cài binary vào /opt/orginventory..."
+    mkdir -p /opt/orginventory
+    install -m 0755 "$TMP/OrgInventoryAgent" /opt/orginventory/OrgInventoryAgent
+    log_ok "Đã cài binary"
 
-if ! curl -fsSL --max-time 120 -o "$TMP/OrgInventoryAgent" "$BINARY_URL"; then
-    log_fail "Không tải được binary. Kiểm tra URL và token."
-    exit 1
-fi
-chmod 0755 "$TMP/OrgInventoryAgent"
-log_ok "Đã tải $(du -h "$TMP/OrgInventoryAgent" | cut -f1)"
-
-# ── 4. Tạo user/group + thư mục ────────────────────────────────────────
-log_step "Tạo user orginventory và thư mục..."
-
-if ! getent group orginventory >/dev/null; then
-    groupadd --system orginventory
-fi
-if ! getent passwd orginventory >/dev/null; then
-    useradd --system --no-create-home --home "$DATA_DIR" --gid orginventory orginventory
-fi
-
-mkdir -p "$DATA_DIR" /var/log/orginventory /etc/orginventory /run/orginventory
-chown -R orginventory:orginventory "$DATA_DIR" /var/log/orginventory /run/orginventory
-chmod 0750 "$DATA_DIR" /var/log/orginventory /run/orginventory
-chmod 0755 /etc/orginventory
-
-# ── 5. Cài binary ─────────────────────────────────────────────────────
-log_step "Cài binary vào /opt/orginventory..."
-mkdir -p /opt/orginventory
-install -m 0755 "$TMP/OrgInventoryAgent" "$BINARY_PATH"
-log_ok "Đã cài binary"
-
-# ── 6. systemd units ────────────────────────────────────────────────────
-log_step "Cài systemd service..."
-
-cat > /etc/systemd/system/orginventory-agent.service <<'EOF'
+    # ── 6. systemd unit ─────────────────────────────────────────────────────
+    log_step "Cài systemd unit orginventory-agent..."
+    cat > /etc/systemd/system/orginventory-agent.service <<'EOF'
 [Unit]
 Description=OrgInventory Agent (IT Asset Inventory)
 After=network-online.target
@@ -184,56 +190,48 @@ ProtectSystem=strict
 PrivateTmp=yes
 ProtectHome=yes
 RestrictSUIDSGID=yes
-# MemoryDenyWriteExecute=yes TẮT: .NET 8 cần JIT (ghi memory rồi thực thi) — chặn sẽ SEGV.
+# MemoryDenyWriteExecute=no: .NET 8 cần JIT — bật=yes gây SEGV khi start.
 MemoryDenyWriteExecute=no
 ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    systemctl daemon-reload
+    systemctl enable orginventory-agent.service 2>/dev/null || true
+    log_ok "Đã cài systemd unit"
 
-systemctl daemon-reload
-log_ok "Đã cài systemd unit orginventory-agent"
-
-# ── 7. Ghi /etc/orginventory/config.json ─────────────────────────────────
-log_step "Ghi /etc/orginventory/config.json..."
-cat > /etc/orginventory/config.json <<EOF
-{
-  "endpoints": ["$AGENT_SERVER_URL"],
-  "enroll_token": "$TOKEN",
-  "data_dir": "$DATA_DIR"
-}
-EOF
-chmod 0640 /etc/orginventory/config.json
-chown root:orginventory /etc/orginventory/config.json
-log_ok "Đã ghi config.json"
-
+    # ── 7. Ghi config (cài mới — ghi trực tiếp; merge vẫn an toàn nếu config cũ tồn tại) ──
     AGENT_SERVER_URL="$AGENT_SERVER_URL" ENROLL_TOKEN="$TOKEN" merge_oi_config
+    log_ok "Đã ghi /etc/orginventory/config.json"
 
-    # ── 8. Enable + start service chính ──────────────────────────────────────
-log_step "Enable + start orginventory-agent.service..."
-systemctl enable orginventory-agent.service
-if systemctl start orginventory-agent.service; then
-    sleep 2
-    if systemctl is-active --quiet orginventory-agent.service; then
-        log_ok "Service orginventory-agent đang chạy"
+    # ── 8. Start ─────────────────────────────────────────────────────────────
+    log_step "Start orginventory-agent.service..."
+    if systemctl start orginventory-agent.service; then
+        sleep 2
+        if systemctl is-active --quiet orginventory-agent.service; then
+            log_ok "Service orginventory-agent đang chạy"
+        else
+            log_warn "orginventory-agent start fail — xem: journalctl -u orginventory-agent -n 50"
+        fi
     else
-        log_warn "Service start fail — xem: journalctl -u orginventory-agent -n 50"
+        log_warn "systemctl start fail — xem: journalctl -u orginventory-agent -n 50"
     fi
-else
-    log_warn "systemctl start fail — xem: journalctl -u orginventory-agent -n 50"
-fi
 fi
 
-# ── 9. Velociraptor Client (DFIR) — luôn cài (bắt buộc đủ 2 agent) ──────────
-if [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
-    log_step "Velociraptor Client đã cài → chỉ update client.config.yaml + restart (KHÔNG tải package)."
-    VR_CFG_URL="$PORTAL_URL/download/velociraptor-client.config.yaml"
-    if curl -fsSL --max-time 30 "$VR_CFG_URL" -o /etc/velociraptor/client.config.yaml 2>/dev/null; then
+# ══════════════════════════════════════════════════════════════════════════
+# PHẦN B — VELOCIRAPTOR CLIENT (DFIR)
+# ══════════════════════════════════════════════════════════════════════════
+if [[ "$SKIP_VELOCIRAPTOR" == "1" ]]; then
+    log_warn "Velociraptor bị bỏ qua (SKIP_VELOCIRAPTOR=1)."
+elif [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
+    # Tình huống 2 (CÀI LẠI): đã cài → chỉ update config + restart.
+    log_step "[CÀI LẠI] Velociraptor đã cài → chỉ update client.config.yaml + restart (KHÔNG tải package)."
+    if curl -fsSL --max-time 30 "$PORTAL_URL/download/velociraptor-client.config.yaml" -o /etc/velociraptor/client.config.yaml 2>/dev/null; then
         chmod 0640 /etc/velociraptor/client.config.yaml 2>/dev/null || true
         log_ok "Đã cập nhật /etc/velociraptor/client.config.yaml"
     else
-        log_warn "Không tải được client.config.yaml ($VR_CFG_URL)."
+        log_warn "Không tải được client.config.yaml."
     fi
     systemctl restart velociraptor_client 2>/dev/null || true
     sleep 2
@@ -243,6 +241,7 @@ if [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
         log_warn "velociraptor_client start fail — xem: journalctl -u velociraptor_client -n 50"
     fi
 else
+    # Tình huống 1 (CÀI MỚI) hoặc --force → tải + cài package.
     if [[ $FORCE_REINSTALL -eq 1 ]]; then
         log_warn "--force: cài đè Velociraptor (remove + reinstall)"
         systemctl stop velociraptor_client 2>/dev/null || true
@@ -252,12 +251,10 @@ else
             rpm -e velociraptor-client || true
         fi
     fi
-    log_step "Cài Velociraptor Client (DFIR)…"
-    VR_PKG_URL="$PORTAL_URL/download/velociraptor-linux-amd64.$PKG_EXT"
-    VR_CFG_URL="$PORTAL_URL/download/velociraptor-client.config.yaml"
-    TMP_VR="$(mktemp -d)"
-    trap 'rm -rf "$TMP" "$TMP_VR"' EXIT
 
+    log_step "[CÀI MỚI] Cài Velociraptor Client (DFIR)…"
+    TMP_VR="$(mktemp -d)"
+    VR_PKG_URL="$PORTAL_URL/download/velociraptor-linux-amd64.$PKG_EXT"
     log_step "Tải $VR_PKG_URL ..."
     if ! curl -fsSL --max-time 120 -o "$TMP_VR/vr.$PKG_EXT" "$VR_PKG_URL"; then
         log_fail "Không tải được Velociraptor ($VR_PKG_URL)."
@@ -270,14 +267,12 @@ else
         fi
         if [[ $VR_OK -eq 1 ]]; then
             log_ok "Velociraptor package đã cài"
-
-            if curl -fsSL --max-time 30 "$VR_CFG_URL" -o /etc/velociraptor/client.config.yaml 2>/dev/null; then
+            if curl -fsSL --max-time 30 "$PORTAL_URL/download/velociraptor-client.config.yaml" -o /etc/velociraptor/client.config.yaml 2>/dev/null; then
                 chmod 0640 /etc/velociraptor/client.config.yaml 2>/dev/null || true
                 log_ok "Đã cập nhật /etc/velociraptor/client.config.yaml"
             else
-                log_warn "Không tải được client.config.yaml ($VR_CFG_URL). Bỏ qua — dùng config mặc định."
+                log_warn "Không tải được client.config.yaml."
             fi
-
             if systemctl enable --now velociraptor_client 2>/dev/null; then
                 sleep 2
                 if systemctl is-active --quiet velociraptor_client; then
@@ -292,6 +287,7 @@ else
     fi
 fi
 
+# ── Kết quả ───────────────────────────────────────────────────────────────
 echo
 echo "============================================================"
 if [[ $VR_OK -eq 0 ]]; then
@@ -299,7 +295,7 @@ if [[ $VR_OK -eq 0 ]]; then
     echo "============================================================"
     echo
     echo "  • OrgInventory: OK — systemctl status orginventory-agent"
-    echo "  • Velociraptor:  FAIL — tải/install package Velociraptor thất bại (xem log phía trên)"
+    echo "  • Velociraptor:  FAIL — tải/install package thất bại (xem log trên)"
     echo
     echo "Chạy lại: curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash"
     exit 1
@@ -307,12 +303,20 @@ fi
 log_ok "Cài đặt thành công! (OrgInventory + Velociraptor)"
 echo "============================================================"
 echo
-echo "Cài đặt hoàn tất — cả 2 agent đã được kiểm tra:"
-echo "  • OrgInventory: systemctl status orginventory-agent"
-echo "  • Velociraptor:  systemctl status velociraptor_client"
-echo "Cài lại (config-only): curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash"
-echo "Cài đè binary/package:  curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash -s -- --force"
+if [[ $OI_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
+    echo "  [CÀI LẠI] OrgInventory: chỉ merge config + restart — identity giữ nguyên."
+else
+    echo "  [CÀI MỚI] OrgInventory: binary + systemd + config đã cài."
+fi
+if [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
+    echo "  [CÀI LẠI] Velociraptor:  chỉ update config + restart."
+else
+    echo "  [CÀI MỚI] Velociraptor:  package đã cài."
+fi
 echo
-echo "Kiểm tra chi tiết:"
-echo "  • OI log:   tail -f $DATA_DIR/logs/agent.log  (hoặc journalctl -u orginventory-agent -f)"
-echo "  • VR log:   journalctl -u velociraptor_client -f"
+echo "  Kiểm tra: systemctl status orginventory-agent | velociraptor_client"
+echo "  OI log:   tail -f $DATA_DIR/logs/agent.log"
+echo "  VR log:   journalctl -u velociraptor_client -f"
+echo
+echo "  Cài lại (config-only): curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash"
+echo "  Cài đè (--force):      curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash -s -- --force"
