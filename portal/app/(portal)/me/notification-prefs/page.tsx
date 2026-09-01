@@ -6,9 +6,18 @@ import { api, ApiError } from "@/lib/api";
 import type { UserNotificationPref } from "@/lib/types";
 import { ALERT_CATEGORY_META, ALERT_SEVERITY_META } from "@/lib/format";
 import { useAuth } from "@/components/auth-context";
-import { Badge, Button, Card, ErrorBanner, Select, Spinner, Toggle } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, ErrorBanner, Select, Spinner, Toggle } from "@/components/ui";
 
 const SEVERITY_OPTIONS = ["info", "success", "warning", "error", "critical"];
+
+/* ── Chấm sticker trang trí cho từng category (Design.md: sticker palette
+   chỉ dùng để trang trí — category dot, không bao giờ tô CTA/structure). */
+const CATEGORY_DOT: Record<string, string> = {
+  machine: "bg-blue-600",
+  investigation: "bg-violet-600",
+  security: "bg-rose-500",
+  system: "bg-slate-400",
+};
 
 export default function NotificationPrefsPage() {
   const { user } = useAuth();
@@ -70,12 +79,16 @@ export default function NotificationPrefsPage() {
   const enabledItems = items.filter((it) => it.opt_out_controls.length > 0);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 p-6">
+    <div className="mx-auto max-w-3xl space-y-6">
+      {/* Header — icon tile + title heavy (700, tracking âm) + mô tả stone,
+          theo pattern header của Design.md (chrome trắng, một accent primary). */}
       <header className="flex items-center gap-3">
-        <BellOff className="size-7 text-brand-600" />
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Cài đặt nhận thông báo</h1>
-          <p className="text-sm text-slate-500">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+          <BellOff className="size-6" />
+        </span>
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-bold tracking-tight text-slate-900">Cài đặt nhận thông báo</h1>
+          <p className="mt-0.5 text-sm leading-snug text-slate-500">
             Tùy chỉnh loại alert bạn muốn nhận. Thay đổi áp dụng cho cả cổng thông báo trên portal và Telegram.
           </p>
         </div>
@@ -100,11 +113,26 @@ export default function NotificationPrefsPage() {
 
       {enabledItems.length === 0 ? (
         <Card>
-          <p className="text-sm text-slate-500">Không có alert nào có tùy chọn nhận. Bạn nhận toàn bộ alert hệ thống.</p>
+          <EmptyState
+            icon={<BellOff className="size-8" />}
+            title="Không có alert nào có tùy chọn nhận"
+            description="Bạn nhận toàn bộ alert hệ thống."
+          />
         </Card>
       ) : (
         Object.entries(grouped).map(([category, list]) => (
-          <Card key={category} title={ALERT_CATEGORY_META[category]?.label ?? category}>
+          <Card
+            key={category}
+            title={
+              <span className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className={`size-2 shrink-0 rounded-full ${CATEGORY_DOT[category] ?? "bg-slate-300"}`}
+                />
+                {ALERT_CATEGORY_META[category]?.label ?? category}
+              </span>
+            }
+          >
             <div className="divide-y divide-slate-100">
               {list.map((it) => (
                 <div key={it.template_code} className="py-3">
@@ -117,7 +145,7 @@ export default function NotificationPrefsPage() {
                     </div>
                     <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">{it.template_code}</Badge>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-4">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2">
                     {it.opt_out_controls.includes("template") && (
                       <div className="flex items-center gap-2 text-sm text-slate-700">
                         <Toggle checked={!it.muted} onChange={(v: boolean) => update(it.template_code, { muted: !v })} label={`Nhận ${it.template_name}`} disabled={isSuperAdmin} />
@@ -127,12 +155,13 @@ export default function NotificationPrefsPage() {
                       </div>
                     )}
                     {it.opt_out_controls.includes("severity") && (
-                      <div className="flex items-center gap-2 text-sm text-slate-700">
-                        <span className="text-xs text-slate-500">Chỉ nhận từ mức:</span>
+                      <div className={`flex items-center gap-2 text-sm ${it.muted ? "text-slate-300" : "text-slate-700"}`}>
+                        <span className={`text-xs ${it.muted ? "text-slate-300" : "text-slate-500"}`}>Chỉ nhận từ mức:</span>
                         <Select
                           value={it.min_severity ?? it.default_severity}
                           onChange={(e) => update(it.template_code, { min_severity: e.target.value })}
-                          disabled={isSuperAdmin}
+                          disabled={isSuperAdmin || it.muted}
+                          title={it.muted ? "Tắt nhận thông báo cho template này trước để chọn mức" : undefined}
                           className="w-36"
                         >
                           {SEVERITY_OPTIONS.map((s) => <option key={s} value={s}>{ALERT_SEVERITY_META[s]?.label ?? s}</option>)}
@@ -152,7 +181,7 @@ export default function NotificationPrefsPage() {
 
       {!isSuperAdmin && enabledItems.length > 0 && (
         <div className="sticky bottom-4 flex justify-end">
-          <Button onClick={() => void saveAll()} loading={saving}>
+          <Button onClick={() => void saveAll()} loading={saving} className="shadow-md">
             <Save className="size-3.5" /> Lưu cài đặt
           </Button>
         </div>

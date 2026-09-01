@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
-import { Check, ChevronLeft, ChevronRight, Copy, Loader2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loader2, X } from "lucide-react";
 
 /* ── Badge ─────────────────────────────────────────────────── */
 
@@ -337,12 +337,23 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${CONTROL_CLASS} ${props.className ?? ""}`} />;
 }
 
+/* Select — thả xuống đồng bộ design (Design.md §Inputs): bo xs 4px, chevron
+   riêng thay arrow native, focus = primary. width override (w-*) được tôn
+   trọng: nếu caller truyền w-* thì bỏ w-full mặc định, tránh xung đột CSS
+   (w-full xếp sau w-36 trong stylesheet → select bị kéo full-width, gây
+   wrap hàng trong flex). */
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  const { className = "" } = props;
+  const hasWidth = /\bw-[^\s"']+/.test(className);
+  const widthClass = hasWidth ? className : `w-full ${className}`;
   return (
-    <select
-      {...props}
-      className={`${CONTROL_CLASS} cursor-pointer pr-9 ${props.className ?? ""}`}
-    />
+    <span className={`relative block ${hasWidth ? "" : "w-full"}`}>
+      <select
+        {...props}
+        className={`${CONTROL_CLASS.replace(" w-full", "")} cursor-pointer appearance-none pr-9 ${widthClass}`}
+      />
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+    </span>
   );
 }
 

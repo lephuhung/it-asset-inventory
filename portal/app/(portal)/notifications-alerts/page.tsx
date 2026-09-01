@@ -218,13 +218,22 @@ export default function NotificationsAlertsPage() {
         </div>
       )}
 
-      <div className="mb-6 flex w-fit items-center gap-1 rounded-lg bg-slate-100 p-1">
+      {/* Tab strip — underline tabs theo Design.md: chrome im lặng (hairline),
+          tab active đánh dấu bằng ĐÚNG MỘT vạch primary (màu cấu trúc duy nhất),
+          label active = ink đậm, tab khác = stone. */}
+      <div className="mb-6 flex gap-1 border-b border-slate-200" role="tablist" aria-label="Thông báo & Cảnh báo">
         {tabs.filter((t) => t.show).map((t) => (
-          <button key={t.key} role="tab" aria-selected={tab === t.key}
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
             onClick={() => setTab(t.key)}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              tab === t.key ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-white/60"
-            }`}>
+            className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
+              tab === t.key
+                ? "border-brand-600 text-slate-900"
+                : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
+            }`}
+          >
             {t.icon}{t.label}
           </button>
         ))}
@@ -265,16 +274,16 @@ export default function NotificationsAlertsPage() {
               </IconButton>
             </header>
 
-            {/* Tab strip */}
-            <div className="flex items-center gap-1 border-b border-slate-100 bg-slate-50/60 px-5 py-2">
+            {/* Tab strip — cùng pattern underline như tab chính */}
+            <div className="flex items-center gap-1 border-b border-slate-200 px-5" role="tablist" aria-label="Lọc lịch sử thông báo">
               <button
                 role="tab"
                 aria-selected={historyTab === "all"}
                 onClick={() => setHistoryTab("all")}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
                   historyTab === "all"
-                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    : "text-slate-600 hover:bg-white/60"
+                    ? "border-brand-600 text-slate-900"
+                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
                 }`}
               >
                 <Bell className="size-3.5" />
@@ -285,10 +294,10 @@ export default function NotificationsAlertsPage() {
                 role="tab"
                 aria-selected={historyTab === "read"}
                 onClick={() => setHistoryTab("read")}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
                   historyTab === "read"
-                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
-                    : "text-slate-600 hover:bg-white/60"
+                    ? "border-brand-600 text-slate-900"
+                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
                 }`}
               >
                 <Check className="size-3.5" />
