@@ -160,7 +160,13 @@ export async function proxyRequest(
   const isBinary = (contentType ?? "").includes("octet-stream") || Boolean(disposition);
 
   const payload = isBinary ? await res.arrayBuffer() : await res.text();
-  const response = new NextResponse(payload, { status: res.status, headers });
+  // 204/205/304 không được phép kèm body theo HTTP spec → NextResponse cũng throw
+  // nếu cố truyền cả status 204 + payload. Chuyển sang null body cho các status này.
+  const useNullBody = res.status === 204 || res.status === 205 || res.status === 304;
+  const response = new NextResponse(useNullBody ? null : payload, {
+    status: res.status,
+    headers,
+  });
 
   if (newPair) {
     setSessionTokens(response, newPair.access, newPair.refresh);
