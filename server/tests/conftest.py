@@ -12,6 +12,29 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+# ── Alert engine fixture (dùng chung cho test_alert_engine + test_phase2) ──
+
+
+@pytest.fixture
+async def seeded_templates(db):
+    """Seed 7 templates chuẩn từ migration (test DB không chạy alembic)."""
+    from importlib import util
+    from pathlib import Path
+    import sys
+
+    from app.db.models import AlertTemplate
+
+    path = Path(__file__).parents[1] / "alembic/versions/t8u9v0w1x2y3_alert_engine.py"
+    spec = util.spec_from_file_location("alert_engine_migration", path)
+    mod = util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+
+    for t in mod.SEED_TEMPLATES:
+        db.add(AlertTemplate(**t))
+    await db.commit()
+    return db
+
 # ── Cấu hình test ─────────────────────────────────────────────
 POSTGRES_HOST = os.environ.get("POSTGRES_TEST_HOST", "127.0.0.1")
 POSTGRES_PORT = os.environ.get("POSTGRES_TEST_PORT", "5432")
