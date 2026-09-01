@@ -45,6 +45,7 @@ from app.api.routes import (
     ws,
     alert_templates_admin,
     alert_events,
+    user_notification_prefs,
 )
 from app.core.config import settings
 
@@ -177,6 +178,7 @@ app.include_router(notifications.tg_router)
 app.include_router(telegram_bot_admin.router)
 app.include_router(alert_templates_admin.router)
 app.include_router(alert_events.router)
+app.include_router(user_notification_prefs.router)
 
 
 @app.get("/health")
