@@ -12,7 +12,6 @@ import {
   ClipboardCheck,
   FileSpreadsheet,
   FileText,
-  Fingerprint,
   Ghost,
   HardDriveDownload,
   KeyRound,
@@ -63,7 +62,6 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/machines", label: "Assets", icon: Monitor },
       { href: "/approvals", label: "Chờ duyệt", icon: ClipboardCheck, roles: ADMIN_ROLES },
       { href: "/ghost-machines", label: "Máy mất kết nối", icon: Ghost },
-      { href: "/drifts", label: "Fingerprint drift", icon: Fingerprint, roles: ADMIN_ROLES },
       {
         href: "/tokens",
         label: "Thêm máy mới",
