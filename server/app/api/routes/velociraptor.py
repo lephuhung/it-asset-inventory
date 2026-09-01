@@ -377,13 +377,19 @@ async def test_velociraptor_connection(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_super_admin()),
 ):
-    """Test kết nối tới Velociraptor Server — KHÔNG lưu DB. Nếu chưa cấu hình token,
-    trả ok=False để admin biết cần nhập token trước."""
+    """Test kết nối gRPC/mTLS tới Velociraptor Server đã lưu trong DB."""
     built = await _build_velociraptor_client(db)
     if built is None:
+        cfg = await _get_config(db)
+        if cfg is None or not cfg.enabled:
+            error = "Velociraptor chưa được bật"
+        elif not cfg.server_url:
+            error = "Chưa nhập Velociraptor Server URL"
+        else:
+            error = "Chưa tải api_client.yaml cho kết nối gRPC/mTLS"
         return VelociraptorTestConnectionOut(
             ok=False,
-            error="Chưa cấu hình Velociraptor (enabled=False hoặc thiếu URL/token)",
+            error=error,
         )
     client, cfg = built
     async with client as velo:

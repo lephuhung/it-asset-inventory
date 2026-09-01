@@ -447,6 +447,28 @@ async def test_get_velociraptor_config_default(client, seeded_env):
     assert "Generic.Client.Info" in data["defaults_allowlist"]
 
 
+async def test_test_connection_requires_api_client_yaml(client, seeded_env):
+    """Test connection nêu đúng credential gRPC/mTLS còn thiếu, không nói token cũ."""
+    login = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"]},
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    saved = await client.put(
+        "/api/admin/velociraptor/config",
+        headers=headers,
+        json={"enabled": True, "server_url": "https://veloci.test"},
+    )
+    assert saved.status_code == 200, saved.text
+
+    result = await client.post("/api/admin/velociraptor/test", headers=headers)
+    assert result.status_code == 200, result.text
+    assert result.json()["ok"] is False
+    assert result.json()["error"] == "Chưa tải api_client.yaml cho kết nối gRPC/mTLS"
+
+
 async def test_update_velociraptor_config_encrypts_token(client, seeded_env):
     """PUT cấu hình — token plaintext phải được mã hoá trước khi lưu."""
     sa = await client.post(
