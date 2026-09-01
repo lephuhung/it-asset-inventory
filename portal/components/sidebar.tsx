@@ -145,7 +145,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: SUPER_ADMIN_ROLES,
       },
       {
-        href: "/me/telegram",
+        href: "/admin/telegram-bot",
         label: "Cấu hình bot Telegram",
         icon: MessageCircle,
         roles: SUPER_ADMIN_ROLES,
