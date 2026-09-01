@@ -91,3 +91,35 @@ async def test_scope_orgs_system_returns_all(db, session_factory):
 
     ids = await all_org_ids(db)
     assert org_a.id in ids and org_b.id in ids
+
+
+# ── alert_templates render ───────────────────────────────────────
+
+
+from app.services.alert_templates import render_template, validate_template_vars
+
+
+def test_render_substitutes_allowed_vars():
+    out = render_template(
+        "[{org_name}] Máy mới: {hostname}",
+        ["org_name", "hostname"],
+        {"org_name": "Sở Công an", "hostname": "PC-01"},
+    )
+    assert out == "[Sở Công an] Máy mới: PC-01"
+
+
+def test_render_missing_var_substitutes_placeholder():
+    out = render_template(
+        "{hostname} {ip}",
+        ["hostname", "ip"],
+        {"hostname": "PC-01"},  # thiếu ip
+    )
+    assert out == "PC-01 [MISSING: ip]"
+
+
+def test_validate_template_vars_returns_unknown():
+    warnings = validate_template_vars(
+        "[{org_name}] {hostname} {unknown_var}",
+        ["org_name", "hostname"],
+    )
+    assert "unknown_var" in warnings
