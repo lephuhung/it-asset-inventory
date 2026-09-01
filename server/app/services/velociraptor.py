@@ -461,11 +461,13 @@ class VelociraptorClient:
     ) -> list[dict]:
         """Đọc bảng kết quả của 1 artifact trong 1 flow (rows → list dict).
 
-        Dùng gRPC VQL `source()`.
+        Dùng gRPC VQL `source()` — bắt buộc truyền đủ client_id + flow_id + artifact;
+        thiếu client_id thì Velociraptor `source()` trả rỗng (không có cell scope).
         """
-        # VQL: SELECT * FROM source(flow_id=..., artifact=...) LIMIT N
+        # VQL: SELECT * FROM source(client_id=..., flow_id=..., artifact=...) LIMIT N
         vql = (
-            f"SELECT * FROM source(flow_id=\"{flow_id}\", artifact=\"{artifact}\") "
+            f"SELECT * FROM source("
+            f"client_id=\"{client_id}\", flow_id=\"{flow_id}\", artifact=\"{artifact}\") "
             f"LIMIT {int(rows)}"
         )
         return await self._vql_query(vql)
