@@ -271,11 +271,28 @@ async def list_tokens(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    from sqlalchemy import func as sa_func
+    from sqlalchemy import delete, func as sa_func, or_
+
+    now = datetime.now(UTC)
+
+    # Tự động dọn dẹp các token đã quá hạn hoặc đã bị thu hồi khỏi DB
+    await db.execute(
+        delete(EnrollToken).where(
+            or_(
+                EnrollToken.expires_at < now,
+                EnrollToken.status.in_([TokenStatus.EXPIRED.value, TokenStatus.REVOKED.value]),
+            )
+        )
+    )
+    await db.commit()
 
     q = select(EnrollToken)
     visible = await visible_org_ids(db, admin)
-    q = q.where(EnrollToken.org_id.in_(visible))
+    q = q.where(
+        EnrollToken.org_id.in_(visible),
+        EnrollToken.expires_at >= now,
+        EnrollToken.status.not_in([TokenStatus.EXPIRED.value, TokenStatus.REVOKED.value]),
+    )
     if org_id:
         if str(org_id) not in visible:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền xem token của tổ chức này")
@@ -283,21 +300,12 @@ async def list_tokens(
 
     total = (await db.execute(select(sa_func.count()).select_from(q.subquery()))).scalar_one()
     rows = (
-        await db.execute(q.order_by(EnrollToken.expires_at.desc()).limit(limit).offset(offset))
+        await db.execute(
+            q.order_by(EnrollToken.created_at.desc(), EnrollToken.expires_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
     ).scalars().all()
-
-    # Lazy-expire: token còn "pending" nhưng đã quá hạn → đánh dấu expired để phễu
-    # triển khai và KPI "token hết hạn" luôn đúng logic (không chờ enroll chạm vào).
-    now = datetime.now(UTC)
-    expired_ids: list[uuid.UUID] = []
-    for r in rows:
-        if r.status == TokenStatus.PENDING.value and r.expires_at.replace(tzinfo=UTC) < now:
-            r.status = TokenStatus.EXPIRED.value
-            expired_ids.append(r.id)
-    if expired_ids:
-        await db.commit()
-        for r in rows:  # refresh status sau commit
-            await db.refresh(r)
 
     return Page[TokenListItem](
         items=[
@@ -336,11 +344,11 @@ async def revoke_token(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Không có quyền thu hồi token này")
     if row.status == TokenStatus.USED.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Token đã dùng — không revoke được")
-    row.status = TokenStatus.REVOKED.value
     await append_audit(
         db, action="token.revoke", actor=str(admin.id), target=str(row.id),
         ip=get_client_ip(request),
     )
+    await db.delete(row)
     await db.commit()
     return {"ok": True}
 
