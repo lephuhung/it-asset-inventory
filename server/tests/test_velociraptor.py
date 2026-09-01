@@ -680,6 +680,9 @@ def test_extract_top10_service_reuses_and_sorts() -> None:
     from app.services.velociraptor_top10 import extract_top10
 
     class FakeVelo:
+        async def get_client_metadata(self, client_id):
+            return {"os_info": {"system": "windows"}}
+
         async def list_client_flows(self, client_id, limit=50):
             return [
                 {"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"]},
@@ -722,6 +725,9 @@ def test_extract_top10_service_collects_missing() -> None:
         def __init__(self) -> None:
             self.collected: list[str] = []
 
+        async def get_client_metadata(self, client_id):
+            return {"os_info": {"system": "windows"}}
+
         async def list_client_flows(self, client_id, limit=50):
             return [{"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Network.Netstat"]}]
 
@@ -753,6 +759,9 @@ def test_collect_missing_top10_allowlist_gating() -> None:
         def __init__(self) -> None:
             self.collected: list[str] = []
 
+        async def get_client_metadata(self, client_id):
+            return {"os_info": {"system": "windows"}}
+
         async def list_client_flows(self, client_id, limit=50):
             return [{"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"]}]
 
@@ -773,6 +782,44 @@ def test_collect_missing_top10_allowlist_gating() -> None:
 
 
 # ── API route tests: Top 10 ──────────────────────────────────
+
+
+def test_extract_top10_selects_artifacts_by_os() -> None:
+    """extract_top10: tự chọn bộ artifact theo OS của client (linux → bộ Linux)."""
+    import asyncio
+
+    from app.services.velociraptor_top10 import extract_top10
+
+    class FakeVelo:
+        async def get_client_metadata(self, client_id):
+            return {"os_info": {"system": "linux"}}
+
+        async def list_client_flows(self, client_id, limit=50):
+            return [
+                {"State": "FINISHED", "FlowId": "F.42", "Artifacts": ["Linux.Sys.Pslist"]},
+            ]
+
+        async def get_table(self, client_id, flow_id, artifact, rows=100):
+            if artifact == "Linux.Sys.Pslist":
+                return [
+                    {"Pid": 1, "Ppid": 0, "Name": "systemd", "Exe": "/lib/systemd/systemd"},
+                    {"Pid": 2, "Ppid": 0, "Name": "kthreadd", "Exe": "[kthreadd]"},
+                ]
+            return []
+
+    result = asyncio.run(extract_top10(FakeVelo(), "C.aaa111", collect_missing=False))
+    names = [a["artifact"] for a in result["artifacts"]]
+
+    # Dùng bộ Linux, không phải bộ Windows
+    assert "Linux.Sys.Pslist" in names
+    assert "Linux.Network.NetstatEnriched" in names
+    assert "Linux.Sys.LastUserLogin" in names
+    assert "Windows.Forensics.Prefetch" not in names
+
+    psl = next(a for a in result["artifacts"] if a["artifact"] == "Linux.Sys.Pslist")
+    assert psl["source"] == "reused"
+    assert psl["flow_id"] == "F.42"
+    assert psl["rows"][0]["Name"] == "systemd"
 
 
 async def _login_admin(client, seeded_env) -> str:
@@ -805,6 +852,9 @@ async def test_get_top10_reuses_finished_flows(client, seeded_env):
         {"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"], "Rows": 1},
     ]
 
+    async def fake_get_metadata(self, client_id):
+        return {"os_info": {"system": "windows"}}
+
     async def fake_list_flows(self, client_id, limit=50):
         return flows
 
@@ -819,8 +869,10 @@ async def test_get_top10_reuses_finished_flows(client, seeded_env):
         return []
 
     orig_flows, orig_table = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.get_table
+    orig_meta = vmod.VelociraptorClient.get_client_metadata
     vmod.VelociraptorClient.list_client_flows = fake_list_flows
     vmod.VelociraptorClient.get_table = fake_get_table
+    vmod.VelociraptorClient.get_client_metadata = fake_get_metadata
     try:
         r = await client.get(
             "/api/admin/velociraptor/clients/C.aaa111/top10",
@@ -829,6 +881,7 @@ async def test_get_top10_reuses_finished_flows(client, seeded_env):
     finally:
         vmod.VelociraptorClient.list_client_flows = orig_flows
         vmod.VelociraptorClient.get_table = orig_table
+        vmod.VelociraptorClient.get_client_metadata = orig_meta
 
     assert r.status_code == 200, r.text
     data = r.json()
@@ -867,6 +920,9 @@ async def test_post_top10_collect_gates_allowlist(client, seeded_env):
 
     collected: list[str] = []
 
+    async def fake_get_metadata(self, client_id):
+        return {"os_info": {"system": "windows"}}
+
     async def fake_list_flows(self, client_id, limit=50):
         return [{"State": "FINISHED", "FlowId": "F.222", "Artifacts": ["Windows.Network.Netstat"]}]
 
@@ -875,8 +931,10 @@ async def test_post_top10_collect_gates_allowlist(client, seeded_env):
         return f"F.{artifacts[0].split('.')[-1]}"
 
     orig_flows, orig_collect = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.collect_artifact
+    orig_meta = vmod.VelociraptorClient.get_client_metadata
     vmod.VelociraptorClient.list_client_flows = fake_list_flows
     vmod.VelociraptorClient.collect_artifact = fake_collect
+    vmod.VelociraptorClient.get_client_metadata = fake_get_metadata
     try:
         r = await client.post(
             "/api/admin/velociraptor/clients/C.aaa111/top10/collect",
@@ -885,6 +943,7 @@ async def test_post_top10_collect_gates_allowlist(client, seeded_env):
     finally:
         vmod.VelociraptorClient.list_client_flows = orig_flows
         vmod.VelociraptorClient.collect_artifact = orig_collect
+        vmod.VelociraptorClient.get_client_metadata = orig_meta
 
     assert r.status_code == 200, r.text
     data = r.json()
@@ -904,6 +963,9 @@ def test_extract_top10_service_respects_top_n() -> None:
     from app.services.velociraptor_top10 import extract_top10
 
     class FakeVelo:
+        async def get_client_metadata(self, client_id):
+            return {"os_info": {"system": "windows"}}
+
         async def list_client_flows(self, client_id, limit=50):
             return [{"State": "FINISHED", "FlowId": "F.1", "Artifacts": ["Windows.Forensics.Prefetch"]}]
 
@@ -937,6 +999,9 @@ async def test_get_top10_respects_top_n_param(client, seeded_env):
         },
     )
 
+    async def fake_get_metadata(self, client_id):
+        return {"os_info": {"system": "windows"}}
+
     async def fake_list_flows(self, client_id, limit=50):
         return [{"State": "FINISHED", "FlowId": "F.111", "Artifacts": ["Windows.Forensics.Prefetch"]}]
 
@@ -947,8 +1012,10 @@ async def test_get_top10_respects_top_n_param(client, seeded_env):
         ]
 
     orig_flows, orig_table = vmod.VelociraptorClient.list_client_flows, vmod.VelociraptorClient.get_table
+    orig_meta = vmod.VelociraptorClient.get_client_metadata
     vmod.VelociraptorClient.list_client_flows = fake_list_flows
     vmod.VelociraptorClient.get_table = fake_get_table
+    vmod.VelociraptorClient.get_client_metadata = fake_get_metadata
     try:
         r = await client.get(
             "/api/admin/velociraptor/clients/C.aaa111/top10?top_n=1",
@@ -957,6 +1024,7 @@ async def test_get_top10_respects_top_n_param(client, seeded_env):
     finally:
         vmod.VelociraptorClient.list_client_flows = orig_flows
         vmod.VelociraptorClient.get_table = orig_table
+        vmod.VelociraptorClient.get_client_metadata = orig_meta
 
     assert r.status_code == 200, r.text
     pref = next(a for a in r.json()["artifacts"] if a["artifact"] == "Windows.Forensics.Prefetch")

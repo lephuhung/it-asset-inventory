@@ -1,12 +1,22 @@
 """Trích xuất Top N sự kiện / log gần nhất cho từng Artifact DFIR trên 1 client.
 
-Chuyển thể từ script ``Velociraptor Top 10 DFIR Events Extractor``:
+Chuyển thể từ script ``Velociraptor Top 10 DFIR Events Extractor`` — tự động chọn
+artifact phù hợp với OS của endpoint (Windows /  Linux / macOS):
 
-  - ``Windows.Forensics.Prefetch`` — Top 10 binary được thực thi gần nhất
+  Windows:
+  - ``Windows.Forensics.Prefetch``  — Top N binary được thực thi gần nhất
     (sort theo ModificationTime desc — giống script gốc)
-  - ``Windows.Network.Netstat``      — Top 10 socket / cổng mạng đang mở
-  - ``Windows.System.Pslist``        — Top 10 tiến trình hệ thống đang chạy
-  - Client flows                     — Top 10 hoạt động điều tra gần nhất
+  - ``Windows.Network.Netstat``      — Top N socket / cổng mạng đang mở
+  - ``Windows.System.Pslist``        — Top N tiến trình hệ thống đang chạy
+
+  Linux:
+  - ``Linux.Sys.Pslist``             — Top N tiến trình hệ thống đang chạy
+  - ``Linux.Network.NetstatEnriched``— Top N kết nối mạng / cổng đang mở
+  - ``Linux.Sys.LastUserLogin``      — Top N phiên đăng nhập gần nhất
+
+  macOS (Darwin):
+  - ``MacOS.Sys.Pslist``             — Top N tiến trình hệ thống đang chạy
+  - ``MacOS.Network.Netstat``        — Top N kết nối mạng / cổng đang mở
 
 Quy trình mỗi artifact (khớp script):
   1. ``find_latest_finished_flow`` — tìm flow FINISHED gần nhất đã chạy artifact
@@ -24,9 +34,13 @@ from typing import Any
 
 from app.services.velociraptor import VelociraptorError
 
-# Danh sách artifact cho tính năng "Top 10 DFIR events" — thứ tự = thứ tự hiển thị.
+# Bộ artifact cho tính năng "Top 10 DFIR events" — thứ tự = thứ tự hiển thị.
+# Mỗi OS có bộ artifact phù hợp (chỉ thu thập artifact khả dụng trên hệ đó):
+#   - Windows: Prefetch / Netstat / Pslist
+#   - Linux:   Pslist / NetstatEnriched / LastUserLogin
+#   - macOS:   Pslist / Netstat
 # `sort`: key dùng sort desc (None = giữ thứ tự Velociraptor trả về).
-TOP10_ARTIFACTS: list[dict[str, Any]] = [
+TOP10_ARTIFACTS_WINDOWS: list[dict[str, Any]] = [
     {
         "artifact": "Windows.Forensics.Prefetch",
         "label": "Prefetch — Top 10 binary được thực thi gần nhất",
@@ -43,6 +57,68 @@ TOP10_ARTIFACTS: list[dict[str, Any]] = [
         "sort": None,
     },
 ]
+
+TOP10_ARTIFACTS_LINUX: list[dict[str, Any]] = [
+    {
+        "artifact": "Linux.Sys.Pslist",
+        "label": "Pslist — Top 10 tiến trình hệ thống",
+        "sort": None,
+    },
+    {
+        "artifact": "Linux.Network.NetstatEnriched",
+        "label": "Netstat — Top 10 kết nối mạng / cổng đang mở",
+        "sort": None,
+    },
+    {
+        "artifact": "Linux.Sys.LastUserLogin",
+        "label": "Đăng nhập — Top 10 phiên đăng nhập gần nhất",
+        "sort": None,
+    },
+]
+
+TOP10_ARTIFACTS_DARWIN: list[dict[str, Any]] = [
+    {
+        "artifact": "MacOS.Sys.Pslist",
+        "label": "Pslist — Top 10 tiến trình hệ thống",
+        "sort": None,
+    },
+    {
+        "artifact": "MacOS.Network.Netstat",
+        "label": "Netstat — Top 10 kết nối mạng / cổng đang mở",
+        "sort": None,
+    },
+]
+
+# Giữ tên cũ cho tương thích (mặc định = Windows; có thể đổi qua `_top10_artifacts_for`).
+TOP10_ARTIFACTS: list[dict[str, Any]] = TOP10_ARTIFACTS_WINDOWS
+
+
+def _top10_artifacts_for(system: str | None) -> list[dict[str, Any]]:
+    """Chọn bộ artifact Top10 phù hợp với OS của client.
+
+    - ``linux``  → bộ Linux (Pslist / NetstatEnriched / LastUserLogin).
+    - ``darwin`` → bộ macOS (Pslist / Netstat).
+    - còn lại (windows + không xác định) → bộ Windows (mặc định, giữ hành vi cũ).
+    """
+    s = (system or "").strip().lower()
+    if s == "linux":
+        return TOP10_ARTIFACTS_LINUX
+    if s in ("darwin", "macos", "osx", "mac"):
+        return TOP10_ARTIFACTS_DARWIN
+    return TOP10_ARTIFACTS_WINDOWS
+
+
+async def _client_system(velo: Any, client_id: str) -> str | None:
+    """Lấy OS của client (vd 'windows' | 'linux' | 'darwin').
+
+    Gọi Velociraptor metadata một lần; nếu lỗi hoặc thiếu OS → None
+    (lúc đó rơi về bộ artifact Windows mặc định).
+    """
+    try:
+        meta = await velo.get_client_metadata(client_id)
+        return ((meta or {}).get("os_info") or {}).get("system")
+    except Exception:  # noqa: BLE001 — OS không xác định → dùng bộ mặc định
+        return None
 
 
 def _find_flow_by_artifact(flows: list[dict], artifact: str) -> dict | None:
@@ -93,10 +169,14 @@ async def extract_top10(
         }
         source: "reused" | "running" | "collected" | "missing" | "error"
     """
+    # Chọn đúng bộ artifact theo OS của client (Windows / Linux / macOS).
+    system = await _client_system(velo, client_id)
+    specs = _top10_artifacts_for(system)
+
     flows = await velo.list_client_flows(client_id, limit=max(50, rows))
     artifacts_out: list[dict[str, Any]] = []
 
-    for spec in TOP10_ARTIFACTS:
+    for spec in specs:
         artifact = spec["artifact"]
         entry: dict[str, Any] = {
             "artifact": artifact,
@@ -171,10 +251,14 @@ async def collect_missing_top10(
                 | "not_allowed" (ngoài allowlist — 403 tầng route)
                 | "error"
     """
+    # Chọn đúng bộ artifact theo OS của client.
+    system = await _client_system(velo, client_id)
+    specs = _top10_artifacts_for(system)
+
     flows = await velo.list_client_flows(client_id, limit=50)
     out: list[dict[str, Any]] = []
 
-    for spec in TOP10_ARTIFACTS:
+    for spec in specs:
         artifact = spec["artifact"]
         entry: dict[str, Any] = {
             "artifact": artifact,

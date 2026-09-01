@@ -4,10 +4,11 @@
  * Section "Sự kiện DFIR (Velociraptor)" — hiển thị TRONG panel
  * "Xem log" (VeloLogDrawer) của card Velociraptor — Live data, trang máy.
  *
- * Chuyển thể từ script "Velociraptor Top 10 DFIR Events Extractor":
- *   - Windows.Forensics.Prefetch — Top N binary được thực thi gần nhất
- *   - Windows.Network.Netstat      — Top N kết nối mạng / cổng đang mở
- *   - Windows.System.Pslist        — Top N tiến trình hệ thống
+ * Chuyển thể từ script "Velociraptor Top 10 DFIR Events Extractor".
+ * Backend tự chọn bộ artifact theo OS của endpoint:
+ *   - Windows: Windows.Forensics.Prefetch / Windows.Network.Netstat / Windows.System.Pslist
+ *   - Linux:   Linux.Sys.Pslist / Linux.Network.NetstatEnriched / Linux.Sys.LastUserLogin
+ *   - macOS:   MacOS.Sys.Pslist / MacOS.Network.Netstat
  *
  * Bảng hiển thị full nội dung (không cắt ngắn) — cuộn NGANG khi dữ liệu dài
  * (path / command line dài).
@@ -64,6 +65,24 @@ function kv(value: unknown): string {
   return String(value);
 }
 
+/** Rút địa chỉ IP từ giá trị (chuỗi | object {ip|IP|scope} do Velociraptor serialize). */
+function ipstr(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") {
+    const v = value as Record<string, unknown>;
+    return String(v.ip ?? v.IP ?? v.address ?? v.addr ?? "");
+  }
+  return String(value);
+}
+
+/** Nối host:port cho cột Local/Remote (giá trị có thể rỗng → chỉ hiện phần có). */
+function hostPort(host: unknown, port: unknown): string {
+  const h = ipstr(host);
+  const p = kv(port);
+  if (h === "—" && p === "—") return "—";
+  return `${h}:${p}`;
+}
+
 type ColSpec = {
   key?: string;
   label: string;
@@ -110,6 +129,60 @@ const ARTIFACT_COLUMNS: Record<string, ColSpec[]> = {
         </span>
       ),
     },
+  ],
+  // ── Linux (được backend chọn khi client OS = linux) ──────────
+  "Linux.Sys.Pslist": [
+    { key: "Pid", label: "PID" },
+    { key: "Ppid", label: "PPID" },
+    { key: "Name", label: "Tên tiến trình" },
+    { key: "Username", label: "User" },
+    {
+      key: "Exe",
+      label: "Đường dẫn / lệnh",
+      mono: true,
+      render: (r) => (
+        <span title={kv(r.Exe ?? r.CommandLine)} className="block">
+          {kv(r.Exe ?? r.CommandLine)}
+        </span>
+      ),
+    },
+  ],
+  "Linux.Network.NetstatEnriched": [
+    { key: "Pid", label: "PID" },
+    { key: "Status", label: "Status" },
+    { label: "Local", mono: true, render: (r) => hostPort(r.Laddr, r.Lport) },
+    { label: "Remote", mono: true, render: (r) => hostPort(r.Raddr, r.Rport) },
+    { key: "CallChain", label: "Call chain", mono: true, render: (r) => <span className="block">{kv(r.CallChain)}</span> },
+  ],
+  "Linux.Sys.LastUserLogin": [
+    { key: "login_User", label: "User" },
+    { key: "login_time", label: "Thời gian", render: (r) => fmtTs(r.login_time) },
+    { key: "login_Terminal", label: "Terminal", mono: true },
+    { key: "login_Host", label: "Host", mono: true },
+    { key: "login_IpAddr", label: "IP", mono: true, render: (r) => ipstr(r.login_IpAddr) },
+  ],
+  // ── macOS / Darwin ────────────────────────────────────────────
+  "MacOS.Sys.Pslist": [
+    { key: "Pid", label: "PID" },
+    { key: "Ppid", label: "PPID" },
+    { key: "Name", label: "Tên tiến trình" },
+    {
+      key: "Exe",
+      label: "Đường dẫn / lệnh",
+      mono: true,
+      render: (r) => (
+        <span title={kv(r.Exe ?? r.CommandLine)} className="block">
+          {kv(r.Exe ?? r.CommandLine)}
+        </span>
+      ),
+    },
+  ],
+  "MacOS.Network.Netstat": [
+    { key: "Pid", label: "PID" },
+    { key: "Name", label: "Tiến trình" },
+    { label: "Local", mono: true, render: (r) => hostPort(r["Laddr.IP"], r["Laddr.Port"]) },
+    { label: "Remote", mono: true, render: (r) => hostPort(r["Raddr.IP"], r["Raddr.Port"]) },
+    { key: "Status", label: "Status" },
   ],
 };
 
@@ -432,7 +505,7 @@ export function VelociraptorTop10Section({
             <p className="rounded-md bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-500 ring-1 ring-inset ring-slate-200">
               Chưa có sự kiện nào được trích xuất cho client này.{" "}
               {canCollect
-                ? 'Bấm "Thu thập dữ liệu còn thiếu" để chạy Prefetch / Netstat / Pslist trên Velociraptor (có thể mất tới ~2 phút).'
+                ? 'Bấm "Thu thập dữ liệu còn thiếu" để chạy các artifact DFIR phù hợp với OS của máy trên Velociraptor (có thể mất tới ~2 phút).'
                 : "Cấu hình Velociraptor ở /dfir/settings để thu thập."}
             </p>
           )}

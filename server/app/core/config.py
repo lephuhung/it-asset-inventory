@@ -120,6 +120,13 @@ class Settings(BaseSettings):
         "Windows.Registry.Recursive",
         "Windows.Registry.System",
         "Windows.Registry.User",
+        # Linux (read-only — dùng cho tính năng Top 10 sự kiện DFIR trên Linux)
+        "Linux.Sys.Pslist",
+        "Linux.Network.NetstatEnriched",
+        "Linux.Sys.LastUserLogin",
+        # macOS (read-only)
+        "MacOS.Sys.Pslist",
+        "MacOS.Network.Netstat",
     ]
 
     # ── LLM (DFIR AI Assistant) ──────────────────────────────
