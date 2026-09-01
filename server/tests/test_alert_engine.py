@@ -129,25 +129,6 @@ def test_validate_template_vars_returns_unknown():
 # ── user_notification_prefs ──────────────────────────────────────
 
 
-@pytest.fixture
-async def seeded_templates(db):
-    """Seed 7 templates chuẩn từ migration (test DB không chạy alembic)."""
-    from pathlib import Path
-    import importlib.util
-    import sys
-
-    path = Path(__file__).parents[1] / "alembic/versions/t8u9v0w1x2y3_alert_engine.py"
-    spec = importlib.util.spec_from_file_location("alert_engine_migration", path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-
-    for t in mod.SEED_TEMPLATES:
-        db.add(AlertTemplate(**t))
-    await db.commit()
-    return db
-
-
 from app.services.user_notification_prefs import (
     get_pref,
     get_prefs_with_template,
@@ -206,3 +187,448 @@ async def test_get_prefs_with_template_returns_meta(db, session_factory, seeded_
     # machine_new có opt_out_controls=["template"] → metadata đi kèm
     row = next(p for p in prefs if p["template_code"] == "machine_new")
     assert row["opt_out_controls"] == ["template"]
+
+
+# ── alert_engine ────────────────────────────────────────────────
+
+
+from app.services.alert_engine import AlertEngine
+
+
+async def _make_machine(db, *, org_id, hostname="PC-ENGINE", machine_uuid="uuid-engine-1", enrolled=None):
+    m = Machine(
+        org_id=org_id,
+        machine_uuid=machine_uuid,
+        hostname=hostname,
+        status=MachineStatus.ONLINE.value,
+        enrolled_at=enrolled or datetime.now(UTC),
+        last_seen_at=datetime.now(UTC),
+    )
+    db.add(m)
+    await db.flush()
+    return m
+
+
+async def test_trigger_alert_creates_event_with_correct_recipients(
+    db, session_factory, seeded_env, seeded_templates
+):
+    from app.db.models import AlertRule, User
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    # seeded admin role = ? — set org_admin để có recipient
+    admin.role = "org_admin"
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+
+    rule = AlertRule(
+        name="Engine test",
+        template_code="machine_new",
+        org_id=org_id,
+        scope_mode="org_only",
+        recipient_mode="org_admins_and_super",
+        created_by=admin.id,
+    )
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(
+        db,
+        template_code="machine_new",
+        org_id=org_id,
+        machine_id=m.id,
+        context={"hostname": m.hostname, "org_name": "Test Org"},
+    )
+
+    assert len(events) == 1
+    assert events[0].rule_id == rule.id
+    assert str(admin.id) in events[0].recipient_user_ids
+    # Notification đã tạo cho admin
+    from app.db.models import Notification
+    notifs = (await db.execute(
+        select(Notification).where(Notification.recipient_id == admin.id)
+    )).scalars().all()
+    assert any("Máy mới" in n.title for n in notifs)
+
+
+async def test_trigger_alert_dedup_same_day(db, session_factory, seeded_env, seeded_templates):
+    from app.db.models import AlertRule, User
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(
+        name="Dedup", template_code="machine_new", org_id=org_id,
+        scope_mode="org_only", created_by=admin.id,
+    )
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                               machine_id=m.id, context={"hostname": m.hostname})
+    await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                               machine_id=m.id, context={"hostname": m.hostname})
+
+    events = (await db.execute(select(AlertEvent))).scalars().all()
+    assert len(events) == 1
+
+
+async def test_org_admin_opt_out_respected(db, session_factory, seeded_env, seeded_templates):
+    from app.db.models import AlertRule, User, UserNotificationPref
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    # Admin mute machine_new
+    db.add(UserNotificationPref(user_id=admin.id, template_code="machine_new", muted=True))
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(
+        name="Muted", template_code="machine_new", org_id=org_id,
+        scope_mode="org_only", created_by=admin.id,
+    )
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                                        machine_id=m.id, context={"hostname": m.hostname})
+    # Admin mute → không nhận → event vẫn tạo nhưng recipient_user_ids rỗng (chỉ có admin)
+    assert len(events) == 1
+    assert str(admin.id) not in events[0].recipient_user_ids
+
+
+async def test_super_admin_always_receives_even_if_pref_muted(
+    db, session_factory, seeded_env, seeded_templates
+):
+    from app.db.models import AlertRule, User, UserNotificationPref
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "super_admin"
+    await db.commit()
+
+    # Super admin cũng mute (nhưng hệ thống phải bỏ qua)
+    db.add(UserNotificationPref(user_id=admin.id, template_code="machine_new", muted=True))
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(
+        name="Super", template_code="machine_new", org_id=org_id,
+        scope_mode="org_only", created_by=admin.id,
+    )
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                                        machine_id=m.id, context={"hostname": m.hostname})
+    assert len(events) == 1
+    assert str(admin.id) in events[0].recipient_user_ids
+
+
+async def test_min_severity_filters_lower_severity(db, session_factory, seeded_env, seeded_templates):
+    from app.db.models import AlertRule, User, UserNotificationPref
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    # machine_offline default_severity=warning; admin chỉ nhận từ error trở lên
+    db.add(UserNotificationPref(
+        user_id=admin.id, template_code="machine_offline",
+        muted=False, min_severity="error",
+    ))
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(
+        name="Offline", template_code="machine_offline", org_id=org_id,
+        scope_mode="org_only", created_by=admin.id,
+    )
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(db, template_code="machine_offline", org_id=org_id,
+                                        machine_id=m.id, context={"hostname": m.hostname})
+    assert len(events) == 1
+    assert str(admin.id) not in events[0].recipient_user_ids
+
+
+async def test_disabled_template_and_disabled_rule_no_trigger(
+    db, session_factory, seeded_env, seeded_templates
+):
+    from app.db.models import AlertRule, User
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(
+        name="Disabled rule", template_code="machine_new", org_id=org_id,
+        scope_mode="org_only", enabled=False, created_by=admin.id,
+    )
+    db.add(rule)
+    await db.commit()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                                        machine_id=m.id, context={"hostname": m.hostname})
+    assert events == []
+
+
+# ── routes: alert_templates_admin ──────────────────────────────
+
+
+async def _login(client, email, password):
+    r = await client.post("/api/auth/login", json={"email": email, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()["access_token"]
+
+
+async def test_alert_templates_admin_crud(client, seeded_env, seeded_templates):
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    h = {"Authorization": f"Bearer {token}"}
+
+    r = await client.get("/api/admin/alert-templates", headers=h)
+    assert r.status_code == 200
+    codes = [t["code"] for t in r.json()]
+    assert "machine_new" in codes
+
+    r = await client.get("/api/admin/alert-templates/machine_new", headers=h)
+    assert r.status_code == 200
+    assert r.json()["title_template"].startswith("[{org_name}]")
+
+    r = await client.patch(
+        "/api/admin/alert-templates/machine_new",
+        json={"title_template": "[{org_name}] ⚠ MÁY MỚI: {hostname}"},
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert "MÁY MỚI" in r.json()["title_template"]
+
+    # Validate: opt_out_controls không hợp lệ → 422
+    r = await client.patch(
+        "/api/admin/alert-templates/machine_new",
+        json={"opt_out_controls": ["slack"]},
+        headers=h,
+    )
+    assert r.status_code == 422
+
+    # Validate: biến không khai báo → 422
+    r = await client.patch(
+        "/api/admin/alert-templates/machine_new",
+        json={"title_template": "[{org_name}] {not_allowed_var}"},
+        headers=h,
+    )
+    assert r.status_code == 422
+
+
+async def test_alert_templates_preview(client, seeded_env, seeded_templates):
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    h = {"Authorization": f"Bearer {token}"}
+
+    r = await client.post(
+        "/api/admin/alert-templates/machine_new/preview",
+        json={"context": {"hostname": "PC-X", "org_name": "Sở"}},
+        headers=h,
+    )
+    assert r.status_code == 200
+    assert "PC-X" in r.json()["title"]
+    assert r.json()["body"] is not None
+
+
+# ── routes: alert_rules ────────────────────────────────────────
+
+
+async def test_alert_rules_crud_new_schema(client, seeded_env, seeded_templates):
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    h = {"Authorization": f"Bearer {token}"}
+    org_id = seeded_env["org_id"]
+
+    r = await client.post(
+        "/api/alert-rules",
+        json={
+            "name": "Máy mới Sở Công an",
+            "template_code": "machine_new",
+            "org_id": org_id,
+            "scope_mode": "org_tree",
+            "recipient_mode": "org_admins_and_super",
+            "config": {},
+        },
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+    rule_id = r.json()["id"]
+    assert r.json()["template_name"] == "Máy mới enroll trong tổ chức"
+
+    r = await client.get("/api/alert-rules", headers=h)
+    assert r.status_code == 200
+    assert any(x["id"] == rule_id for x in r.json()["items"])
+
+    r = await client.patch(
+        f"/api/alert-rules/{rule_id}", json={"enabled": False}, headers=h
+    )
+    assert r.status_code == 200 and r.json()["enabled"] is False
+
+    # scope_mode system với template không tồn tại → 422
+    r = await client.post(
+        "/api/alert-rules",
+        json={"name": "Bad", "template_code": "nope", "org_id": None, "scope_mode": "system"},
+        headers=h,
+    )
+    assert r.status_code == 422
+
+    r = await client.delete(f"/api/alert-rules/{rule_id}", headers=h)
+    assert r.status_code == 200
+
+
+async def test_alert_rules_dry_run_test(client, seeded_env, seeded_templates):
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    h = {"Authorization": f"Bearer {token}"}
+    org_id = seeded_env["org_id"]
+
+    r = await client.post(
+        "/api/alert-rules",
+        json={
+            "name": "Dry run",
+            "template_code": "machine_new",
+            "org_id": org_id,
+            "scope_mode": "org_only",
+        },
+        headers=h,
+    )
+    rule_id = r.json()["id"]
+
+    r = await client.post(
+        f"/api/alert-rules/{rule_id}/test",
+        json={"context": {"hostname": "PC-DRY"}},
+        headers=h,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "PC-DRY" in data["title"]
+    assert isinstance(data["total_recipients"], int)
+
+
+# ── routes: alert_events ────────────────────────────────────────
+
+
+async def test_alert_events_list(client, seeded_env, db, session_factory, seeded_templates):
+    from app.db.models import AlertRule, User
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(name="Events", template_code="machine_new", org_id=org_id,
+                     scope_mode="org_only", created_by=admin.id)
+    db.add(rule)
+    await db.flush()
+    await db.commit()
+
+    engine = AlertEngine()
+    await engine.trigger_alert(db, template_code="machine_new", org_id=org_id,
+                               machine_id=m.id, context={"hostname": m.hostname})
+
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    r = await client.get("/api/alert-rules/events", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert len(r.json()["items"]) >= 1
+    item = r.json()["items"][0]
+    assert "title" in item
+    assert "recipient_user_ids" in item
+
+
+# ── routes: user_notification_prefs ─────────────────────────────
+
+
+async def test_me_notification_prefs_get_and_patch(client, seeded_env, seeded_templates):
+    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    h = {"Authorization": f"Bearer {token}"}
+
+    r = await client.get("/api/me/notification-prefs", headers=h)
+    assert r.status_code == 200
+    items = r.json()["items"]
+    codes = {p["template_code"] for p in items}
+    assert "machine_new" in codes
+
+    # machine_offline (opt_out_controls=["severity"]) — set min_severity=error
+    r = await client.patch(
+        "/api/me/notification-prefs",
+        json={"prefs": [{"template_code": "machine_offline", "muted": False, "min_severity": "error"}]},
+        headers=h,
+    )
+    assert r.status_code == 200
+    row = next(p for p in r.json()["items"] if p["template_code"] == "machine_offline")
+    assert row["min_severity"] == "error"
+
+    # machine_new (opt_out_controls=["template"]) — set muted=true
+    r = await client.patch(
+        "/api/me/notification-prefs",
+        json={"prefs": [{"template_code": "machine_new", "muted": True, "min_severity": None}]},
+        headers=h,
+    )
+    assert r.status_code == 200
+    row = next(p for p in r.json()["items"] if p["template_code"] == "machine_new")
+    assert row["muted"] is True
+
+    # machine_new muted — nhưng không được set min_severity (chỉ có "template")
+    r = await client.patch(
+        "/api/me/notification-prefs",
+        json={"prefs": [{"template_code": "machine_new", "muted": False, "min_severity": "critical"}]},
+        headers=h,
+    )
+    assert r.status_code == 422
+
+
+# ── DFIR trigger via engine ────────────────────────────────────
+
+
+async def test_dfir_trigger_alert_via_engine(db, session_factory, seeded_env, seeded_templates):
+    """Trigger trực tiếp qua engine (không cần LLM) — investigation_completed."""
+    from app.db.models import AlertRule, User
+
+    org_id = uuid.UUID(seeded_env["org_id"])
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    admin.role = "org_admin"
+    await db.commit()
+
+    m = await _make_machine(db, org_id=org_id)
+    rule = AlertRule(name="Inv", template_code="investigation_completed", org_id=org_id,
+                     scope_mode="org_only", created_by=admin.id)
+    db.add(rule)
+    await db.flush()
+
+    engine = AlertEngine()
+    events = await engine.trigger_alert(
+        db,
+        template_code="investigation_completed",
+        org_id=org_id,
+        machine_id=m.id,
+        context={
+            "hostname": m.hostname,
+            "findings_count": 3,
+            "severity": "high",
+            "llm_model": "qwen",
+            "investigation_id": str(uuid.uuid4()),
+        },
+    )
+    assert len(events) == 1
+    assert "Điều tra hoàn thành" in events[0].title
+    assert str(admin.id) in events[0].recipient_user_ids

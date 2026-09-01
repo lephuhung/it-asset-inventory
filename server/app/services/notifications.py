@@ -30,8 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.db.models import (
     ApiKey,
-    DfirInvestigation,
-    Machine,
     Notification,
     NotificationDelivery,
     User,
@@ -89,26 +87,6 @@ async def resolve_recipients(
     rows = (await db.execute(stmt.distinct())).scalars().all()
     return list(rows)
 
-
-async def get_investigation_recipients(
-    db: AsyncSession, inv: DfirInvestigation
-) -> list[uuid.UUID]:
-    """Lấy recipients cho notification từ investigation:
-    - Admin đã yêu cầu (inv.requested_by)
-    - Tất cả SuperAdmin
-    - Bỏ qua nếu admin đó đã là super admin (duplicate)
-    """
-    ids: set[uuid.UUID] = set()
-    if inv.requested_by:
-        ids.add(inv.requested_by)
-    # Super admins
-    super_stmt = select(User.id).where(
-        User.is_active == True,  # noqa: E712
-        User.role.in_(["super_admin", "admin_global"]),
-    )
-    rows = (await db.execute(super_stmt)).scalars().all()
-    ids.update(rows)
-    return list(ids)
 
 
 # ── Core: create + publish ───────────────────────────────────────
@@ -286,80 +264,6 @@ async def _maybe_deliver_telegram(db: AsyncSession, n: Notification) -> None:
 # ── High-level helpers ───────────────────────────────────────────
 
 
-async def notify_investigation_completed(
-    db: AsyncSession, inv: DfirInvestigation
-) -> list[Notification]:
-    """Notification khi investigation xong: gửi admin yêu cầu + super admins."""
-    recipients = await get_investigation_recipients(db, inv)
-    if not recipients:
-        return []
-    # Lookup hostname (DfirInvestigation không có field machine_hostname)
-    hostname = inv.machine_id
-    machine = (await db.execute(
-        select(Machine).where(Machine.id == inv.machine_id)
-    )).scalar_one_or_none()
-    if machine and machine.hostname:
-        hostname = machine.hostname
-
-    severity = (inv.severity or "info").lower()
-    if severity not in ("info", "success", "warning", "error", "critical"):
-        severity = "info"
-    title = f"Điều tra hoàn thành · {inv.severity or 'info'}"
-    body_lines = [
-        f"**Máy:** {hostname}",
-        f"**Phát hiện:** {inv.findings_count or 0}",
-        f"**Mức độ:** {inv.severity or 'info'}",
-        f"**Model:** {inv.llm_model or '—'}",
-    ]
-    return await create_notification(
-        db,
-        recipient_ids=recipients,
-        source="system",
-        category="investigation",
-        severity=severity,
-        title=title,
-        body="\n".join(body_lines),
-        link=f"/admin/llm-dfir/investigations/{inv.id}",
-        entity_type="dfir_investigation",
-        entity_id=str(inv.id),
-        data={
-            "investigation_id": str(inv.id),
-            "machine_id": str(inv.machine_id),
-            "severity": inv.severity,
-            "findings_count": inv.findings_count,
-        },
-        idempotency_key=f"investigation-completed-{inv.id}",
-    )
-
-
-async def notify_investigation_failed(
-    db: AsyncSession, inv: DfirInvestigation, error: str
-) -> list[Notification]:
-    """Notification khi investigation fail."""
-    recipients = await get_investigation_recipients(db, inv)
-    if not recipients:
-        return []
-    # Lookup hostname
-    hostname = inv.machine_id
-    machine = (await db.execute(
-        select(Machine).where(Machine.id == inv.machine_id)
-    )).scalar_one_or_none()
-    if machine and machine.hostname:
-        hostname = machine.hostname
-    return await create_notification(
-        db,
-        recipient_ids=recipients,
-        source="system",
-        category="investigation",
-        severity="error",
-        title="Điều tra thất bại",
-        body=f"Máy {hostname}: {error[:300]}",
-        link=f"/admin/llm-dfir/investigations/{inv.id}",
-        entity_type="dfir_investigation",
-        entity_id=str(inv.id),
-        idempotency_key=f"investigation-failed-{inv.id}",
-    )
-
 
 # ── User-facing queries ─────────────────────────────────────────
 
@@ -458,114 +362,3 @@ async def clear_read(db: AsyncSession, user_id: uuid.UUID) -> int:
     await db.commit()
     return res.rowcount or 0
 
-
-# ── Variant: nhận dict snapshot (tránh detached) ────────────────
-
-
-async def _resolve_investigation_recipients_from_dict(
-    db: AsyncSession, inv_dict: dict
-) -> list:
-    """Resolve recipients từ dict (thay vì DfirInvestigation object)."""
-    inv_id = inv_dict["id"]
-    machine_id = inv_dict.get("machine_id")
-    requested_by = inv_dict.get("requested_by")
-
-    # Lấy investigation requested_by từ DB (vì dict snapshot không có)
-    inv = (await db.execute(
-        select(DfirInvestigation).where(DfirInvestigation.id == inv_id)
-    )).scalar_one_or_none()
-    requested_by = inv.requested_by if inv else None
-
-    ids: set = set()
-    if requested_by:
-        ids.add(requested_by)
-    super_stmt = select(User.id).where(
-        User.is_active == True,  # noqa: E712
-        User.role.in_(["super_admin", "admin_global"]),
-    )
-    rows = (await db.execute(super_stmt)).scalars().all()
-    ids.update(rows)
-    return list(ids)
-
-
-async def notify_investigation_completed_from_dict(
-    db: AsyncSession, inv_dict: dict
-) -> list:
-    """Version nhận dict — dùng khi inv đã commit (detached)."""
-    inv_id = inv_dict["id"]
-    # Lấy recipients (cần query lại requested_by)
-    recipients = await _resolve_investigation_recipients_from_dict(db, inv_dict)
-    if not recipients:
-        return []
-
-    # Lookup hostname
-    hostname = inv_dict.get("machine_id")
-    machine = (await db.execute(
-        select(Machine).where(Machine.id == inv_dict["machine_id"])
-    )).scalar_one_or_none()
-    if machine and machine.hostname:
-        hostname = machine.hostname
-
-    dfir_severity = (inv_dict.get("severity") or "info").lower()
-    severity = {
-        "critical": "critical",
-        "high": "error",
-        "medium": "warning",
-        "low": "info",
-        "info": "info",
-    }.get(dfir_severity, "info")
-    title = f"Điều tra hoàn thành · {inv_dict.get('severity') or 'info'}"
-    body_lines = [
-        f"**Máy:** {hostname}",
-        f"**Phát hiện:** {inv_dict.get('findings_count') or 0}",
-        f"**Mức độ:** {inv_dict.get('severity') or 'info'}",
-        f"**Model:** {inv_dict.get('llm_model') or '—'}",
-    ]
-    return await create_notification(
-        db,
-        recipient_ids=recipients,
-        source="system",
-        category="investigation",
-        severity=severity,
-        title=title,
-        body="\n".join(body_lines),
-        link=f"/admin/llm-dfir/investigations/{inv_id}",
-        entity_type="dfir_investigation",
-        entity_id=str(inv_id),
-        data={
-            "investigation_id": str(inv_id),
-            "machine_id": str(inv_dict.get("machine_id")),
-            "severity": inv_dict.get("severity"),
-            "findings_count": inv_dict.get("findings_count"),
-        },
-        idempotency_key=f"investigation-completed-{inv_id}",
-    )
-
-
-async def notify_investigation_failed_from_dict(
-    db: AsyncSession, inv_dict: dict, error: str
-) -> list:
-    """Version failed nhận dict."""
-    inv_id = inv_dict["id"]
-    recipients = await _resolve_investigation_recipients_from_dict(db, inv_dict)
-    if not recipients:
-        return []
-    hostname = inv_dict.get("machine_id")
-    machine = (await db.execute(
-        select(Machine).where(Machine.id == inv_dict["machine_id"])
-    )).scalar_one_or_none()
-    if machine and machine.hostname:
-        hostname = machine.hostname
-    return await create_notification(
-        db,
-        recipient_ids=recipients,
-        source="system",
-        category="investigation",
-        severity="error",
-        title="Điều tra thất bại",
-        body=f"Máy {hostname}: {error[:300]}",
-        link=f"/admin/llm-dfir/investigations/{inv_id}",
-        entity_type="dfir_investigation",
-        entity_id=str(inv_id),
-        idempotency_key=f"investigation-failed-{inv_id}",
-    )

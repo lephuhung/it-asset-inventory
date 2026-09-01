@@ -43,6 +43,58 @@ from app.services.llm_prompts import (
 logger = logging.getLogger("llm.dfir")
 
 
+# ── Alert notification (alert engine) ─────────────────────────────
+
+
+async def _notify_investigation_result(
+    db: AsyncSession,
+    *,
+    investigation_id,
+    machine_id,
+    status: str,  # "completed" | "failed"
+    severity: str | None = None,
+    findings_count: int | None = None,
+    llm_model: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Gọi alert_engine.trigger_alert — recipients = Org Admin của máy + Super Admin.
+
+    Best-effort: lỗi chỉ log, không làm chết pipeline investigation.
+    """
+    from app.db.models import Machine as _M
+    from app.services.alert_engine import trigger_alert
+
+    machine = await db.get(_M, machine_id)
+    org_id = machine.org_id if machine else None
+
+    context = {
+        "hostname": machine.hostname if machine else None,
+        "investigation_id": str(investigation_id),
+    }
+    if status == "completed":
+        context.update({
+            "findings_count": findings_count or 0,
+            "severity": severity or "info",
+            "llm_model": llm_model or "—",
+        })
+    else:
+        context["error"] = (error or "")[:300]
+
+    try:
+        await trigger_alert(
+            db,
+            template_code=(
+                "investigation_completed" if status == "completed"
+                else "investigation_failed"
+            ),
+            org_id=org_id,
+            machine_id=machine_id,
+            context=context,
+        )
+    except Exception as e:  # noqa: BLE001 — không làm chết pipeline investigation
+        logger.warning("notify investigation %s failed: %s", status, e)
+
+
 # ── Helpers ──────────────────────────────────────────────────────
 
 
@@ -539,12 +591,12 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
             inv.id, inv.severity, inv.findings_count or 0, resp.total_tokens,
         )
 
-        # Gửi notification tới admin yêu cầu + super admins
-        try:
-            from app.services import notifications as notif_svc
-            await notif_svc.notify_investigation_completed(db, inv)
-        except Exception as ne:  # noqa: BLE001
-            logger.warning("notify_investigation_completed failed: %s", ne)
+        # Gửi notification qua alert engine (Org Admin + Super Admin)
+        await _notify_investigation_result(
+            db, investigation_id=inv.id, machine_id=inv.machine_id,
+            status="completed", severity=inv.severity,
+            findings_count=inv.findings_count, llm_model=inv.llm_model,
+        )
 
     except (LlmAuthError, LlmTimeoutError, LlmRateLimitError, LlmError) as e:
         inv.status = "failed"
@@ -553,11 +605,10 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         await db.commit()
         logger.warning("Investigation %s LLM failed: %s", inv.id, e)
         # Gửi notification failed
-        try:
-            from app.services import notifications as notif_svc
-            await notif_svc.notify_investigation_failed(db, inv, str(e))
-        except Exception as ne:  # noqa: BLE001
-            logger.warning("notify_investigation_failed: %s", ne)
+        await _notify_investigation_result(
+            db, investigation_id=inv.id, machine_id=inv.machine_id,
+            status="failed", error=str(e),
+        )
 
 
 # ── Public: chat Q&A ─────────────────────────────────────────────
@@ -750,11 +801,10 @@ async def submit_external_result(
         snapshot = _inv_to_dict(inv)
         await db.commit()
         # Notify failed
-        try:
-            from app.services import notifications as notif_svc
-            await notif_svc.notify_investigation_failed_from_dict(db, snapshot, error)
-        except Exception as ne:  # noqa: BLE001
-            logger.warning("notify_investigation_failed: %s", ne)
+        await _notify_investigation_result(
+            db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
+            status="failed", error=error,
+        )
         return snapshot
 
     # Success path
@@ -794,13 +844,13 @@ async def submit_external_result(
         (input_tokens or 0) + (output_tokens or 0),
     )
 
-    # Gửi notification (sau commit, dùng snapshot cho attribute)
-    try:
-        from app.services import notifications as notif_svc
-        # Truyền snapshot vào helper thay vì inv detached
-        await notif_svc.notify_investigation_completed_from_dict(db, snapshot)
-    except Exception as ne:  # noqa: BLE001
-        logger.warning("notify_investigation_completed: %s", ne)
+    # Gửi notification (alert engine — Org Admin + Super Admin)
+    await _notify_investigation_result(
+        db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
+        status="completed", severity=snapshot.get("severity"),
+        findings_count=snapshot.get("findings_count"),
+        llm_model=snapshot.get("llm_model"),
+    )
 
     return snapshot
 
