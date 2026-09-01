@@ -291,14 +291,7 @@ Kỳ vọng:
 Khi tất cả các điều sau đúng:
 
 - [x] Linux agent gửi inventory schema v4 đầy đủ: `InventoryEnvelope` có `agent` (name/runtime/architecture/package_type detect deb|rpm) + `os` (platform/distribution/kernel_version) — nhánh `feature/linux-agent`, version 1.1.0.
-<<<<<<< HEAD
-- [x] Máy `AI` gửi inventory mới → DB có `platform='linux'`, `agent_version='1.1.0'` (verify DB query).
-=======
 - [ ] Máy `AI` gửi inventory mới (build 1.1.0, `--send-inventory`) → DB có `platform='linux'`, `agent_version='1.1.0'` — **re-verify DB query** (bản ghi hiện tại là 1.0.0).
-
-> Các mục còn lại (Windows agent + portal + DB 2 row + server tests) chưa tick — Windows agent ngoài phạm vi nhánh `feature/linux-agent`.
-
->>>>>>> 7e705e6 (docs: sửa overstatement — agent_version 1.0.0 chưa re-verify DB, subscription chưa populate, tên agent có space)
 - [ ] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
 - [ ] Windows agent rebuild MSI → publish lên `/download/agent.msi` trên server.
 - [ ] Máy `30HUYTU` gửi inventory mới → DB có `platform='windows'`, `agent_version='1.1.0'`.
