@@ -305,7 +305,13 @@ cd server && .venv/bin/pytest -q   # giữ xanh (sau khi xóa install-both.sh ro
 - [x] `install-both.sh` + route `/download/install-both.sh` đã xóa; không còn reference
 - [ ] `server/.venv/bin/pytest -q` xanh — chưa đạt: 15 failed / 164 passed, toàn bộ là pre-existing (velociraptor cần live server, ws Redis, agent_config portal_url, api full_enroll, phase2, sweep_lost/timeline ordering) — verify tại base commit 56671b8
 - [x] `INVENTORY_V4_SCHEMA.md` cập nhật trạng thái (Linux agent hoàn thiện, done checklist) — Task 12
+- [x] **Deploy thật trên máy AI (10.10.0.240)**: agent v1.1.0 cài + service active; DB verify `platform=linux`, `agent_version=1.1.0`, `inventory_schema_version=4`, `agent.package_type=deb`, `os.distribution=ubuntu 24.04`, `os.kernel_version=6.8.0-138-generic` (commit 988d5ff)
 - [ ] Commit trên nhánh `feature/linux-agent` — controller commit sau review (Task 12)
+
+**Bug phát hiện khi deploy thật (đã fix + commit):**
+- DI `IKeyStore` không register → service mode crash `Unable to resolve IKeyStore` (fix `82a5d4f`; binary phải rebuild lại sau fix — binary publish trước đó chứa bug).
+- `LinuxConfig.Load` không merge identity từ state file (`{data-dir}/config.json`) → restart mất `enrolled/machineId/thumbprint` → re-enroll với token đã dùng → 401 loop (fix `988d5ff`; test merge mới; verified 2 lần restart giữ identity).
+- SQLite cache lỗi khi thiếu `libe_sqlite3.so` cạnh binary (single-file + `IncludeNativeLibrariesForSelfExtract=false`) → phải copy lib vào `/opt/orginventory/` cùng binary.
 
 ---
 
