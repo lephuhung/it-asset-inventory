@@ -124,3 +124,66 @@ def test_validate_template_vars_returns_unknown():
         ["org_name", "hostname"],
     )
     assert "unknown_var" in warnings
+
+
+# ── user_notification_prefs ──────────────────────────────────────
+
+
+from app.services.user_notification_prefs import (
+    get_pref,
+    get_prefs_with_template,
+    upsert_prefs,
+)
+from fastapi import HTTPException
+
+
+async def test_upsert_prefs_respects_opt_out_controls(db, session_factory, seeded_env):
+    from app.db.models import User
+
+    # Template với opt_out_controls=["severity"] → không cho muted
+    tpl = AlertTemplate(
+        code="unit_sev_tpl",
+        name="Sev only",
+        category="machine",
+        default_severity="warning",
+        title_template="{hostname}",
+        opt_out_controls=["severity"],
+        allowed_vars=["hostname"],
+    )
+    db.add(tpl)
+    await db.commit()
+
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+
+    # muted=true với template chỉ có "severity" → phải raise
+    with pytest.raises(HTTPException) as exc:
+        await upsert_prefs(db, admin, [
+            {"template_code": "unit_sev_tpl", "muted": True, "min_severity": None},
+        ])
+    assert exc.value.status_code == 422
+
+
+async def test_upsert_prefs_sets_min_severity_when_allowed(db, session_factory, seeded_env):
+    from app.db.models import User
+
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    await upsert_prefs(db, admin, [
+        {"template_code": "machine_offline", "muted": False, "min_severity": "error"},
+    ])
+
+    pref = await get_pref(db, admin.id, "machine_offline")
+    assert pref is not None
+    assert pref.min_severity == "error"
+    assert pref.muted is False
+
+
+async def test_get_prefs_with_template_returns_meta(db, session_factory, seeded_env):
+    from app.db.models import User
+
+    admin = (await db.execute(select(User).where(User.email == seeded_env["email"]))).scalar_one()
+    prefs = await get_prefs_with_template(db, admin.id)
+    codes = {p["template_code"] for p in prefs}
+    assert "machine_new" in codes
+    # machine_new có opt_out_controls=["template"] → metadata đi kèm
+    row = next(p for p in prefs if p["template_code"] == "machine_new")
+    assert row["opt_out_controls"] == ["template"]
