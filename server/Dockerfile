@@ -69,7 +69,8 @@ RUN pip install --no-cache-dir \
     "openpyxl>=3.1.0" \
     "pyyaml>=6.0.0" \
     "grpcio>=1.66.0" \
-    "pyvelociraptor>=0.1.11"
+    "pyvelociraptor>=0.1.11" \
+    "python-multipart>=0.0.20"
 
 # Copy toàn bộ server source
 COPY server/ ./
