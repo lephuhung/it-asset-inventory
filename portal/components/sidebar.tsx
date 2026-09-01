@@ -14,7 +14,6 @@ import {
   FileText,
   Fingerprint,
   Ghost,
-  GitCompareArrows,
   HardDriveDownload,
   KeyRound,
   LayoutDashboard,
@@ -96,8 +95,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
       { href: "/llm-dfir/stats", label: "Thống kê điều tra AI", icon: Brain, roles: ADMIN_ROLES },
       { href: "/llm-dfir/investigations", label: "Danh sách điều tra AI", icon: ListTree, roles: ADMIN_ROLES },
-      { href: "/eol", label: "Windows EOL", icon: CalendarClock },
-      { href: "/diff", label: "So sánh máy (Diff)", icon: GitCompareArrows },
+      { href: "/eol", label: "Windows hết hỗ trợ", icon: CalendarClock },
       {
         href: "/offline-import",
         label: "Máy BMNN — Import",

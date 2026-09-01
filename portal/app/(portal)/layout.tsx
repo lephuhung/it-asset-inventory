@@ -17,7 +17,7 @@ const TITLES: Array<[string, string]> = [
   ["/ghost-machines", "Máy mất kết nối"],
   ["/tokens", "Thêm máy mới"],
   ["/reports", "Xuất báo cáo"],
-  ["/eol", "Báo cáo Windows EOL"],
+  ["/eol", "Báo cáo Windows hết hỗ trợ"],
   ["/inventory-stats", "Thống kê cấu hình máy"],
   ["/audit", "Audit log"],
   ["/users", "Quản trị tài khoản"],

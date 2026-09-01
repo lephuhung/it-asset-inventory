@@ -113,7 +113,7 @@ export default function EolPage() {
   return (
     <div>
       <PageHeader
-        title="Báo cáo Windows EOL"
+        title="Báo cáo Windows hết hỗ trợ"
         description="Máy chạy Windows sắp/đã hết vòng đời hỗ trợ — cơ sở cho lộ trình nâng cấp (tính năng #5)"
         actions={
           <Button variant="secondary" size="sm" onClick={() => void load()}>
