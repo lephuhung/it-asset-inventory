@@ -17,6 +17,7 @@ Sync KHÔNG phụ thuộc agent inventory — không cần thay đổi agent.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -207,12 +208,21 @@ async def sync_velociraptor_links() -> dict:
                     if cur_seen > ex_seen:
                         by_hostname[hostname] = c
 
-        # Lấy tất cả máy có hostname (case-insensitive normalize)
+        # Lấy tất cả máy có hostname (case-insensitive normalize).
+        # Cần thêm machine_uuid + enrolled_at + last_seen_at để dedup các bản
+        # ghi trùng (cùng máy vật lý bị enroll nhiều lần do cert hết hạn / agent
+        # bị gỡ cài đặt rồi cài lại — tạo 2 row DB cùng machine_uuid).
         async with db_session.AsyncSessionLocal() as db:
             machines = (
                 (
                     await db.execute(
-                        select(Machine.id, Machine.hostname).where(
+                        select(
+                            Machine.id,
+                            Machine.hostname,
+                            Machine.machine_uuid,
+                            Machine.enrolled_at,
+                            Machine.last_seen_at,
+                        ).where(
                             Machine.hostname.is_not(None),
                             Machine.hostname != "",
                         )
@@ -221,8 +231,29 @@ async def sync_velociraptor_links() -> dict:
                 .all()
             )
 
-            # Upsert links
-            for m_id, m_hostname in machines:
+            # Dedup các bản ghi máy trùng TRƯỚC KHI link Velociraptor — tránh
+            # IntegrityError "ix_velociraptor_links_client_id" khi nhiều row DB
+            # claim cùng Velociraptor client_id (unique constraint).
+            # Quy tắc:
+            #   - Key = uuid (nếu có) → cùng machine_uuid = cùng máy vật lý,
+            #     giữ row có last_seen mới nhất (fallback enrolled_at).
+            #   - Key = "host:{normalized}" (fallback khi uuid rỗng) → trùng
+            #     hostname + không có fingerprint coi như cùng máy.
+            dedup: dict[str, tuple[uuid.UUID, str, datetime | None]] = {}
+            for m_id, m_hostname, m_uuid, m_enrolled, m_last_seen in machines:
+                norm = normalize_hostname(m_hostname)
+                if not norm:
+                    continue
+                ts = m_last_seen or m_enrolled
+                key = m_uuid if m_uuid else f"host:{norm}"
+                cur = dedup.get(key)
+                if cur is None:
+                    dedup[key] = (m_id, m_hostname, ts)
+                elif ts is not None and (cur[2] is None or ts > cur[2]):
+                    dedup[key] = (m_id, m_hostname, ts)
+
+            # Upsert links từ danh sách đã dedup (mỗi key đúng 1 row).
+            for m_id, m_hostname, _ts in dedup.values():
                 norm = normalize_hostname(m_hostname)
                 if not norm:
                     continue
