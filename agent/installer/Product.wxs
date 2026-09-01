@@ -20,7 +20,7 @@
 
   <Package Name="OrgInventory Agent"
            Manufacturer="Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh"
-           Version="1.0.0"
+           Version="1.1.0"
            UpgradeCode="$(var.UpgradeCode)"
            Language="1033"
            Scope="perMachine"

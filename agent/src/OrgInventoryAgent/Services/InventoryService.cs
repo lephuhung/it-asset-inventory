@@ -26,7 +26,7 @@ public sealed class InventoryService : BackgroundService
 
     private readonly AgentState _state;
     private readonly object _sendLock = new();
-    private volatile bool _rescanRequested;
+    private volatile bool _rescanRequested = true; // Gửi inventory ngay khi service khởi động
     private bool _sending; // guard chống gửi inventory song song (rescan + định kỳ)
 
     public InventoryService(AgentConfig config, ApiClient api, EndpointManager endpoints,

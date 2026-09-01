@@ -82,13 +82,15 @@ function saveCommand(id: string, command: string) {
   sessionStorage.setItem(COMMAND_STORAGE, JSON.stringify(map));
 }
 
+const PAGE_SIZE = 20;
+
 export default function TokensPage() {
   const { user } = useAuth();
   const [tokens, setTokens] = useState<TokenListItem[]>([]);
   const [page, setPage] = useState<PageResponse<TokenListItem>>({
     items: [],
     total: 0,
-    limit: 50,
+    limit: PAGE_SIZE,
     offset: 0,
   });
   const [offset, setOffset] = useState(0);
@@ -169,7 +171,7 @@ export default function TokensPage() {
   const loadTokens = useCallback(async (silent = false, overrideOffset?: number): Promise<TokenListItem[]> => {
     const useOffset = overrideOffset ?? offset;
     try {
-      const data = await api.get<PageResponse<TokenListItem>>("/tokens", { limit: 50, offset: useOffset });
+      const data = await api.get<PageResponse<TokenListItem>>("/tokens", { limit: PAGE_SIZE, offset: useOffset });
       setTokens(data.items);
       setPage(data);
       setError(null);
@@ -317,8 +319,9 @@ export default function TokensPage() {
       setCreated(res);
       setSubmitted(true);
       setShowCreate(false);
+      setOffset(0);
       // Gắn lệnh cài cho token vừa tạo (server chỉ trả token 1 lần) — khớp qua expires_at
-      const list = await loadTokens(true);
+      const list = await loadTokens(true, 0);
       const match = (list ?? []).find((t) => t.expires_at === res.expires_at);
       if (match) saveCommand(match.id, res.install_command);
     } catch (err) {
@@ -351,8 +354,9 @@ export default function TokensPage() {
       if (res.install_command) saveCommand(res.expires_at, res.install_command);
       setCreated(res);
       setCreatedOs("windows");
+      setOffset(0);
       // Reload để cập nhật trạng thái superseded (note có "[superseded by ...]").
-      await loadTokens(true);
+      await loadTokens(true, 0);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.detail : "Không tái sinh được token");
     } finally {
@@ -403,7 +407,7 @@ export default function TokensPage() {
           <span className="font-semibold">Lưu ý thời gian sống của token:</span>
           <span className="inline-flex items-center gap-1">
             <Clock className="size-3" />
-            Nếu người dùng không cài trong TTL, token chuyển sang <b>Hết hạn</b> và phải tạo lại.
+            Nếu người dùng không cài trong TTL hoặc bị thu hồi, token sẽ tự động được xóa khỏi danh sách.
           </span>
           <span className="inline-flex items-center gap-1">
             <Check className="size-3" />
@@ -436,6 +440,7 @@ export default function TokensPage() {
                     <th scope="col" className={TH}>Người dùng</th>
                     <th scope="col" className={TH}>Phòng / chức vụ</th>
                     <th scope="col" className={TH}>Trạng thái</th>
+                    <th scope="col" className={TH}>Thời gian tạo</th>
                     <th scope="col" className={TH}>Hết hạn</th>
                     <th scope="col" className={`${TH} text-right`}>Thao tác</th>
                   </tr>
@@ -472,11 +477,11 @@ export default function TokensPage() {
                             </p>
                           )}
                         </td>
-                        <td className={`${TD} text-xs whitespace-nowrap`}>
+                        <td className={`${TD} text-xs whitespace-nowrap text-slate-600`}>
+                          {t.created_at ? formatDateTime(t.created_at) : "—"}
+                        </td>
+                        <td className={`${TD} text-xs whitespace-nowrap text-slate-500`}>
                           {formatDateTime(t.expires_at)}
-                          {t.status === "pending" && expiry?.expired && (
-                            <p className="text-[11px] font-medium text-rose-500">Đã quá hạn</p>
-                          )}
                         </td>
                         <td className={`${TD} text-right`}>
                           <div className="flex items-center justify-end gap-1.5">

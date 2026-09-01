@@ -283,7 +283,7 @@ Kỳ vọng:
 
 Khi tất cả các điều sau đúng:
 
-- [ ] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
+- [x] Windows `InventoryCollector.Collect()` populate `Agent` + `Os` envelope (commit mới).
 - [ ] Windows agent rebuild MSI → publish lên `/download/agent.msi` trên server.
 - [ ] Máy `30HUYTU` gửi inventory mới → DB có `platform='windows'`, `agent_version='1.1.0'`.
 - [ ] Portal `/machines` hiển thị logo Windows cho `30HUYTU`, logo Tux cho `AI`.

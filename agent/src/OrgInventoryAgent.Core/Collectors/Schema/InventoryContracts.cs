@@ -6,7 +6,7 @@ namespace OrgInventoryAgent.Core.Collectors.Schema;
 /// Snapshot inventory envelope — schema v4 (multi-platform, additive optional).
 /// Server fallback về các trường phẳng hiện tại khi thiếu (agent Windows cũ).
 /// </summary>
-public sealed class InventoryEnvelope
+public class InventoryEnvelope
 {
     [JsonPropertyName("inventory_schema_version")]
     public int InventorySchemaVersion { get; set; } = 4;
@@ -320,10 +320,9 @@ public sealed class SoftwareInfo
 }
 
 /// <summary>
-/// Flat inventory snapshot (legacy schema v1/v2/v3) — Windows agent currently
-/// sends this. Linux agent will populate the same shape, plus the v4 envelope fields.
+/// Flat inventory snapshot with schema v4 envelope (Windows + Linux).
 /// </summary>
-public sealed class InventorySnapshot
+public sealed class InventorySnapshot : InventoryEnvelope
 {
     [JsonPropertyName("os_name")] public string? OsName { get; set; }
     [JsonPropertyName("os_version")] public string? OsVersion { get; set; }
@@ -340,7 +339,6 @@ public sealed class InventorySnapshot
     [JsonPropertyName("network")] public List<NetworkInterfaceInfo>? Network { get; set; }
     [JsonPropertyName("logged_user")] public string? LoggedUser { get; set; }
     [JsonPropertyName("installed_software")] public List<SoftwareInfo>? InstalledSoftware { get; set; }
-    [JsonPropertyName("security")] public SecurityPostureV4? Security { get; set; }
     [JsonPropertyName("is_vm")] public bool? IsVm { get; set; }
     [JsonPropertyName("config_hash")] public string? ConfigHash { get; set; }
 }

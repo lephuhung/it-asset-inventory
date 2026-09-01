@@ -3,6 +3,8 @@ using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using OrgInventoryAgent.Core;
+using OrgInventoryAgent.Core.Collectors;
 using OrgInventoryAgent.Core.Collectors.Schema;
 // Alias: keep Windows source code working with same class names while DTOs
 // live in Core (canonical home for cross-platform inventory schema).
@@ -28,20 +30,42 @@ namespace OrgInventoryAgent.Collectors;
 /// Mọi nguồn bọc try/catch — trường nào không đọc được → null (server chấp nhận optional).
 /// Trên Linux (dev) dùng /sys, /proc, Environment, NetworkInterface.
 /// </summary>
-public sealed class InventoryCollector
+public sealed class InventoryCollector : IInventoryProvider
 {
     private readonly ILogger<InventoryCollector> _logger;
 
     public InventoryCollector(ILogger<InventoryCollector> logger) => _logger = logger;
 
+    InventoryEnvelope IInventoryProvider.Collect() => Collect();
+
     public InventorySnapshot Collect()
     {
+        var arch = RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant();
         var snapshot = new InventorySnapshot
         {
+            InventorySchemaVersion = 4,
+            Agent = new AgentMetadata
+            {
+                Name = AppInfo.Name,
+                Version = AppInfo.Version,
+                Runtime = ".NET 8.0",
+                Platform = "windows",
+                Architecture = arch,
+                PackageType = "msi",
+            },
+            Os = new OsMetadata
+            {
+                Platform = "windows",
+                Distribution = "windows",
+                DistributionVersion = GetDisplayVersion(),
+                KernelVersion = GetKernelVersion(),
+                Architecture = arch,
+                Subscription = null,
+            },
             OsName = GetOsName(),
             OsVersion = GetOsVersion(),
             OsBuild = GetOsBuild(),
-            OsArch = RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant(),
+            OsArch = arch,
             OsInstalledAt = GetOsInstalledAt(),
             ActivationStatus = GetActivationStatus(),
             Cpu = GetCpu(),
@@ -53,7 +77,7 @@ public sealed class InventoryCollector
             Network = GetNetwork(),
             LoggedUser = GetLoggedUser(),
             InstalledSoftware = SoftwareCollector.Collect(_logger),
-            Security = GetSecurity(),
+            Security = GetSecurity() ?? new SecurityPosture(),
             IsVm = GetIsVm(),
         };
         return snapshot;
@@ -146,6 +170,31 @@ public sealed class InventoryCollector
             catch { }
         }
         return RuntimeInformation.OSDescription;
+    }
+
+    private static string? GetDisplayVersion()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                var display = key?.GetValue("DisplayVersion")?.ToString();
+                if (!string.IsNullOrWhiteSpace(display)) return display;
+
+                var releaseId = key?.GetValue("ReleaseId")?.ToString();
+                if (!string.IsNullOrWhiteSpace(releaseId)) return releaseId;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    private static string? GetKernelVersion()
+    {
+        try { return Environment.OSVersion.Version.ToString(); } catch { }
+        return null;
     }
 
     private string? GetOsVersion()
