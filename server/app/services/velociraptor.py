@@ -225,11 +225,15 @@ class VelociraptorClient:
         """
         if not artifacts:
             raise VelociraptorError("artifacts list rỗng")
-        rows = await self._vql_query(
-            "SELECT collect_client(client_id=ClientId, artifacts=Artifact) AS Collection "
-            "FROM scope()",
-            env={"ClientId": client_id, "Artifact": artifacts[0], **(env or {})},
+        # Truyền client_id + artifact dạng literal trong VQL (không qua env) —
+        # env biến không resolve được khi làm tham số của hàm collect_client().
+        vql = (
+            "SELECT collect_client("
+            f"client_id={_vql_str_literal(client_id)}, "
+            f"artifacts={_vql_str_literal(artifacts[0])}) "
+            "AS Collection FROM scope()"
         )
+        rows = await self._vql_query(vql, env=env)
         for row in rows:
             collection = row.get("Collection") or row
             if isinstance(collection, dict) and collection.get("flow_id"):
@@ -628,6 +632,16 @@ class VelociraptorClient:
 def _shell_quote(s: str) -> str:
     """Quote 1 chuỗi để chạy an toàn trong shell single-quoted."""
     return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _vql_str_literal(s: str) -> str:
+    """Bọc 1 chuỗi thành VQL string literal (double-quoted, escape an toàn).
+
+    Dùng khi nội suy giá trị (client_id, artifact…) trực tiếp vào VQL — tránh
+    chèn ký tự lạ / phá hỏng cú pháp VQL.
+    """
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def _url_quote(s: str) -> str:

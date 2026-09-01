@@ -214,9 +214,9 @@ def test_velociraptor_client_collect_artifact_returns_flow_id(monkeypatch) -> No
     client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
     async def fake_query(self, vql, env=None):
-        assert "collect_client" in vql
-        assert env["ClientId"] == "C.aaa111"
-        assert env["Artifact"] == "Generic.Client.Info"
+        # collect_client nhận client_id/artifact dạng literal trong VQL (env
+        # biến không resolve được khi làm tham số hàm collect_client()).
+        assert 'collect_client(client_id="C.aaa111", artifacts="Generic.Client.Info")' in vql
         return [{"Collection": {"flow_id": "F.1234567890"}}]
 
     monkeypatch.setattr(VelociraptorClient, "_vql_query", fake_query)
@@ -584,7 +584,8 @@ def test_velociraptor_client_get_table_parses_rows() -> None:
     client = VelociraptorClient("https://veloci.test", username="admin", password="tok")
 
     async def fake_query(self, vql, env=None):
-        assert 'source(flow_id="F.111", artifact="Windows.Forensics.Prefetch")' in vql
+        # source() cần đủ client_id + flow_id + artifact — thiếu client_id sẽ trả rỗng.
+        assert 'source(client_id="C.aaa111", flow_id="F.111", artifact="Windows.Forensics.Prefetch")' in vql
         assert vql.endswith("LIMIT 50")
         return [
             {"Executable": "chrome.exe", "RunCount": 5, "ModificationTime": "2026-08-01T08:00:00Z"},
@@ -620,7 +621,7 @@ def test_velociraptor_client_collect_artifact_and_wait(monkeypatch) -> None:
 
     async def fake_query(self, vql, env=None):
         if "collect_client" in vql:
-            assert env == {"ClientId": "C.aaa111", "Artifact": "Windows.System.Pslist"}
+            assert 'collect_client(client_id="C.aaa111", artifacts="Windows.System.Pslist")' in vql
             return [{"Collection": {"flow_id": "F.777"}}]
         if "FROM flows" in vql:
             details_calls["n"] += 1
