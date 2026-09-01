@@ -151,7 +151,7 @@ export default function LlmSettingsPage() {
         : "bg-slate-100 text-slate-700 ring-slate-600/20";
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-6xl space-y-6">
       {error && <ErrorBanner message={error} />}
       {savedMsg && (
         <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-inset ring-emerald-200">
@@ -160,48 +160,46 @@ export default function LlmSettingsPage() {
         </div>
       )}
 
-      {/* Trạng thái */}
-      <Card title="Trạng thái">
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <Toggle
-              checked={enabled}
-              onChange={setEnabled}
-              label={enabled ? "Tắt LLM" : "Bật LLM"}
-            />
-            <span className="text-sm font-medium text-slate-700">
-              {enabled ? "Đã bật" : "Đã tắt"}
-            </span>
-            <Activity className="size-4 text-slate-300" aria-hidden />
-          </div>
-          <div className="flex items-center gap-2 text-sm text-slate-600">
-            <Badge className={testBadge}>
-              {data?.test_status === "ok" ? (
-                <CheckCircle2 className="size-3" />
-              ) : data?.test_status === "error" ? (
-                <XCircle className="size-3" />
-              ) : (
-                <Activity className="size-3" />
-              )}
-              {data?.test_status ?? "chưa test"}
-            </Badge>
-            {data?.test_at && (
-              <span className="text-xs text-slate-400">lúc {formatDateTime(data.test_at)}</span>
-            )}
-            {data?.test_error && (
-              <span className="text-xs text-rose-600">— {data.test_error}</span>
-            )}
-          </div>
-          <div className="text-sm text-slate-500">
-            Tokens dùng hôm nay:{" "}
-            <strong className="font-semibold text-slate-900">{data?.tokens_used_today ?? 0}</strong>
-            {data?.daily_token_budget ? ` / ${data.daily_token_budget}` : ""}
-          </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-slate-200 pb-5">
+        <div className="flex items-center gap-3">
+          <Toggle
+            checked={enabled}
+            onChange={setEnabled}
+            label={enabled ? "Tắt LLM" : "Bật LLM"}
+          />
+          <span className="text-sm font-medium text-slate-700">
+            {enabled ? "Đã bật" : "Đã tắt"}
+          </span>
+          <Activity className="size-4 text-slate-300" aria-hidden />
         </div>
-      </Card>
+        <div className="flex items-center gap-2 text-sm text-slate-600">
+          <Badge className={testBadge}>
+            {data?.test_status === "ok" ? (
+              <CheckCircle2 className="size-3" />
+            ) : data?.test_status === "error" ? (
+              <XCircle className="size-3" />
+            ) : (
+              <Activity className="size-3" />
+            )}
+            {data?.test_status ?? "chưa test"}
+          </Badge>
+          {data?.test_at && (
+            <span className="text-xs text-slate-400">lúc {formatDateTime(data.test_at)}</span>
+          )}
+          {data?.test_error && (
+            <span className="text-xs text-rose-600">— {data.test_error}</span>
+          )}
+        </div>
+        <div className="text-sm text-slate-500">
+          Tokens dùng hôm nay:{" "}
+          <strong className="font-semibold text-slate-900">{data?.tokens_used_today ?? 0}</strong>
+          {data?.daily_token_budget ? ` / ${data.daily_token_budget}` : ""}
+        </div>
+      </div>
 
-      {/* Backend */}
-      <Card title="Backend">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        {/* Backend */}
+        <Card title="Backend">
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="Provider">
@@ -278,10 +276,10 @@ export default function LlmSettingsPage() {
             </Field>
           </div>
         </div>
-      </Card>
+        </Card>
 
-      {/* Tham số */}
-      <Card title="Tham số">
+        {/* Tham số */}
+        <Card title="Tham số">
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             <Field label="Max Tokens">
@@ -348,9 +346,9 @@ export default function LlmSettingsPage() {
             </span>
           </div>
         </div>
-      </Card>
+        </Card>
 
-      <Card title="DeepAgent & MCP Velociraptor">
+        <Card title="DeepAgent & MCP Velociraptor">
         <div className="space-y-4">
           <div className="rounded-lg bg-violet-50 p-4 ring-1 ring-inset ring-violet-200">
             <div className="flex items-start gap-3">
@@ -373,7 +371,44 @@ export default function LlmSettingsPage() {
             {deepAgentTest && <span className={deepAgentTest.ok ? "text-sm font-medium text-emerald-700" : "text-sm font-medium text-rose-700"}>{deepAgentTest.ok ? `Đã kết nối · ${deepAgentTest.tools.length} MCP tools · ${deepAgentTest.client_count_sampled ?? 0} client mẫu` : deepAgentTest.error}</span>}
           </div>
         </div>
-      </Card>
+        </Card>
+
+        {/* Test result */}
+        {testResult && (
+          <Card title="Kết quả test">
+            <div className="space-y-2">
+              <div className="text-sm text-slate-600">
+                Latency: <strong className="font-semibold text-slate-900">{testResult.latency_ms}ms</strong>
+                {" — "}
+                {testResult.models.length} model khả dụng
+              </div>
+              {testResult.models.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {testResult.models.slice(0, 10).map((m) => (
+                    <Badge key={m} className="bg-slate-100 text-slate-700 ring-slate-600/20">
+                      {m}
+                    </Badge>
+                  ))}
+                  {testResult.models.length > 10 && (
+                    <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">
+                      +{testResult.models.length - 10} nữa
+                    </Badge>
+                  )}
+                </div>
+              )}
+              {testResult.ok ? (
+                <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+                  <CheckCircle2 className="size-4" /> Kết nối thành công
+                </p>
+              ) : (
+                <p className="flex items-center gap-1.5 text-sm font-medium text-rose-700">
+                  <XCircle className="size-4" /> Lỗi: {testResult.error}
+                </p>
+              )}
+            </div>
+          </Card>
+        )}
+      </div>
 
       {/* Agent profile */}
       <Card title="System Prompt của LangGraph">
@@ -389,42 +424,6 @@ export default function LlmSettingsPage() {
           />
         </div>
       </Card>
-
-      {/* Test result */}
-      {testResult && (
-        <Card title="Kết quả test">
-          <div className="space-y-2">
-            <div className="text-sm text-slate-600">
-              Latency: <strong className="font-semibold text-slate-900">{testResult.latency_ms}ms</strong>
-              {" — "}
-              {testResult.models.length} model khả dụng
-            </div>
-            {testResult.models.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {testResult.models.slice(0, 10).map((m) => (
-                  <Badge key={m} className="bg-slate-100 text-slate-700 ring-slate-600/20">
-                    {m}
-                  </Badge>
-                ))}
-                {testResult.models.length > 10 && (
-                  <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">
-                    +{testResult.models.length - 10} nữa
-                  </Badge>
-                )}
-              </div>
-            )}
-            {testResult.ok ? (
-              <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-700">
-                <CheckCircle2 className="size-4" /> Kết nối thành công
-              </p>
-            ) : (
-              <p className="flex items-center gap-1.5 text-sm font-medium text-rose-700">
-                <XCircle className="size-4" /> Lỗi: {testResult.error}
-              </p>
-            )}
-          </div>
-        </Card>
-      )}
 
       <div className="flex gap-3">
         <Button onClick={save} disabled={saving}>
