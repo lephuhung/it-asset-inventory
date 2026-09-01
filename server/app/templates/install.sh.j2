@@ -10,7 +10,7 @@
 #   1. Phát hiện distro + architecture
 #   2. Tải binary self-contained OrgInventoryAgent (single-file .NET 8) + SHA256
 #   3. Tạo user/group orginventory, thư mục data/log/run
-#   4. Cài binary + helper, tạo systemd service (orginventory-agent + helper socket)
+#   4. Cài binary, tạo systemd service (orginventory-agent)
 #   5. Ghi /etc/orginventory/config.json với token + endpoints
 #   6. Enable + start services
 # ============================================================================
@@ -131,7 +131,6 @@ trap 'rm -rf "$TMP"' EXIT
 
 BINARY_URL="$PORTAL_URL/download/agent-$RID"
 BINARY_PATH="/opt/orginventory/OrgInventoryAgent"
-HELPER_PATH="/opt/orginventory/orginventory-helper"
 
 log_step "Phát hiện: $ID $VERSION_ID ($ARCH)"
 log_step "Tải binary từ $BINARY_URL ..."
@@ -142,10 +141,6 @@ if ! curl -fsSL --max-time 120 -o "$TMP/OrgInventoryAgent" "$BINARY_URL"; then
 fi
 chmod 0755 "$TMP/OrgInventoryAgent"
 log_ok "Đã tải $(du -h "$TMP/OrgInventoryAgent" | cut -f1)"
-
-# Tải helper (cùng binary — chỉ đổi tên)
-cp "$TMP/OrgInventoryAgent" "$TMP/orginventory-helper"
-chmod 0755 "$TMP/orginventory-helper"
 
 # ── 4. Tạo user/group + thư mục ────────────────────────────────────────
 log_step "Tạo user orginventory và thư mục..."
@@ -162,12 +157,11 @@ chown -R orginventory:orginventory "$DATA_DIR" /var/log/orginventory /run/orginv
 chmod 0750 "$DATA_DIR" /var/log/orginventory /run/orginventory
 chmod 0755 /etc/orginventory
 
-# ── 5. Cài binary + helper ─────────────────────────────────────────────
+# ── 5. Cài binary ─────────────────────────────────────────────────────
 log_step "Cài binary vào /opt/orginventory..."
 mkdir -p /opt/orginventory
 install -m 0755 "$TMP/OrgInventoryAgent" "$BINARY_PATH"
-install -m 0755 "$TMP/orginventory-helper" "$HELPER_PATH"
-log_ok "Đã cài binary + helper"
+log_ok "Đã cài binary"
 
 # ── 6. systemd units ────────────────────────────────────────────────────
 log_step "Cài systemd service..."
@@ -198,47 +192,8 @@ ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/systemd/system/orginventory-helper.socket <<'EOF'
-[Unit]
-Description=OrgInventory Helper (privileged operations socket)
-Before=orginventory-agent.service
-
-[Socket]
-ListenStream=/run/orginventory/helper.sock
-SocketMode=0660
-SocketUser=root
-SocketGroup=orginventory
-RemoveOnStop=yes
-
-[Install]
-WantedBy=sockets.target
-EOF
-
-cat > /etc/systemd/system/orginventory-helper.service <<'EOF'
-[Unit]
-Description=OrgInventory Helper (privileged operations)
-After=orginventory-helper.socket
-
-[Service]
-Type=simple
-User=root
-ExecStart=/opt/orginventory/orginventory-helper
-StandardInput=socket
-StandardOutput=socket
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectHome=yes
-RestrictSUIDSGID=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-MemoryDenyWriteExecute=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
 systemctl daemon-reload
-systemctl enable --now orginventory-helper.socket
-log_ok "Đã cài systemd units + enable helper socket"
+log_ok "Đã cài systemd unit orginventory-agent"
 
 # ── 7. Ghi /etc/orginventory/config.json ─────────────────────────────────
 log_step "Ghi /etc/orginventory/config.json..."
@@ -270,12 +225,7 @@ else
 fi
 fi
 
-# ── 9. Verify helper socket ─────────────────────────────────────────────
-if [[ -S /run/orginventory/helper.sock ]]; then
-    log_ok "Helper socket /run/orginventory/helper.sock đã sẵn sàng"
-fi
-
-# ── 10. Velociraptor Client (DFIR) — luôn cài (bắt buộc đủ 2 agent) ──────────
+# ── 9. Velociraptor Client (DFIR) — luôn cài (bắt buộc đủ 2 agent) ──────────
 if [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
     log_step "Velociraptor Client đã cài → chỉ update client.config.yaml + restart (KHÔNG tải package)."
     VR_CFG_URL="$PORTAL_URL/download/velociraptor-client.config.yaml"
@@ -366,4 +316,3 @@ echo
 echo "Kiểm tra chi tiết:"
 echo "  • OI log:   tail -f $DATA_DIR/logs/agent.log  (hoặc journalctl -u orginventory-agent -f)"
 echo "  • VR log:   journalctl -u velociraptor_client -f"
-echo "  • Helper:   ls -la /run/orginventory/helper.sock"

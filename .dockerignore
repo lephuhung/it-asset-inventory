@@ -1,0 +1,44 @@
+# Build context = repo root — loại bỏ file không cần thiết
+.git
+.venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+*.log
+portal-dev.log
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.pnpm-store/
+.npm-cache/
+
+# .NET build artifacts
+**/bin/
+**/obj/
+.nuget-packages/
+.dotnet-cli-home/
+.dotnet/
+
+# Binary agent Linux — build trong Dockerfile stage 1 (không cần copy từ host).
+server/agent_dist/OrgInventoryAgent-linux-*
+server/agent_dist/orginventory-helper-linux-*
+
+# Chứng chỉ / private key
+server/agent_dist/*.pem
+server/agent_dist/*.key
+server/agent_dist/velociraptor-certs/
+
+# Env / secrets
+.env
+.env.local
+
+# Repo con / worktrees
+.worktrees/
+agent/dist/
+portal/
+docs/
+logo-output/

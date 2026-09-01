@@ -35,6 +35,9 @@ services:
       DOCKER_STEPCA_INIT_NAME: "Asset Inventory Internal CA"
 
   api:
+    build:
+      context: ../../
+      dockerfile: server/Dockerfile
     image: asset-inventory-api:latest
     env_file: .env
     environment:
