@@ -447,37 +447,82 @@ class UserAcknowledgment(Base):
 
 
 class AlertRule(Base):
-    """Alert rule (tính năng #14) — máy mới, mất liên lạc, phần mềm lạ, phần cứng đổi."""
+    """Subscription alert — bind template + scope + recipient_mode (redesign)."""
 
     __tablename__ = "alert_rules"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    rule_type: Mapped[str] = mapped_column(String(32), nullable=False)  # machine_new | machine_lost | software_new | hardware_changed
-    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)  # None = toàn hệ thống
+    template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )  # NULL khi scope_mode='system'
+    scope_mode: Mapped[str] = mapped_column(String(32), default="org_only")
+    # org_only | org_tree | system
+    recipient_mode: Mapped[str] = mapped_column(String(32), default="org_admins_and_super")
+    config: Mapped[dict] = mapped_column(JSONB, default=dict)  # VD {"threshold_days": 3}
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    threshold_days: Mapped[int | None] = mapped_column(Integer, nullable=True)  # machine_lost
-    channels: Mapped[list | None] = mapped_column(JSONB, default=list)  # ["email","telegram","zalo"]
-    notify_targets: Mapped[list | None] = mapped_column(JSONB, default=list)  # email / chat id / phone
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
 
 class AlertEvent(Base):
-    """Bản ghi 1 lần alert được kích hoạt (không lặp lại cùng rule + máy)."""
+    """Bản ghi 1 lần alert được kích hoạt (snapshot title/body đã render)."""
 
     __tablename__ = "alert_events"
-    __table_args__ = (UniqueConstraint("rule_id", "machine_id", "fingerprint", name="uq_alert_event"),)
+    __table_args__ = (
+        UniqueConstraint("rule_id", "machine_id", "fingerprint", name="uq_alert_event"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    rule_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alert_rules.id"), nullable=False)
-    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
-    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)  # chống trùng: hash(rule+machine+ngày)
-    severity: Mapped[str] = mapped_column(String(16), default="warning")  # info | warning | critical
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    channels: Mapped[list | None] = mapped_column(JSONB, default=list)
-    delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    rule_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False)
+    template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id", ondelete="SET NULL"), nullable=True)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    recipient_user_ids: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class AlertTemplate(Base):
+    """Template nội dung alert — Super Admin quản lý title/body + opt_out_controls."""
+
+    __tablename__ = "alert_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)  # machine | investigation | security | system
+    default_severity: Mapped[str] = mapped_column(String(16), default="info")
+    title_template: Mapped[str] = mapped_column(Text, nullable=False)
+    body_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opt_out_controls: Mapped[list] = mapped_column(JSONB, default=list)
+    allowed_vars: Mapped[list] = mapped_column(JSONB, default=list)
+    default_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class UserNotificationPref(Base):
+    """Opt-out per (user, template) — muted / min_severity."""
+
+    __tablename__ = "user_notification_prefs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "template_code", name="uq_user_notification_prefs_user_template"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    template_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    muted: Mapped[bool] = mapped_column(Boolean, default=False)
+    min_severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
 
 
 class SelfServiceLink(Base):
