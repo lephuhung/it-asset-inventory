@@ -109,16 +109,10 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     group: "Vận hành",
     items: [
       {
-        href: "/notifications",
-        label: "Thông báo",
+        href: "/notifications-alerts",
+        label: "Thông báo & Cảnh báo",
         icon: Bell,
         roles: ALL_ROLES,
-      },
-      {
-        href: "/alerts",
-        label: "Alerts",
-        icon: Bell,
-        roles: ADMIN_ROLES,
       },
       {
         href: "/dfir",
@@ -152,7 +146,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       },
       {
         href: "/me/telegram",
-        label: "Cấu hình Telegram",
+        label: "Cấu hình bot Telegram",
         icon: MessageCircle,
         roles: SUPER_ADMIN_ROLES,
       },

@@ -45,6 +45,7 @@ from app.schemas import (
     TelegramLinkStartOut,
 )
 from app.services import notifications as notif_svc
+from app.services.telegram_runtime import get_bot_config
 
 logger = logging.getLogger("notifications.api")
 
@@ -342,12 +343,16 @@ async def start_telegram_link(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(_current_user_dep),
 ):
-    if not settings.telegram_bot_token or not settings.telegram_bot_username:
-        raise HTTPException(503, "Telegram bot chưa được cấu hình (settings.telegram_bot_token/username)")
+    cfg = await get_bot_config(db)
+    if not cfg.is_configured:
+        raise HTTPException(
+            503,
+            "Telegram bot chưa được cấu hình. Liên hệ Super Admin để thiết lập bot.",
+        )
     token = secrets.token_urlsafe(24)
     expires = datetime.now(UTC) + timedelta(minutes=5)
     _LINKING_TOKENS[token] = {"user_id": str(user.id), "expires_at": expires}
-    bot_url = f"https://t.me/{settings.telegram_bot_username}?start={token}"
+    bot_url = f"https://t.me/{cfg.bot_username_clean}?start={token}"
     return TelegramLinkStartOut(bot_url=bot_url, linking_token=token, expires_at=expires)
 
 
@@ -389,7 +394,8 @@ async def telegram_callback(
     3. Match token → set user.telegram_chat_id = update.message.chat.id
     """
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not settings.telegram_webhook_secret or not secrets.compare_digest(secret, settings.telegram_webhook_secret):
+    cfg = await get_bot_config(db)
+    if not cfg.webhook_secret or not secrets.compare_digest(secret, cfg.webhook_secret):
         raise HTTPException(401, "Invalid secret")
 
     data = await request.json()
@@ -415,10 +421,10 @@ async def telegram_callback(
     user.telegram_linked_at = datetime.now(UTC)
     await db.commit()
 
-    # Gửi confirmation message
-    if settings.telegram_bot_token:
+    # Gửi confirmation message (chỉ khi bot đang enabled + có token)
+    if cfg.can_send:
         try:
-            url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+            url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
             async with httpx.AsyncClient(timeout=10) as client:
                 await client.post(url, json={
                     "chat_id": chat_id,

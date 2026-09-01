@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -917,5 +918,34 @@ class NotificationDelivery(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+    )
+
+
+class TelegramBotConfig(Base):
+    """Cấu hình Telegram bot (singleton, id=1) — do Super Admin thiết lập trên portal.
+
+    Tách phần cấu hình bot khỏi biến môi trường để toàn bộ user dùng chung
+    bot do Super Admin đăng ký. Token + webhook_secret lưu dạng AES-256-GCM.
+
+    Service layer (`telegram_runtime`) đọc qua hàm `get_bot_config(db)` — DB
+    được ưu tiên, fallback env (`settings.telegram_bot_token` /
+    `telegram_bot_username` / `telegram_webhook_secret`) khi DB chưa cấu hình.
+    """
+
+    __tablename__ = "telegram_bot_config"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_telegram_bot_config_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, server_default=text("1"))
+    bot_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bot_username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.now(UTC), nullable=False
     )

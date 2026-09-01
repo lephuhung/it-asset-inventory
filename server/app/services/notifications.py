@@ -9,6 +9,9 @@ API:
       Helper tự resolve recipients (admin yêu cầu + tất cả SuperAdmin).
 
   - send_telegram (background): gửi qua Telegram bot nếu user đã link.
+
+Bot token lấy từ `services.telegram_runtime.get_bot_config` (DB → env),
+không đọc thẳng `settings.telegram_bot_token`.
 """
 from __future__ import annotations
 
@@ -34,6 +37,7 @@ from app.db.models import (
     User,
 )
 from app.services.realtime import _redis
+from app.services.telegram_runtime import get_bot_config
 
 logger = logging.getLogger("notifications")
 
@@ -228,8 +232,13 @@ async def _publish_realtime(notifications: list[Notification]) -> None:
 
 
 async def _maybe_deliver_telegram(db: AsyncSession, n: Notification) -> None:
-    """Nếu user link Telegram → gửi message qua bot. Best-effort, log lỗi."""
-    if not settings.telegram_bot_token:
+    """Nếu user link Telegram → gửi message qua bot. Best-effort, log lỗi.
+
+    Bot token lấy qua `telegram_runtime.get_bot_config(db)` (DB do Super
+    Admin cấu hình; fallback env). Không đọc trực tiếp `settings.telegram_bot_token`.
+    """
+    cfg = await get_bot_config(db)
+    if not cfg.can_send:
         return
     user = (await db.execute(
         select(User).where(User.id == n.recipient_id)
@@ -252,7 +261,7 @@ async def _maybe_deliver_telegram(db: AsyncSession, n: Notification) -> None:
         text += f"\n🔗 {n.link}"
 
     try:
-        url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{cfg.bot_token}/sendMessage"
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(url, json={
                 "chat_id": user.telegram_chat_id,

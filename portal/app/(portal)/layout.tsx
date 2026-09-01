@@ -25,6 +25,7 @@ const TITLES: Array<[string, string]> = [
   ["/compliance", "Thông báo tuân thủ"],
   ["/agent-config", "Cấu hình Agent"],
   ["/org-machine-stats", "Thống kê máy theo tổ chức"],
+  ["/notifications-alerts", "Thông báo & Cảnh báo"],
 ];
 
 function titleFor(pathname: string): string {

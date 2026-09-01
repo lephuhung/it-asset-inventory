@@ -854,6 +854,54 @@ export interface TelegramLinkStatusOut {
   linked_at: string | null;
 }
 
+/** Cấu hình bot Telegram (Super Admin) — token + secret đều được mask ở backend. */
+export interface TelegramBotConfigOut {
+  configured: boolean;
+  bot_username: string | null;
+  bot_token_set: boolean;
+  bot_token_masked: string | null;
+  webhook_secret_set: boolean;
+  webhook_secret_masked: string | null;
+  enabled: boolean;
+  /** `db` | `env` | `none` */
+  source: string;
+  updated_at: string | null;
+  updated_by: string | null;
+  /** URL callback đầy đủ để submit cho @BotFather. */
+  callback_url: string;
+  /** Snippet curl để set webhook (kèm secret_token nếu có). null nếu chưa có token. */
+  webhook_set_command: string | null;
+  /** Snippet curl để xem trạng thái webhook hiện tại. */
+  webhook_check_command: string | null;
+}
+
+export interface TelegramBotConfigUpdateIn {
+  bot_token?: string | null;
+  bot_username?: string | null;
+  webhook_secret?: string | null;
+  enabled?: boolean | null;
+}
+
+export interface TelegramBotConfigTestOut {
+  ok: boolean;
+  bot_id: number | null;
+  bot_username: string | null;
+  error: string | null;
+}
+
+/** 1 user đã liên kết Telegram — hiển thị cho Super Admin. */
+export interface TelegramLinkedUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: UserRole;
+  org_id: string;
+  org_name: string | null;
+  telegram_chat_id: string;
+  telegram_linked_at: string | null;
+  is_active: boolean;
+}
+
 // ── LLM-DFIR Statistics & Pagination ───────────────────────────
 
 export interface DfirInvestigationListOut {

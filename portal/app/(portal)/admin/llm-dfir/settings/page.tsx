@@ -1,7 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Activity, CheckCircle2, Loader2, PlugZap, RefreshCw, Save, XCircle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  CheckCircle2,
+  Loader2,
+  PlugZap,
+  RefreshCw,
+  Save,
+  XCircle,
+  Sparkles,
+  ShieldAlert,
+  Clock,
+  Zap,
+  Database,
+  Brain,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import {
   Badge,
@@ -18,9 +32,25 @@ import {
 import type { LlmConfig, LlmConfigUpdate, LlmModelsResult, LlmTestResult } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
 
-/** Cấu hình LLM (Super Admin) — Ollama local / OpenAI / Qwen / vLLM.
- *  Style theo Design.md: card surface trắng + hairline, toggle = primary blue,
- *  trạng thái OK/WARN/BAD bằng pill tinted (emerald/amber/rose). */
+/**
+ * Cấu hình LLM (Super Admin) — Ollama local / OpenAI / Qwen / vLLM.
+ *
+ * Style theo Design.md:
+ *  - Trang trên canvas giấy ấm (`slate-50`); card trắng + hairline (`slate-200`)
+ *  - Một accent cấu trúc duy nhất — brand-600 (Notion blue) cho toggle ON,
+ *    primary CTA, focus ring
+ *  - Status pill: sticker palette (emerald/amber/rose) — không dùng cho CTA
+ *  - Pill CTA (`rounded-full`), input vuông nhẹ (`rounded-xs`), hairline border
+ *  - Typography: heading heavy 700 + tracking âm, body 15-16px line-height 1.5
+ *
+ * Layout (sau khi chỉnh):
+ *  1. Status strip — Trạng thái / Kết nối / Tokens (1 hàng full-width)
+ *  2. Backend — full-width card
+ *  3. Kết quả test — full-width card, CHỈ hiển thị khi đã test (không có quick guide)
+ *  4. Tham số — full-width card
+ *  5. System Prompt — full-width card với textarea lớn (rows=20, auto-grow)
+ *  6. Sticky action bar
+ */
 export default function LlmSettingsPage() {
   const [data, setData] = useState<LlmConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,6 +78,15 @@ export default function LlmSettingsPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<LlmTestResult | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+
+  // Auto-grow textarea cho System Prompt — bám theo nội dung, tối thiểu ~20 dòng
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const ta = promptRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.max(ta.scrollHeight, 480)}px`;
+  }, [systemPrompt]);
 
   const load = useCallback(async () => {
     try {
@@ -99,7 +138,6 @@ export default function LlmSettingsPage() {
         external_orchestrator: "deepagent",
         deepagent_enabled: true,
       };
-      // Chỉ gửi api_key nếu user nhập mới
       if (apiKey) body.api_key = apiKey;
       const updated = await api.put<LlmConfig>("/admin/llm-dfir/config", body);
       setData(updated);
@@ -132,7 +170,7 @@ export default function LlmSettingsPage() {
     try {
       const res = await api.post<LlmTestResult>("/admin/llm-dfir/config/test");
       setTestResult(res);
-      await load(); // refresh test_status
+      await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Test thất bại");
     } finally {
@@ -143,72 +181,158 @@ export default function LlmSettingsPage() {
   if (loading) return <Spinner label="Đang tải cấu hình..." />;
   if (error && !data) return <ErrorBanner message={error} onRetry={load} />;
 
+  const testStatus = data?.test_status ?? null;
   const testBadge =
-    data?.test_status === "ok"
+    testStatus === "ok"
       ? "bg-emerald-100 text-emerald-700 ring-emerald-600/20"
-      : data?.test_status === "error"
+      : testStatus === "error"
         ? "bg-rose-100 text-rose-700 ring-rose-600/20"
         : "bg-slate-100 text-slate-700 ring-slate-600/20";
 
+  const tokenBudgetUsed = data?.tokens_used_today ?? 0;
+  const tokenBudgetMax = data?.daily_token_budget ?? null;
+  const tokenBudgetPct =
+    tokenBudgetMax && tokenBudgetMax > 0
+      ? Math.min(100, Math.round((tokenBudgetUsed / tokenBudgetMax) * 100))
+      : null;
+
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       {error && <ErrorBanner message={error} />}
       {savedMsg && (
-        <div className="flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800 ring-1 ring-inset ring-emerald-200">
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+        <div
+          role="status"
+          className="flex items-center gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"
+        >
+          <span className="flex size-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+            <CheckCircle2 className="size-3.5" />
+          </span>
           {savedMsg}
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-slate-200 pb-5">
-        <div className="flex items-center gap-3">
-          <Toggle
-            checked={enabled}
-            onChange={setEnabled}
-            label={enabled ? "Tắt LLM" : "Bật LLM"}
-          />
-          <span className="text-sm font-medium text-slate-700">
-            {enabled ? "Đã bật" : "Đã tắt"}
-          </span>
-          <Activity className="size-4 text-slate-300" aria-hidden />
-        </div>
-        <div className="flex items-center gap-2 text-sm text-slate-600">
-          <Badge className={testBadge}>
-            {data?.test_status === "ok" ? (
-              <CheckCircle2 className="size-3" />
-            ) : data?.test_status === "error" ? (
-              <XCircle className="size-3" />
-            ) : (
-              <Activity className="size-3" />
-            )}
-            {data?.test_status ?? "chưa test"}
-          </Badge>
-          {data?.test_at && (
-            <span className="text-xs text-slate-400">lúc {formatDateTime(data.test_at)}</span>
-          )}
-          {data?.test_error && (
-            <span className="text-xs text-rose-600">— {data.test_error}</span>
-          )}
-        </div>
-        <div className="text-sm text-slate-500">
-          Tokens dùng hôm nay:{" "}
-          <strong className="font-semibold text-slate-900">{data?.tokens_used_today ?? 0}</strong>
-          {data?.daily_token_budget ? ` / ${data.daily_token_budget}` : ""}
-        </div>
-      </div>
+      {/* ── Status strip ─────────────────────────────────────── */}
+      <section className="ai-card px-5 py-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-4">
+          <div className="flex items-center gap-3">
+            <span
+              className={`flex size-9 items-center justify-center rounded-lg ${
+                enabled ? "bg-brand-50 text-brand-600" : "bg-slate-100 text-slate-400"
+              }`}
+            >
+              <Brain className="size-5" />
+            </span>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Trạng thái
+              </p>
+              <p className="text-sm font-semibold tracking-tight text-slate-900">
+                {enabled ? "LLM đang hoạt động" : "LLM đã tắt"}
+              </p>
+            </div>
+            <Toggle
+              checked={enabled}
+              onChange={setEnabled}
+              label={enabled ? "Tắt LLM" : "Bật LLM"}
+              className="ml-2"
+            />
+          </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {/* Backend */}
-        <Card title="Backend">
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <span className="hidden h-10 w-px bg-slate-200 sm:block" aria-hidden />
+
+          <div className="flex items-center gap-3">
+            <span
+              className={`flex size-9 items-center justify-center rounded-lg ${
+                testStatus === "ok"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : testStatus === "error"
+                    ? "bg-rose-100 text-rose-700"
+                    : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              {testStatus === "ok" ? (
+                <CheckCircle2 className="size-5" />
+              ) : testStatus === "error" ? (
+                <XCircle className="size-5" />
+              ) : (
+                <Activity className="size-5" />
+              )}
+            </span>
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Kết nối
+              </p>
+              <div className="flex items-center gap-2">
+                <Badge className={testBadge}>{testStatus ?? "chưa test"}</Badge>
+                {data?.test_at && (
+                  <span className="text-xs text-slate-500">
+                    lúc {formatDateTime(data.test_at)}
+                  </span>
+                )}
+              </div>
+              {data?.test_error && (
+                <p className="mt-0.5 text-xs text-rose-600">— {data.test_error}</p>
+              )}
+            </div>
+          </div>
+
+          <span className="hidden h-10 w-px bg-slate-200 sm:block" aria-hidden />
+
+          <div className="flex min-w-[180px] items-center gap-3">
+            <span className="flex size-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+              <Zap className="size-5" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Tokens hôm nay
+              </p>
+              <p className="text-sm font-semibold tracking-tight tabular-nums text-slate-900">
+                {tokenBudgetUsed.toLocaleString("vi-VN")}
+                {tokenBudgetMax ? (
+                  <span className="font-normal text-slate-500">
+                    {" "}
+                    / {tokenBudgetMax.toLocaleString("vi-VN")}
+                  </span>
+                ) : null}
+              </p>
+              {tokenBudgetPct !== null && (
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${
+                      tokenBudgetPct >= 90
+                        ? "bg-rose-500"
+                        : tokenBudgetPct >= 70
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                    }`}
+                    style={{ width: `${tokenBudgetPct}%` }}
+                    aria-label={`${tokenBudgetPct}% ngân sách đã dùng`}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Backend (full-width) ─────────────────────────────── */}
+      <Card
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Database className="size-4 text-slate-400" />
+            Backend
+          </span>
+        }
+        subtitle="Chọn nhà cung cấp LLM và thông tin kết nối"
+      >
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <Field label="Provider">
               <Select
                 value={provider}
                 onChange={(e) => {
                   const v = e.target.value;
                   setProvider(v);
-                  // Auto-suggest model mặc định theo provider (trừ khi user đã tự sửa)
                   if (!modelTouched) {
                     if (v === "ollama") setModel("qwen2.5:14b-instruct-q4_K_M");
                     else if (v === "openai") setModel("gpt-4o-mini");
@@ -226,7 +350,7 @@ export default function LlmSettingsPage() {
                 <option value="custom">Custom OpenAI-compatible</option>
               </Select>
             </Field>
-            <Field label="Base URL">
+            <Field label="Base URL" className="md:col-span-2">
               <Input
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
@@ -234,45 +358,55 @@ export default function LlmSettingsPage() {
               />
             </Field>
           </div>
-          <Field label="API Key">
+
+          <Field label="API Key" hint="Để trống nếu muốn giữ nguyên giá trị hiện tại.">
             <Input
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={data?.api_key_masked ?? "(chưa đặt)"}
             />
-            <p className="mt-1 text-xs text-slate-400">
-              Hiện tại:{" "}
-              <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
+              <span>Hiện tại:</span>
+              <code className="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
                 {data?.api_key_masked}
               </code>
-              {" — "}để trống nếu muốn giữ nguyên
-            </p>
+            </div>
           </Field>
+
+          {/* Model chính — input full-width, nút Tải model đặt DƯỚI input (icon + label nowrap) */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <Field label="Model chính">
-              <div className="flex gap-2">
-                <Input
-                  list="llm-models"
-                  value={model}
-                  onChange={(e) => {
-                    setModel(e.target.value);
-                    setModelTouched(true);
-                  }}
-                  placeholder="qwen2.5:14b-instruct-q4_K_M"
-                />
-                <Button type="button" variant="outline" onClick={loadModels} disabled={loadingModels} title="Nạp model từ cấu hình LLM đã lưu">
-                  {loadingModels ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                  Tải model
-                </Button>
-              </div>
+              <Input
+                list="llm-models"
+                value={model}
+                onChange={(e) => {
+                  setModel(e.target.value);
+                  setModelTouched(true);
+                }}
+                placeholder="qwen2.5:14b-instruct-q4_K_M"
+              />
               <datalist id="llm-models">
                 {availableModels.map((m) => (
                   <option key={m} value={m} />
                 ))}
               </datalist>
+              <button
+                type="button"
+                onClick={loadModels}
+                disabled={loadingModels}
+                title="Nạp model từ cấu hình LLM đã lưu"
+                className="mt-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 transition-all duration-150 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {loadingModels ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                Tải model từ backend
+              </button>
             </Field>
-            <Field label="Model dự phòng (tuỳ chọn)">
+            <Field label="Model dự phòng" hint="Tùy chọn. Dùng khi model chính lỗi.">
               <Input
                 list="llm-models"
                 value={fallbackModel}
@@ -281,30 +415,134 @@ export default function LlmSettingsPage() {
               />
             </Field>
           </div>
-          <div className="border-t border-slate-200 pt-4">
-            <h3 className="mb-4 text-sm font-semibold text-slate-900">Tham số</h3>
-            <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <Field label="Max Tokens">
-              <Input
-                type="number"
-                min={64}
-                max={32000}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value) || 4096)}
-              />
-            </Field>
-            <Field label="Temperature">
-              <Input
-                type="number"
-                step="0.1"
-                min={0}
-                max={2}
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value) || 0)}
-              />
-            </Field>
-            <Field label="Timeout (giây)">
+        </div>
+      </Card>
+
+      {/* ── Kết quả test — chỉ hiển thị khi đã test, full-width ── */}
+      {testResult && (
+        <Card
+          title={
+            <span className="inline-flex items-center gap-2">
+              <PlugZap className="size-4 text-slate-400" />
+              Kết quả test
+            </span>
+          }
+          subtitle={data?.test_at ? `Test lúc ${formatDateTime(data.test_at)}` : undefined}
+          actions={
+            <Button variant="outline" size="sm" onClick={testConnection} disabled={testing}>
+              {testing ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <PlugZap className="size-3.5" />
+              )}
+              Test lại
+            </Button>
+          }
+        >
+          <div className="space-y-4">
+            <div
+              role="status"
+              className={`flex items-center gap-2.5 rounded-lg px-4 py-3 text-sm font-semibold ${
+                testResult.ok
+                  ? "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200"
+                  : "bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-200"
+              }`}
+            >
+              {testResult.ok ? (
+                <CheckCircle2 className="size-4 shrink-0" />
+              ) : (
+                <XCircle className="size-4 shrink-0" />
+              )}
+              {testResult.ok ? "Kết nối thành công" : `Lỗi: ${testResult.error}`}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Latency
+                </p>
+                <p className="mt-0.5 text-base font-bold tabular-nums tracking-tight text-slate-900">
+                  {testResult.latency_ms}ms
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Models khả dụng
+                </p>
+                <p className="mt-0.5 text-base font-bold tabular-nums tracking-tight text-slate-900">
+                  {testResult.models.length}
+                </p>
+              </div>
+              {testResult.models[0] && (
+                <div className="col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                    Model mặc định
+                  </p>
+                  <p className="mt-0.5 truncate text-sm font-semibold tracking-tight text-slate-900">
+                    {testResult.models[0]}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {testResult.models.length > 0 && (
+              <div>
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Danh sách model
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {testResult.models.map((m) => (
+                    <Badge key={m} className="bg-slate-100 text-slate-700 ring-slate-600/20">
+                      {m}
+                    </Badge>
+                  ))}
+                  {testResult.models.length > 20 && (
+                    <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">
+                      +{testResult.models.length - 20} nữa
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Tham số ─────────────────────────────────────────── */}
+      <Card
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Sparkles className="size-4 text-slate-400" />
+            Tham số
+          </span>
+        }
+        subtitle="Giới hạn & chi phí cho mỗi phiên gọi LLM"
+      >
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <Field
+            label="Max Tokens"
+            hint="Độ dài tối đa của câu trả lời (64 – 32 000)."
+          >
+            <Input
+              type="number"
+              min={64}
+              max={32000}
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(parseInt(e.target.value) || 4096)}
+            />
+          </Field>
+          <Field label="Temperature" hint="0 = chính xác, 1 = sáng tạo.">
+            <Input
+              type="number"
+              step="0.1"
+              min={0}
+              max={2}
+              value={temperature}
+              onChange={(e) => setTemperature(parseFloat(e.target.value) || 0)}
+            />
+          </Field>
+          <Field label="Timeout" hint="Giây — hết thời gian chờ.">
+            <div className="relative">
               <Input
                 type="number"
                 min={10}
@@ -312,20 +550,29 @@ export default function LlmSettingsPage() {
                 value={requestTimeout}
                 onChange={(e) => setRequestTimeout(parseInt(e.target.value) || 120)}
               />
-            </Field>
-            <Field label="Daily Token Budget">
-              <Input
-                type="number"
-                min={0}
-                value={dailyTokenBudget}
-                onChange={(e) =>
-                  setDailyTokenBudget(e.target.value === "" ? "" : parseInt(e.target.value))
-                }
-                placeholder="Không giới hạn"
-              />
-            </Field>
-          </div>
-          <Field label="Max Context (ký tự)">
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                giây
+              </span>
+            </div>
+          </Field>
+          <Field label="Daily Token Budget" hint="0 = không giới hạn.">
+            <Input
+              type="number"
+              min={0}
+              value={dailyTokenBudget}
+              onChange={(e) =>
+                setDailyTokenBudget(e.target.value === "" ? "" : parseInt(e.target.value))
+              }
+              placeholder="Không giới hạn"
+            />
+          </Field>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <Field
+            label="Max Context (ký tự)"
+            hint="Log Velociraptor được cắt còn tối đa số ký tự này trước khi gửi LLM (tránh OOM local LLM)."
+          >
             <Input
               type="number"
               min={1000}
@@ -333,89 +580,96 @@ export default function LlmSettingsPage() {
               value={maxContextChars}
               onChange={(e) => setMaxContextChars(parseInt(e.target.value) || 200000)}
             />
-            <p className="mt-1 text-xs text-slate-400">
-              Log Velociraptor được cắt còn tối đa số ký tự này trước khi gửi LLM
-              (tránh OOM local LLM).
-            </p>
           </Field>
-          <div className="flex items-center gap-3">
-            <Toggle
-              checked={allowCloud}
-              onChange={setAllowCloud}
-              label="Cho phép gọi cloud API"
-            />
-            <span className="text-sm text-slate-600">
-              Cho phép gọi cloud API (OpenAI/Qwen) — cần bật để đặt API key cho endpoint public
-            </span>
-          </div>
-            </div>
-          </div>
-        </div>
-        </Card>
-
-        {/* Test result */}
-        {testResult && (
-          <Card title="Kết quả test">
-            <div className="space-y-2">
-              <div className="text-sm text-slate-600">
-                Latency: <strong className="font-semibold text-slate-900">{testResult.latency_ms}ms</strong>
-                {" — "}
-                {testResult.models.length} model khả dụng
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold tracking-tight text-slate-900">
+                  Cho phép gọi cloud API
+                </p>
+                <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                  Cần bật để đặt API key cho endpoint public (OpenAI, Qwen, …).
+                </p>
               </div>
-              {testResult.models.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {testResult.models.slice(0, 10).map((m) => (
-                    <Badge key={m} className="bg-slate-100 text-slate-700 ring-slate-600/20">
-                      {m}
-                    </Badge>
-                  ))}
-                  {testResult.models.length > 10 && (
-                    <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">
-                      +{testResult.models.length - 10} nữa
-                    </Badge>
-                  )}
-                </div>
-              )}
-              {testResult.ok ? (
-                <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-700">
-                  <CheckCircle2 className="size-4" /> Kết nối thành công
-                </p>
-              ) : (
-                <p className="flex items-center gap-1.5 text-sm font-medium text-rose-700">
-                  <XCircle className="size-4" /> Lỗi: {testResult.error}
-                </p>
-              )}
+              <Toggle
+                checked={allowCloud}
+                onChange={setAllowCloud}
+                label="Cho phép gọi cloud API"
+              />
             </div>
-          </Card>
-        )}
-      </div>
-
-      {/* Agent profile */}
-      <Card title="System Prompt của LangGraph">
-        <div className="space-y-2">
-          <p className="text-xs text-slate-400">
-            Đây là cấu hình chung cho DeepAgent, áp dụng cho mọi cuộc điều tra mới. Policy DFIR và allowlist của hệ thống luôn được giữ nguyên.
-          </p>
-          <Textarea
-            rows={8}
-            value={systemPrompt}
-            onChange={(e) => setSystemPrompt(e.target.value)}
-            placeholder="Ưu tiên đánh giá hành vi PowerShell, persistence và kết nối C2; trình bày kết luận ngắn gọn cho quản trị viên."
-          />
+            {allowCloud && (
+              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Dữ liệu log sẽ được gửi tới nhà cung cấp bên thứ ba. Cân nhắc khi xử lý dữ
+                  liệu nhạy cảm.
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       </Card>
 
-      <div className="flex gap-3">
-        <Button onClick={save} disabled={saving}>
-          {saving && <Loader2 className="size-4 animate-spin" />}
-          <Save className="size-4" />
-          Lưu cấu hình
-        </Button>
-        <Button onClick={testConnection} disabled={testing} variant="outline">
-          {testing && <Loader2 className="size-4 animate-spin" />}
-          <PlugZap className="size-4" />
-          Test connection
-        </Button>
+      {/* ── System Prompt — textarea lớn, auto-grow ──────────── */}
+      <Card
+        title={
+          <span className="inline-flex items-center gap-2">
+            <Brain className="size-4 text-slate-400" />
+            System Prompt của LangGraph
+          </span>
+        }
+        subtitle="Áp dụng cho mọi cuộc điều tra mới. Policy DFIR và allowlist hệ thống luôn được giữ nguyên."
+      >
+        <div className="rounded-lg border border-slate-200 bg-white p-1 ring-1 ring-inset ring-slate-200 focus-within:border-brand-600 focus-within:ring-brand-600/30">
+          <textarea
+            ref={promptRef}
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder="Ưu tiên đánh giá hành vi PowerShell, persistence và kết nối C2; trình bày kết luận ngắn gọn cho quản trị viên."
+            spellCheck={false}
+            className="block w-full resize-none rounded-md border-0 bg-transparent px-3 py-3 font-mono text-[13px] leading-relaxed text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-0"
+            style={{ minHeight: 480 }}
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+          <span className="tabular-nums">
+            {systemPrompt.length.toLocaleString("vi-VN")} ký tự ·{" "}
+            {systemPrompt.split(/\s+/).filter(Boolean).length.toLocaleString("vi-VN")} từ
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Clock className="size-3" />
+            Áp dụng cho cuộc điều tra tiếp theo
+          </span>
+        </div>
+      </Card>
+
+      {/* ── Sticky action bar ────────────────────────────────── */}
+      <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-between gap-3 rounded-full border border-slate-200 bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+        <div className="min-w-0 pl-2 text-xs text-slate-500">
+          {saving ? (
+            <span className="inline-flex items-center gap-1.5 font-medium text-brand-700">
+              <Loader2 className="size-3 animate-spin" />
+              Đang lưu…
+            </span>
+          ) : savedMsg ? (
+            <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700">
+              <CheckCircle2 className="size-3" />
+              Đã lưu cấu hình
+            </span>
+          ) : (
+            "Thay đổi sẽ được áp dụng sau khi lưu."
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={testConnection} disabled={testing} variant="outline">
+            {testing ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+            Test connection
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            Lưu cấu hình
+          </Button>
+        </div>
       </div>
     </div>
   );

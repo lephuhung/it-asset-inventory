@@ -1417,6 +1417,111 @@ class TelegramLinkStatusOut(BaseModel):
     linked_at: datetime | None = None
 
 
+# ── Telegram bot config (Super Admin) ────────────────────────────
+
+
+class TelegramBotConfigOut(BaseModel):
+    """Trả về cấu hình bot hiện tại.
+
+    Token KHÔNG được trả về plaintext (chỉ mask) — chỉ Super Admin biết đã
+    cấu hình hay chưa. Webhook secret cũng mask tương tự.
+    """
+
+    configured: bool
+    """True nếu đã có token + username (kể cả từ env)."""
+
+    bot_username: str | None = None
+    """Username bot (vd `MyInventoryBot`) — hiển thị cho admin."""
+
+    bot_token_set: bool
+    """True nếu có token (DB hoặc env)."""
+
+    bot_token_masked: str | None = None
+    """Mask token: `1234567890:AA***xyz` — chỉ khi DB có token. None nếu
+    token đến từ env (không tiết lộ độ dài/mask theo cách lộ thông tin)."""
+
+    webhook_secret_set: bool
+    """True nếu đã set secret (để verify webhook Telegram)."""
+
+    webhook_secret_masked: str | None = None
+    """Mask webhook secret."""
+
+    enabled: bool
+    """Bot đang bật (chỉ áp dụng cho row DB; nếu source=env thì mặc định True)."""
+
+    source: str
+    """`db` (Super Admin đã cấu hình trên portal) | `env` (đang dùng
+    fallback từ .env) | `none` (chưa cấu hình)."""
+
+    updated_at: datetime | None = None
+    """Thời điểm update gần nhất (chỉ khi source=db)."""
+
+    updated_by: str | None = None
+    """User id đã update lần cuối (chỉ khi source=db)."""
+
+    callback_url: str
+    """URL callback đầy đủ mà Super Admin cần submit cho @BotFather khi set
+    webhook. Dựa trên `agent_server_url` (cùng URL backend public dùng cho
+    agent), trỏ về `/api/external/telegram/callback`."""
+
+    webhook_set_command: str | None = None
+    """Snippet `curl` để set webhook qua Telegram API (kèm secret_token).
+    `None` nếu chưa có token + secret. Super Admin có thể copy & chạy trên
+    server có HTTPS reach được bởi Telegram."""
+
+    webhook_check_command: str | None = None
+    """Snippet `curl` để verify webhook hiện tại (dùng `getWebhookInfo`)."""
+
+
+class TelegramBotConfigUpdateIn(BaseModel):
+    """PUT body từ Super Admin — set / update bot config trên portal.
+
+    Tất cả trường optional; chỉ update trường được set (kể cả set None để xoá).
+    Token được mã hoá AES-256-GCM trước khi lưu DB.
+    """
+
+    bot_token: str | None = None
+    """Plaintext token từ BotFather. Set chuỗi rỗng = KHÔNG đổi; để None = xoá."""
+
+    bot_username: str | None = None
+    """Username bot (không có '@'). Để None để KHÔNG đổi."""
+
+    webhook_secret: str | None = None
+    """Secret Telegram dùng để ký webhook. Để None để KHÔNG đổi; chuỗi rỗng = xoá."""
+
+    enabled: bool | None = None
+    """Bật/tắt delivery. None = KHÔNG đổi."""
+
+
+class TelegramBotConfigTestOut(BaseModel):
+    """Kết quả `POST /api/admin/telegram-bot/test` — gọi `getMe` API để verify."""
+
+    ok: bool
+    bot_id: int | None = None
+    bot_username: str | None = None
+    error: str | None = None
+    """Mô tả lỗi kết nối / HTTP / parsing (KHÔNG log token ra đây)."""
+
+
+class TelegramLinkedUserOut(BaseModel):
+    """1 user đã liên kết Telegram — dùng cho Super Admin xem trên portal.
+
+    Hiển thị đủ thông tin để admin biết ai đang nhận notification qua bot.
+    `chat_id` không che — Super Admin cần xem để debug (vd ai đó liên kết nhầm
+    account Telegram cá nhân).
+    """
+
+    id: str
+    email: str
+    full_name: str
+    role: str
+    org_id: str
+    org_name: str | None = None
+    telegram_chat_id: str
+    telegram_linked_at: datetime | None = None
+    is_active: bool = True
+
+
 # ── LLM-DFIR Statistics ──────────────────────────────────────────
 
 

@@ -38,6 +38,7 @@ from app.api.routes import (
     self_service,
     stats,
     tags,
+    telegram_bot_admin,
     tokens,
     users,
     velociraptor,
@@ -171,6 +172,7 @@ app.include_router(notifications.admin_router)
 app.include_router(notifications.ext_router)
 app.include_router(notifications.me_router)
 app.include_router(notifications.tg_router)
+app.include_router(telegram_bot_admin.router)
 
 
 @app.get("/health")
