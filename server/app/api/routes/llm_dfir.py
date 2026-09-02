@@ -223,8 +223,8 @@ async def update_llm_config(
     if body.system_prompt is not None:
         cfg.system_prompt = body.system_prompt.strip() or None
     if body.max_tokens is not None:
-        if not (64 <= body.max_tokens <= 32000):
-            raise HTTPException(422, "max_tokens phải trong [64, 32000]")
+        if not (64_000 <= body.max_tokens <= 128_000):
+            raise HTTPException(422, "max_tokens phải trong [64000, 128000]")
         cfg.max_tokens = body.max_tokens
     if body.temperature is not None:
         if not (0.0 <= body.temperature <= 2.0):
@@ -705,7 +705,6 @@ async def chat_investigation(
         "output_tokens": result["output_tokens"],
         "model": result["model"],
     }
-
 
 @router.delete("/investigations/{inv_id}", status_code=204)
 async def delete_investigation(

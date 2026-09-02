@@ -799,7 +799,7 @@ class LlmConfig(Base):
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     fallback_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    max_tokens: Mapped[int] = mapped_column(Integer, default=4096)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=64_000)
     temperature: Mapped[float] = mapped_column(Numeric(3, 2), default=0.0)
     request_timeout: Mapped[int] = mapped_column(Integer, default=120)
     max_context_chars: Mapped[int] = mapped_column(Integer, default=200_000)

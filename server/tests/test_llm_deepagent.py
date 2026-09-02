@@ -96,6 +96,40 @@ async def test_deepagent_enablement_is_persisted_without_service_credentials(cli
     response = await client.get("/api/admin/llm-dfir/config", headers=headers)
     assert response.status_code == 200
     assert response.json()["deepagent_service_token_set"] is False
+
+
+@pytest.mark.asyncio
+async def test_llm_config_accepts_and_persists_128000_max_tokens(client, seeded_env):
+    headers = await _admin_headers(client, seeded_env)
+
+    response = await client.put(
+        "/api/admin/llm-dfir/config",
+        headers=headers,
+        json={"max_tokens": 128_000},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["max_tokens"] == 128_000
+
+    response = await client.get("/api/admin/llm-dfir/config", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["max_tokens"] == 128_000
+
+
+@pytest.mark.asyncio
+async def test_llm_config_rejects_max_tokens_below_64000(client, seeded_env):
+    headers = await _admin_headers(client, seeded_env)
+
+    response = await client.put(
+        "/api/admin/llm-dfir/config",
+        headers=headers,
+        json={"max_tokens": 63_999},
+    )
+
+    assert response.status_code == 422
+    assert "[64000, 128000]" in response.json()["detail"]
+
+
 @pytest.mark.asyncio
 async def test_external_callback_persists_failure_status(
     client, seeded_env, session_factory, monkeypatch

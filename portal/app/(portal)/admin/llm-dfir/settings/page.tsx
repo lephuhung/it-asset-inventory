@@ -66,7 +66,7 @@ export default function LlmSettingsPage() {
   const [model, setModel] = useState("qwen2.5:14b-instruct-q4_K_M");
   const [fallbackModel, setFallbackModel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [maxTokens, setMaxTokens] = useState(4096);
+  const [maxTokens, setMaxTokens] = useState(64000);
   const [temperature, setTemperature] = useState(0.0);
   const [requestTimeout, setRequestTimeout] = useState(120);
   const [maxContextChars, setMaxContextChars] = useState(200000);
@@ -525,10 +525,10 @@ export default function LlmSettingsPage() {
           >
             <Input
               type="number"
-              min={64}
-              max={32000}
+              min={64000}
+              max={128000}
               value={maxTokens}
-              onChange={(e) => setMaxTokens(parseInt(e.target.value) || 4096)}
+              onChange={(e) => setMaxTokens(parseInt(e.target.value) || 64000)}
             />
           </Field>
           <Field label="Temperature" hint="0 = chính xác, 1 = sáng tạo.">
