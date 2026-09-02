@@ -43,6 +43,14 @@ from app.services.llm_prompts import (
 logger = logging.getLogger("llm.dfir")
 
 
+class ExternalInvestigationNotFound(LlmError):
+    """Investigation external không tồn tại."""
+
+
+class ExternalCallbackConflict(LlmError):
+    """Callback không thuộc job hiện tại hoặc bị lặp với idempotency key khác."""
+
+
 # ── Alert notification (alert engine) ─────────────────────────────
 
 
@@ -217,6 +225,7 @@ async def run_pending_investigations() -> dict:
                 )
                 .order_by(DfirInvestigation.created_at)
                 .limit(5)
+                .with_for_update(skip_locked=True)
             )
         ).scalars().all()
 
@@ -253,6 +262,8 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
     if inv.external_orchestrator == "deepagent":
         if inv.status == "pending":
             await _state_dispatch_deepagent(db, inv)
+        elif inv.status == "analyzing":
+            await _state_check_deepagent_job(db, inv)
         return
     if inv.status == "pending":
         await _state_start(db, inv)
@@ -262,6 +273,47 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
         await _state_poll_collect(db, inv)  # tiếp tục poll
     elif inv.status == "analyzing":
         await _state_analyze(db, inv)
+
+
+async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -> None:
+    """Requeue a job lost by a DeepAgent process restart.
+
+    The backend owns the investigation state, while DeepAgent keeps its short-lived
+    job registry in memory. A missing job is therefore safe to dispatch again;
+    network errors leave the current investigation untouched for a later poll.
+    """
+    if not inv.external_job_id:
+        dispatch_started_at = inv.started_at
+        timeout_seconds = max(settings.deepagent_request_timeout_seconds * 2, 60)
+        if (
+            inv.hermes_status == "dispatching"
+            and dispatch_started_at
+            and (datetime.now(UTC) - dispatch_started_at).total_seconds() > timeout_seconds
+        ):
+            inv.status = "pending"
+            inv.hermes_status = "recovery_required"
+            inv.hermes_response = {"reason": "deepagent_dispatch_interrupted"}
+            await db.commit()
+            logger.warning("DeepAgent dispatch interrupted for investigation %s", inv.id)
+        return
+    try:
+        async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
+            response = await client.get(
+                f"{settings.deepagent_url.rstrip('/')}/v1/jobs/{inv.external_job_id}",
+                headers={"Authorization": f"Bearer {settings.deepagent_api_key}"},
+            )
+    except Exception as exc:  # noqa: BLE001 - retry on the next worker tick
+        logger.warning("DeepAgent job check failed for %s: %s", inv.id, exc)
+        return
+    if response.status_code != 404:
+        return
+
+    inv.status = "pending"
+    inv.external_job_id = None
+    inv.hermes_status = "recovery_required"
+    inv.hermes_response = {"reason": "deepagent_job_missing_after_restart"}
+    await db.commit()
+    logger.warning("DeepAgent job missing for investigation %s; queued for redispatch", inv.id)
 
 
 async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) -> None:
@@ -291,6 +343,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
     now = datetime.now(UTC)
     time_from = now - timedelta(hours=settings.deepagent_default_lookback_hours)
+    expected_job_id = f"deepagent-{inv.id}"
     request_body = {
         "schema_version": "dfir.deepagent.request/1.1",
         "investigation_id": str(inv.id),
@@ -303,6 +356,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         "velociraptor_api_client_yaml": api_client_yaml,
     }
     inv.status = "analyzing"
+    inv.external_job_id = expected_job_id
     inv.hermes_status = "dispatching"
     inv.started_at = now
     await db.commit()
@@ -315,7 +369,9 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
             )
         response.raise_for_status()
         body = response.json()
-        inv.external_job_id = body.get("job_id") or inv.external_job_id
+        if body.get("job_id") != expected_job_id:
+            raise LlmError("DeepAgent trả về job ID không khớp investigation")
+        inv.external_job_id = expected_job_id
         inv.hermes_status = "dispatched"
         inv.hermes_response = {
             "job_id": inv.external_job_id,
@@ -711,16 +767,27 @@ async def list_pending_for_external(
     Lấy các row có status=analyzing + external_orchestrator=set, sắp xếp
     theo created_at asc (FIFO). External service sẽ poll endpoint này.
     """
+    reclaim_before = datetime.now(UTC) - timedelta(minutes=5)
     stmt = (
         select(DfirInvestigation)
         .where(
             DfirInvestigation.status == "analyzing",
             DfirInvestigation.external_orchestrator == "hermes",
+            (DfirInvestigation.external_polled_at.is_(None))
+            | (DfirInvestigation.external_polled_at < reclaim_before),
         )
         .order_by(DfirInvestigation.created_at)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
-    return list((await db.execute(stmt)).scalars().all())
+    rows = list((await db.execute(stmt)).scalars().all())
+    if rows:
+        now = datetime.now(UTC)
+        for inv in rows:
+            inv.external_polled_at = now
+            inv.hermes_status = "claimed"
+        await db.commit()
+    return rows
 
 
 async def mark_external_polled(
@@ -737,7 +804,7 @@ async def submit_external_result(
     *,
     investigation_id: str,
     api_key_id: str | None,
-    report_markdown: str,
+    report_markdown: str | None,
     severity: str = "info",
     findings_count: int | None = None,
     findings: list | None = None,
@@ -765,25 +832,49 @@ async def submit_external_result(
     """
     inv = (
         await db.execute(
-            select(DfirInvestigation).where(DfirInvestigation.id == investigation_id)
+            select(DfirInvestigation)
+            .where(DfirInvestigation.id == investigation_id)
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if not inv:
-        raise LlmError(f"Investigation {investigation_id} không tồn tại")
+        raise ExternalInvestigationNotFound(
+            f"Investigation {investigation_id} không tồn tại"
+        )
     if not inv.external_orchestrator:
-        raise LlmError(
+        raise ExternalCallbackConflict(
             f"Investigation {investigation_id} không dùng external orchestrator "
             f"(external_orchestrator={inv.external_orchestrator})"
         )
+    if not idempotency_key:
+        raise ExternalCallbackConflict("Thiếu idempotency key cho external callback")
+    if inv.external_orchestrator == "deepagent" and not inv.external_job_id:
+        raise ExternalCallbackConflict(
+            f"Investigation {inv.id} chưa được bind với DeepAgent job"
+        )
     if inv.status in ("completed", "failed"):
+        if (
+            not inv.external_callback_idempotency_key
+            or idempotency_key != inv.external_callback_idempotency_key
+        ):
+            raise ExternalCallbackConflict(
+                f"Investigation {inv.id} đã nhận callback với idempotency key khác"
+            )
         logger.info(
             "submit_external_result: investigation %s đã ở status=%s — idempotent no-op",
             inv.id, inv.status,
         )
-        await db.refresh(inv)
         snapshot = _inv_to_dict(inv)
         await db.commit()  # đóng session sạch
         return snapshot
+    if inv.external_job_id and external_job_id != inv.external_job_id:
+        raise ExternalCallbackConflict(
+            f"external_job_id không khớp với job đã dispatch cho investigation {inv.id}"
+        )
+    if inv.status != "analyzing":
+        raise ExternalCallbackConflict(
+            f"Investigation {inv.id} chưa sẵn sàng nhận callback (status={inv.status})"
+        )
 
     # Lưu kết quả
     now = datetime.now(UTC)
@@ -797,7 +888,7 @@ async def submit_external_result(
         inv.hermes_response = raw_response
         if external_job_id:
             inv.external_job_id = external_job_id
-        await db.refresh(inv)
+        inv.external_callback_idempotency_key = idempotency_key
         snapshot = _inv_to_dict(inv)
         await db.commit()
         # Notify failed
@@ -827,6 +918,7 @@ async def submit_external_result(
     inv.hermes_response = raw_response
     if external_job_id:
         inv.external_job_id = external_job_id
+    inv.external_callback_idempotency_key = idempotency_key
 
     # Cộng token vào daily budget nếu có
     if (input_tokens or 0) + (output_tokens or 0) > 0:
@@ -834,8 +926,7 @@ async def submit_external_result(
         if cfg:
             cfg.tokens_used_today = (cfg.tokens_used_today or 0) + (input_tokens or 0) + (output_tokens or 0)
 
-    # Snapshot TRƯỚC commit (sau commit các field bị expire → lazy load → MissingGreenlet)
-    await db.refresh(inv)  # đảm bảo tất cả field đã load
+    # Snapshot trước commit; refresh ở đây sẽ làm mất các thay đổi chưa commit.
     snapshot = _inv_to_dict(inv)
     await db.commit()
     logger.info(

@@ -1,9 +1,67 @@
 from __future__ import annotations
 
-import pytest
+import asyncio
+import hashlib
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import select
+
 from app.core.security import encrypt_aes_gcm
-from app.db.models import VelociraptorConfig
+from app.db.models import (
+    ApiKey,
+    DfirInvestigation,
+    Machine,
+    Organization,
+    User,
+    VelociraptorConfig,
+)
+
+
+@pytest.mark.asyncio
+async def test_investigation_created_at_is_evaluated_for_each_insert(db):
+    """Catch a frozen ORM timestamp default shared by later investigations."""
+    organization = Organization(name="Created-at test organization")
+    db.add(organization)
+    await db.flush()
+    admin = User(
+        org_id=organization.id,
+        full_name="Created-at test admin",
+        email="created-at-test@example.invalid",
+    )
+    db.add(admin)
+    await db.flush()
+    machine = Machine(
+        org_id=organization.id,
+        machine_uuid="created-at-test-machine",
+        hostname="CREATED-AT-TEST",
+        status="online",
+    )
+    db.add(machine)
+    await db.flush()
+
+    first = DfirInvestigation(
+        machine_id=machine.id,
+        artifacts=[],
+        requested_by=admin.id,
+    )
+    db.add(first)
+    await db.flush()
+    first_created_at = first.created_at
+
+    await asyncio.sleep(0.01)
+
+    second = DfirInvestigation(
+        machine_id=machine.id,
+        artifacts=[],
+        requested_by=admin.id,
+    )
+    db.add(second)
+    await db.flush()
+
+    assert second.created_at > first_created_at
 
 
 async def _admin_headers(client, seeded_env):
@@ -38,6 +96,525 @@ async def test_deepagent_enablement_is_persisted_without_service_credentials(cli
     response = await client.get("/api/admin/llm-dfir/config", headers=headers)
     assert response.status_code == 200
     assert response.json()["deepagent_service_token_set"] is False
+@pytest.mark.asyncio
+async def test_external_callback_persists_failure_status(
+    client, seeded_env, session_factory, monkeypatch
+):
+    """Callback lỗi phải chuyển investigation khỏi trạng thái analyzing."""
+    callback_key = "callback-test-key-32-characters-long"
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == seeded_env["email"]))
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="callback-test-machine",
+            hostname="CALLBACK-TEST",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+        investigation = DfirInvestigation(
+            machine_id=machine.id,
+            artifacts=[],
+            status="analyzing",
+            external_orchestrator="deepagent",
+            external_job_id="callback-test-job",
+            requested_by=admin.id,
+        )
+        db.add(investigation)
+        db.add(
+            ApiKey(
+                name="callback-test",
+                key_hash=hashlib.sha256(callback_key.encode()).hexdigest(),
+                scope="investigation:write",
+                created_by=admin.id,
+            )
+        )
+        await db.commit()
+        investigation_id = investigation.id
+
+    async def no_notification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        no_notification,
+    )
+    response = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "callback-test-job",
+        },
+        json={
+            "report_markdown": "# Điều tra thất bại",
+            "error": "LLM planner failed",
+            "external_job_id": "callback-test-job",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.error == "External (deepagent): LLM planner failed"
+
+
+async def _create_callback_investigation(
+    session_factory,
+    seeded_env,
+    *,
+    external_job_id="deepagent-test-job",
+    external_orchestrator="deepagent",
+):
+    callback_key = "callback-test-key-32-characters-long"
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == seeded_env["email"]))
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="callback-test-machine",
+            hostname="CALLBACK-TEST",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+        investigation = DfirInvestigation(
+            machine_id=machine.id,
+            artifacts=[],
+            status="analyzing",
+            external_orchestrator=external_orchestrator,
+            external_job_id=external_job_id,
+            requested_by=admin.id,
+        )
+        db.add(investigation)
+        db.add(
+            ApiKey(
+                name="callback-test",
+                key_hash=hashlib.sha256(callback_key.encode()).hexdigest(),
+                scope="investigation:write",
+                created_by=admin.id,
+            )
+        )
+        await db.commit()
+        return investigation.id, callback_key
+
+
+@pytest.mark.asyncio
+async def test_deepagent_callback_requires_bound_job_id(
+    client, seeded_env, session_factory, monkeypatch
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    async with session_factory() as db:
+        inv = await db.get(DfirInvestigation, investigation_id)
+        assert inv is not None
+        inv.external_job_id = None
+        await db.commit()
+    async def no_notification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        no_notification,
+    )
+    response = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "unbound-job-callback",
+        },
+        json={"report_markdown": "# unbound"},
+    )
+
+    status = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers={"Authorization": f"Bearer {callback_key}"},
+        json={
+            "external_job_id": "stale-job",
+            "phase": "running",
+            "progress_percent": 0,
+        },
+    )
+
+    assert response.status_code == 409
+    assert status.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_deepagent_dispatch_timeout_without_job_is_requeued(
+    seeded_env, session_factory
+):
+    investigation_id, _ = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    from app.services import dfir_investigation as inv_svc
+
+    async with session_factory() as db:
+        inv = await db.get(DfirInvestigation, investigation_id)
+        assert inv is not None
+        inv.external_job_id = None
+        inv.hermes_status = "dispatching"
+        inv.started_at = datetime.now(UTC) - timedelta(minutes=5)
+        await db.commit()
+        await inv_svc._process_one(db, inv)
+
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "pending"
+        assert stored.hermes_status == "recovery_required"
+
+
+@pytest.mark.asyncio
+async def test_external_status_ignores_regressing_progress(
+    client, seeded_env, session_factory
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    headers = {"Authorization": f"Bearer {callback_key}"}
+    first = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers=headers,
+        json={
+            "external_job_id": "deepagent-test-job",
+            "phase": "collecting",
+            "progress_percent": 60,
+        },
+    )
+    second = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers=headers,
+        json={
+            "external_job_id": "deepagent-test-job",
+            "phase": "running",
+            "progress_percent": 40,
+        },
+    )
+    cross_phase = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers=headers,
+        json={
+            "external_job_id": "deepagent-test-job",
+            "phase": "finalizing",
+            "progress_percent": 0,
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["accepted"] is False
+    assert cross_phase.status_code == 200
+    assert cross_phase.json()["accepted"] is False
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.hermes_status == "collecting"
+        assert stored.hermes_response["progress_percent"] == 60
+
+
+@pytest.mark.asyncio
+async def test_missing_deepagent_job_is_requeued_after_restart(
+    seeded_env, session_factory, monkeypatch
+):
+    investigation_id, _ = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+
+    class FakeResponse:
+        status_code = 404
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(inv_svc.httpx, "AsyncClient", FakeClient)
+    async with session_factory() as db:
+        inv = await db.get(DfirInvestigation, investigation_id)
+        assert inv is not None
+        await inv_svc._process_one(db, inv)
+
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "pending"
+        assert stored.external_job_id is None
+        assert stored.hermes_status == "recovery_required"
+
+
+@pytest.mark.asyncio
+async def test_external_pending_poll_claims_each_investigation_once(
+    client, seeded_env, session_factory
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env, external_orchestrator="hermes"
+    )
+    headers = {"Authorization": f"Bearer {callback_key}"}
+    first = await client.get(
+        "/api/external/llm-dfir/investigations/pending", headers=headers
+    )
+    second = await client.get(
+        "/api/external/llm-dfir/investigations/pending", headers=headers
+    )
+
+    assert first.status_code == 200
+    assert str(investigation_id) in {item["id"] for item in first.json()}
+    assert second.status_code == 200
+    assert second.json() == []
+
+
+@pytest.mark.asyncio
+async def test_external_callback_rejects_invalid_investigation_id(
+    client, seeded_env, session_factory
+):
+    _, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    response = await client.post(
+        "/api/external/llm-dfir/investigations/not-a-uuid/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "invalid-id-callback",
+        },
+        json={"report_markdown": "# invalid"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_external_callback_returns_404_for_unknown_investigation(
+    client, seeded_env, session_factory
+):
+    _, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    response = await client.post(
+        f"/api/external/llm-dfir/investigations/{uuid4()}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "unknown-id-callback",
+        },
+        json={"report_markdown": "# unknown"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_external_callback_rejects_wrong_external_job(
+    client, seeded_env, session_factory, monkeypatch
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    async def no_notification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        no_notification,
+    )
+    response = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "wrong-job-callback",
+        },
+        json={
+            "report_markdown": "# stale",
+            "external_job_id": "different-job",
+        },
+    )
+
+    assert response.status_code == 409
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "analyzing"
+        assert stored.callback_received_at is None
+
+
+@pytest.mark.asyncio
+async def test_external_status_rejects_wrong_external_job(
+    client, seeded_env, session_factory
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    response = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers={"Authorization": f"Bearer {callback_key}"},
+        json={
+            "external_job_id": "different-job",
+            "phase": "running",
+            "progress_percent": 50,
+        },
+    )
+
+    assert response.status_code == 409
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.external_job_id == "deepagent-test-job"
+        assert stored.hermes_status is None
+
+
+@pytest.mark.asyncio
+async def test_external_status_rejects_wrong_job_for_terminal_investigation(
+    client, seeded_env, session_factory, monkeypatch
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    async def no_notification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        no_notification,
+    )
+    result = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "terminal-result",
+        },
+        json={"report_markdown": "# done", "external_job_id": "deepagent-test-job"},
+    )
+    status = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/status",
+        headers={"Authorization": f"Bearer {callback_key}"},
+        json={
+            "external_job_id": "different-job",
+            "phase": "running",
+            "progress_percent": 50,
+        },
+    )
+
+    assert result.status_code == 200
+    assert status.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_external_failure_callback_allows_missing_report_but_requires_idempotency(
+    client, seeded_env, session_factory, monkeypatch
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    async def no_notification(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        no_notification,
+    )
+    base = {"error": "planner failed", "external_job_id": "deepagent-test-job"}
+    missing_key = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={"Authorization": f"Bearer {callback_key}"},
+        json={**base, "report_markdown": "# failure"},
+    )
+    missing_report = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "failure-callback-1",
+        },
+        json=base,
+    )
+
+    assert missing_key.status_code == 400
+    assert missing_report.status_code == 200
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "failed"
+        assert stored.external_callback_idempotency_key == "failure-callback-1"
+
+
+@pytest.mark.asyncio
+async def test_external_callback_rejects_different_idempotency_key(
+    client, seeded_env, session_factory, monkeypatch
+):
+    investigation_id, callback_key = await _create_callback_investigation(
+        session_factory, seeded_env
+    )
+    notifications = []
+
+    async def record_notification(*args, **kwargs):
+        notifications.append((args, kwargs))
+
+    monkeypatch.setattr(
+        "app.services.dfir_investigation._notify_investigation_result",
+        record_notification,
+    )
+    payload = {
+        "report_markdown": "# first report",
+        "severity": "low",
+        "findings_count": 0,
+        "findings": [],
+        "iocs": [],
+        "llm_model": "test-model",
+        "external_job_id": "deepagent-test-job",
+        "input_tokens": 10,
+        "output_tokens": 20,
+    }
+    first = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "callback-result-1",
+        },
+        json=payload,
+    )
+    replay = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "callback-result-1",
+        },
+        json={**payload, "external_job_id": None, "report_markdown": "# replay"},
+    )
+    second = await client.post(
+        f"/api/external/llm-dfir/investigations/{investigation_id}/result",
+        headers={
+            "Authorization": f"Bearer {callback_key}",
+            "X-Idempotency-Key": "callback-result-2",
+        },
+        json={**payload, "report_markdown": "# overwritten"},
+    )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert second.status_code == 409
+    assert len(notifications) == 1
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, investigation_id)
+        assert stored is not None
+        assert stored.status == "completed"
+        assert stored.report_markdown == "# first report"
+        assert stored.input_tokens == 10
+        assert stored.output_tokens == 20
+        assert stored.external_callback_idempotency_key == "callback-result-1"
 
 
 @pytest.mark.asyncio
@@ -155,7 +732,10 @@ async def test_velociraptor_test_runs_mcp_check_after_success(
             return {"ok": True, "client_count_sampled": 2}
 
     async def fake_build(_db):
-        return FakeVelociraptor(), SimpleNamespace(server_url="https://veloci.example.test:8889")
+        return FakeVelociraptor(), SimpleNamespace(
+            server_url="https://veloci.example.test:8889",
+            client_config_encrypted=encrypt_aes_gcm(yaml_content),
+        )
 
     async def fake_mcp(_yaml):
         return {"ok": True, "service_ok": True, "mcp_ok": True, "tools": ["list_clients"], "client_count_sampled": 2, "error": None}

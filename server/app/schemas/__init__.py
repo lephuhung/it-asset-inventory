@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from app.db.models import MachineStatus, TokenStatus
 
@@ -1367,7 +1367,7 @@ class ExternalInvestigationResultIn(BaseModel):
 
     Idempotent qua X-Idempotency-Key header.
     """
-    report_markdown: str
+    report_markdown: str | None = None
     severity: str | None = "info"  # critical|high|medium|low|info
     findings_count: int | None = None
     findings: list | None = None  # [{id, title, mitre_id, severity, evidence, recommendation}]
@@ -1380,6 +1380,12 @@ class ExternalInvestigationResultIn(BaseModel):
     error: str | None = None  # nếu set → status=failed
     external_job_id: str | None = None  # correl với job_id phía Hermes
     raw_response: dict | None = None  # full response để audit
+
+    @model_validator(mode="after")
+    def validate_report_for_success(self):
+        if not self.error and not self.report_markdown:
+            raise ValueError("report_markdown bắt buộc khi callback thành công")
+        return self
 
 
 class ExternalInvestigationStatusIn(BaseModel):

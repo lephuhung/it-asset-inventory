@@ -864,12 +864,13 @@ class DfirInvestigation(Base):
     findings: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # structured findings từ Hermes
     iocs: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # IoC list từ Hermes
     callback_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    external_callback_idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.now(UTC), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
 
