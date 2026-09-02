@@ -275,7 +275,23 @@ async def run_pending_investigations() -> dict:
             return {"skipped": True, "reason": "llm_disabled"}
 
         # ── B-2 fix: use capacity-bounded FIFO claim for DeepAgent rows ──────
-        # First reconcile active (analyzing) DeepAgent slots.
+        # Reconcile active jobs before counting their slots. A DeepAgent process
+        # restart loses its in-memory registry; a 404 safely returns that row to
+        # pending so this same tick can reclaim it in FIFO order.
+        active_deepagent_rows = (
+            await db.execute(
+                select(DfirInvestigation)
+                .where(
+                    DfirInvestigation.external_orchestrator == "deepagent",
+                    DfirInvestigation.status == "analyzing",
+                )
+                .order_by(DfirInvestigation.created_at.asc())
+                .with_for_update(skip_locked=True)
+            )
+        ).scalars().all()
+        for inv in active_deepagent_rows:
+            await _state_check_deepagent_job(db, inv)
+
         # Then atomically claim up to available slots using the claim helper.
         # Non-DeepAgent rows (local LLM) are processed unchanged.
         active_deepagent_claimed = await claim_deepagent_dispatches(

@@ -1070,7 +1070,7 @@ async def test_run_pending_investigations_respects_capacity_for_deepagent(
         config_mod.settings.deepagent_max_concurrent_jobs = 2
 
         try:
-            result = await inv_svc.run_pending_investigations()
+            await inv_svc.run_pending_investigations()
         finally:
             config_mod.settings.deepagent_max_concurrent_jobs = original_capacity
     finally:
@@ -1089,3 +1089,61 @@ async def test_run_pending_investigations_respects_capacity_for_deepagent(
     if len(state_dispatch_calls) == 2:
         assert state_dispatch_calls[1] == str(inv_ids[1]), \
             f"Second dispatch should be second-oldest (id={inv_ids[1]}), got {state_dispatch_calls[1]}"
+
+
+@pytest.mark.asyncio
+async def test_run_pending_investigations_recovers_missing_deepagent_job_before_claiming(
+    session_factory, seeded_env, monkeypatch
+):
+    """A lost active DeepAgent job is requeued and redispatched on the next tick."""
+    from app.services import dfir_investigation as inv_svc
+
+    recovery_calls: list[str] = []
+    dispatch_calls: list[str] = []
+
+    async def fake_is_llm_enabled(_db):
+        return True
+
+    async def requeue_missing_job(db, inv):
+        recovery_calls.append(str(inv.id))
+        inv.status = "pending"
+        inv.external_job_id = None
+        await db.commit()
+
+    async def tracking_dispatch(_db, inv):
+        dispatch_calls.append(str(inv.id))
+
+    monkeypatch.setattr(inv_svc, "_is_llm_enabled", fake_is_llm_enabled)
+    monkeypatch.setattr(inv_svc, "_state_check_deepagent_job", requeue_missing_job)
+    monkeypatch.setattr(inv_svc, "_state_dispatch_deepagent", tracking_dispatch)
+
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == seeded_env["email"]))
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="restart-recovery-machine",
+            hostname="RESTART-RECOVERY",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+        active = await _seed_deepagent_investigation(
+            db,
+            machine=machine,
+            requested_by=admin.id,
+            status="analyzing",
+            external_job_id="deepagent-lost-job",
+        )
+        await db.commit()
+
+    original_capacity = inv_svc.settings.deepagent_max_concurrent_jobs
+    inv_svc.settings.deepagent_max_concurrent_jobs = 2
+    try:
+        await inv_svc.run_pending_investigations()
+    finally:
+        inv_svc.settings.deepagent_max_concurrent_jobs = original_capacity
+
+    assert recovery_calls == [str(active.id)]
+    assert dispatch_calls == [str(active.id)]
