@@ -70,10 +70,12 @@ async def test_runner_emits_progress_before_final_result(monkeypatch, capsys):
 
     assert [item[1]["phase"] for item in callback.statuses] == [
         "running",
+        "collecting",
         "finalizing",
     ]
     assert callback.statuses[0][1]["progress_percent"] == 0
-    assert callback.statuses[1][1]["progress_percent"] == 90
+    assert callback.statuses[1][1]["progress_percent"] == 30  # collecting phase
+    assert callback.statuses[2][1]["progress_percent"] == 90
     assert len(callback.results) == 1
 
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
@@ -144,6 +146,97 @@ async def test_runner_logs_safe_failed_job_summary(monkeypatch, capsys):
     assert summary["timed_out_tool_count"] == 0
     assert summary["error_type"] == "RuntimeError"
     assert raw_activity not in json.dumps(summary)
+
+
+@pytest.mark.asyncio
+async def test_runner_reports_event_log_triage_and_detail_progress(monkeypatch, capsys):
+    """Progress callback must include collecting phase with step counts, no raw event IDs."""
+    collected_statuses: list[dict] = []
+
+    class FakeGraph:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {
+                "assessment": Assessment(
+                    severity="info",
+                    confidence="high",
+                    executive_summary="Không phát hiện bất thường.",
+                    conclusion="Không đủ bằng chứng.",
+                ),
+                "report_markdown": "# Báo cáo",
+                "evidence": [],
+            }
+
+    class FakeCallback:
+        async def submit_status(self, *_args, **kwargs):
+            collected_statuses.append(dict(kwargs))
+            return {"accepted": True}
+
+        async def submit(self, *_args, **_kwargs):
+            return {"status": "completed"}
+
+    monkeypatch.setattr(
+        "deepagent.runner.build_investigation_graph",
+        lambda **_kwargs: FakeGraph(),
+    )
+    callback = FakeCallback()
+    runner = InvestigationRunner(
+        settings=Settings(max_steps=4),
+        mcp=object(),
+        model=type("FakeModel", (), {"model_name": "test-model"})(),
+        callback=callback,
+    )
+    request = InvestigationRequest(
+        investigation_id="11111111-1111-1111-1111-111111111111",
+        client_id="C.test-client",
+        hostname="TEST-HOST",
+        time_range={
+            "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            "to": datetime.now(UTC).isoformat(),
+        },
+        suspicious_activity="Kiểm tra read-only",
+        llm_runtime=LlmRuntime(
+            base_url="http://llm.example/v1",
+            api_key="test-key",
+            model="test-model",
+        ),
+        velociraptor_api_client_yaml="ca_certificate: test\nclient_cert: test\nclient_private_key: test\n",
+    )
+
+    await runner.run(request, job_id="deepagent-test-job")
+
+    # Must have collecting phase before finalizing
+    phases = [s["phase"] for s in collected_statuses]
+    assert "collecting" in phases, f"Expected 'collecting' in phases: {phases}"
+
+    # H-4 fix: verify current_step and total_steps are set on each status
+    for status in collected_statuses:
+        assert "current_step" in status, f"current_step missing in {status}"
+        assert "total_steps" in status, f"total_steps missing in {status}"
+        assert isinstance(status["current_step"], int), \
+            f"current_step must be int, got {type(status['current_step'])}"
+        assert isinstance(status["total_steps"], int), \
+            f"total_steps must be int, got {type(status['total_steps'])}"
+
+    # Collecting phase must have safe messages without raw event IDs
+    for status in collected_statuses:
+        if status["phase"] == "collecting":
+            # Never expose raw event IDs in message
+            assert "4624" not in str(status.get("message", ""))
+            assert "Security" not in str(status.get("message", ""))
+
+    # Verify phase progression: running(0) -> collecting(1) -> finalizing(8)
+    running_status = next((s for s in collected_statuses if s["phase"] == "running"), None)
+    collecting_status = next((s for s in collected_statuses if s["phase"] == "collecting"), None)
+    finalizing_status = next((s for s in collected_statuses if s["phase"] == "finalizing"), None)
+    if running_status is not None:
+        assert running_status["current_step"] == 0, \
+            f"running phase should have current_step=0, got {running_status['current_step']}"
+    if collecting_status is not None:
+        assert collecting_status["current_step"] == 1, \
+            f"collecting phase should have current_step=1, got {collecting_status['current_step']}"
+    if finalizing_status is not None:
+        assert finalizing_status["current_step"] == finalizing_status["total_steps"], \
+            f"finalizing should have current_step == total_steps, got {finalizing_status}"
 
 
 @pytest.mark.asyncio

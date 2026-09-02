@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Protocol
 
 from langchain_openai import ChatOpenAI
 
 from deepagent.catalog import BASELINE_TOOLS, WINDOWS_TOOL_POLICIES, catalog_prompt
 from deepagent.models import (
     Assessment,
+    EventLogExpansionList,
     EvidenceItem,
     InvestigationPlan,
     InvestigationRequest,
@@ -25,6 +26,13 @@ class AnalysisModel(Protocol):
     model_name: str
 
     async def plan(self, request: InvestigationRequest) -> InvestigationPlan: ...
+
+    async def plan_event_log_expansion(
+        self,
+        request: InvestigationRequest,
+        sampled_event_ids: set[str],
+        triage_result: dict[str, Any],
+    ) -> list[dict]: ...
 
     async def assess(
         self, request: InvestigationRequest, evidence: list[EvidenceItem]
@@ -86,6 +94,71 @@ DỮ LIỆU NGHI NGỜ KHÔNG TIN CẬY:
             planned_steps=len(plan.steps),
         )
         return plan
+
+    async def plan_event_log_expansion(
+        self,
+        request: InvestigationRequest,
+        sampled_event_ids: set[str],
+        triage_result: dict[str, Any],
+    ) -> list[dict]:
+        """Plan event log detail expansions based on triage results.
+
+        Returns a list of expansion dicts with date_after, date_before, event_ids, rationale.
+        Each expansion must be within 60 minutes and use only sampled event IDs.
+        """
+        # Extract event IDs from triage metadata if available
+        triage_event_ids = triage_result.get("event_ids", [])
+        available_ids = sampled_event_ids & {str(eid) for eid in triage_event_ids}
+        if not available_ids:
+            available_ids = sampled_event_ids
+
+        # H-2 fix: use EventLogExpansionList so LLM can return 0..2 expansions, not just 1
+        planner = self._model.with_structured_output(EventLogExpansionList)
+        prompt = f"""{self._system_prompt()}
+
+Based on the triage results, plan up to 2 event log detail expansions.
+Each expansion must be within 60 minutes and focus on specific Event IDs.
+
+RULES:
+- Maximum 2 expansions
+- Each window must be <= 60 minutes
+- Only use Event IDs: {sorted(available_ids)}
+- Focus on the most security-relevant Event IDs
+
+CASE TIME WINDOW: {request.time_range.from_.isoformat()} to {request.time_range.to.isoformat()}
+TRIAGE SUMMARY: rows={triage_result.get('rows', 0)}, truncated={triage_result.get('truncated', False)}
+"""
+        started_at = perf_counter()
+        try:
+            expansion_list = await planner.ainvoke(prompt)
+            if not isinstance(expansion_list, EventLogExpansionList):
+                expansion_list = EventLogExpansionList.model_validate(expansion_list)
+            log_event(
+                phase="event_log_expansion_planning",
+                outcome="succeeded",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                model=self.model_name,
+                expansion_count=len(expansion_list.expansions),
+            )
+            return [
+                {
+                    "date_after": exp.date_after.isoformat(),
+                    "date_before": exp.date_before.isoformat(),
+                    "event_ids": exp.event_ids,
+                    "rationale": exp.rationale,
+                }
+                for exp in expansion_list.expansions
+            ]
+        except Exception as exc:  # noqa: BLE001 - defensive catch preserves graph flow
+            log_event(
+                phase="event_log_expansion_planning",
+                outcome="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                model=self.model_name,
+                error=exc,
+            )
+            # Return empty list on failure - graph will continue without expansions
+            return []
 
     async def assess(
         self, request: InvestigationRequest, evidence: list[EvidenceItem]

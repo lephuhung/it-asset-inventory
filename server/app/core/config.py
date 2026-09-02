@@ -180,6 +180,7 @@ class Settings(BaseSettings):
     deepagent_api_key: str = ""
     deepagent_request_timeout_seconds: int = 30
     deepagent_default_lookback_hours: int = 24
+    deepagent_max_concurrent_jobs: int = Field(default=2, ge=1, le=3)
 
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)

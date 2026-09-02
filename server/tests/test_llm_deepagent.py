@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.security import encrypt_aes_gcm
@@ -18,6 +19,7 @@ from app.db.models import (
     User,
     VelociraptorConfig,
 )
+from app.services.dfir_investigation import claim_deepagent_dispatches
 
 
 @pytest.mark.asyncio
@@ -804,3 +806,286 @@ async def test_llm_models_endpoint_loads_models_from_saved_config(client, seeded
 
     assert response.status_code == 200
     assert response.json() == {"models": ["qwen3:8b", "qwen3:14b"]}
+
+
+# ── DeepAgent capacity queue tests ─────────────────────────────────────
+
+
+async def _seed_deepagent_investigation(
+    db,
+    *,
+    machine,
+    requested_by,
+    status="pending",
+    external_orchestrator="deepagent",
+    external_job_id=None,
+):
+    """Helper: tạo một DfirInvestigation dùng DeepAgent orchestrator."""
+    inv = DfirInvestigation(
+        machine_id=machine.id,
+        velociraptor_client_id="test-client-id",
+        artifacts=[],
+        status=status,
+        external_orchestrator=external_orchestrator,
+        external_job_id=external_job_id,
+        requested_by=requested_by,
+    )
+    db.add(inv)
+    await db.flush()
+    return inv
+
+
+async def _seed_deepagent_investigations(
+    db, machine, requested_by, count=3
+):
+    """Helper: tạo N DfirInvestigation dùng DeepAgent orchestrator."""
+    return [
+        await _seed_deepagent_investigation(db, machine=machine, requested_by=requested_by)
+        for _ in range(count)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deepagent_dispatch_claims_oldest_pending_rows_up_to_capacity(
+    session_factory, seeded_env
+):
+    """claim_deepagent_dispatches chọn đúng N rows pending cũ nhất theo FIFO."""
+    async with session_factory() as db:
+        admin = (
+            await db.execute(
+                select(User).where(User.email == seeded_env["email"])
+            )
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="capacity-test-machine",
+            hostname="CAPACITY-TEST",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+
+        first, second, third = await _seed_deepagent_investigations(
+            db, machine=machine, requested_by=admin.id, count=3
+        )
+        await db.commit()
+
+        claimed = await claim_deepagent_dispatches(db, capacity=2)
+        assert [row.id for row in claimed] == [first.id, second.id]
+        await db.refresh(third)
+        assert third.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_deepagent_dispatch_claim_respects_existing_active_slots(
+    session_factory, seeded_env
+):
+    """Active (analyzing) rows chiếm slot; chỉ dispatch đủ capacity còn trống."""
+    async with session_factory() as db:
+        admin = (
+            await db.execute(
+                select(User).where(User.email == seeded_env["email"])
+            )
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="active-slot-machine",
+            hostname="ACTIVE-SLOT",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+
+        # 1 active analyzing
+        active = await _seed_deepagent_investigation(
+            db,
+            machine=machine,
+            requested_by=admin.id,
+            status="analyzing",
+            external_job_id="deepagent-active-job",
+        )
+        # 2 pending
+        queued = await _seed_deepagent_investigations(
+            db, machine=machine, requested_by=admin.id, count=2
+        )
+        await db.commit()
+
+        claimed = await claim_deepagent_dispatches(db, capacity=2)
+        # capacity=2, active=1 → còn 1 slot → chỉ claimed 1
+        assert [row.id for row in claimed] == [queued[0].id]
+        await db.refresh(active)
+        assert active.status == "analyzing"
+
+
+@pytest.mark.asyncio
+async def test_deepagent_max_concurrent_jobs_setting_validation():
+    """Settings deepagent_max_concurrent_jobs phải nằm trong khoảng 1..3."""
+    from app.core.config import Settings
+
+    # Giá trị hợp lệ
+    for val in (1, 2, 3):
+        s = Settings(deepagent_max_concurrent_jobs=val)
+        assert s.deepagent_max_concurrent_jobs == val
+
+    # Giá trị không hợp lệ
+    for val in (0, 4, -1, 10):
+        with pytest.raises(ValidationError):
+            Settings(deepagent_max_concurrent_jobs=val)
+
+
+@pytest.mark.asyncio
+async def test_deepagent_dispatch_claim_returns_empty_when_capacity_zero(
+    session_factory, seeded_env
+):
+    """capacity=0 không dispatch gì cả."""
+    async with session_factory() as db:
+        admin = (
+            await db.execute(
+                select(User).where(User.email == seeded_env["email"])
+            )
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="zero-capacity-machine",
+            hostname="ZERO-CAPACITY",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+
+        await _seed_deepagent_investigations(
+            db, machine=machine, requested_by=admin.id, count=3
+        )
+        await db.commit()
+
+        claimed = await claim_deepagent_dispatches(db, capacity=0)
+        assert claimed == []
+
+
+@pytest.mark.asyncio
+async def test_deepagent_dispatch_claim_skips_non_deepagent_rows(
+    session_factory, seeded_env
+):
+    """Chỉ chọn rows có external_orchestrator=deepagent."""
+    async with session_factory() as db:
+        admin = (
+            await db.execute(
+                select(User).where(User.email == seeded_env["email"])
+            )
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid="non-deepagent-machine",
+            hostname="NON-DEEPAGENT",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+
+        # hermes orchestrator — không được claim
+        hermes_inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="test-client",
+            artifacts=[],
+            status="pending",
+            external_orchestrator="hermes",
+            requested_by=admin.id,
+        )
+        db.add(hermes_inv)
+        await db.flush()
+
+        # deepagent orchestrator — được claim
+        deepagent_inv = await _seed_deepagent_investigation(
+            db, machine=machine, requested_by=admin.id
+        )
+        await db.commit()
+
+        claimed = await claim_deepagent_dispatches(db, capacity=2)
+        assert len(claimed) == 1
+        assert claimed[0].id == deepagent_inv.id
+
+
+@pytest.mark.asyncio
+async def test_run_pending_investigations_respects_capacity_for_deepagent(
+    session_factory, seeded_env, monkeypatch
+):
+    """run_pending_investigations must not dispatch more than capacity DeepAgent jobs.
+
+    Regression test for B-2: the claim helper was dead code in production;
+    run_pending_investigations still iterated over .limit(5) regardless of capacity.
+    """
+    state_dispatch_calls: list[str] = []
+
+    # Patch _state_dispatch_deepagent to track calls without actually HTTP-posting
+    from app.services import dfir_investigation as inv_svc
+
+    original_state_dispatch = inv_svc._state_dispatch_deepagent
+
+    async def tracking_dispatch(db, inv):
+        state_dispatch_calls.append(str(inv.id))
+        # Don't actually HTTP POST — we're testing the claim loop, not dispatch
+
+    inv_svc._state_dispatch_deepagent = tracking_dispatch
+
+    original_is_llm_enabled = inv_svc._is_llm_enabled
+
+    async def fake_is_llm_enabled(_db):
+        return True
+
+    inv_svc._is_llm_enabled = fake_is_llm_enabled
+
+    try:
+        async with session_factory() as db:
+            admin = (
+                await db.execute(select(User).where(User.email == seeded_env["email"]))
+            ).scalar_one()
+            machine = Machine(
+                org_id=admin.org_id,
+                machine_uuid="three-job-machine",
+                hostname="THREE-JOB",
+                status="online",
+            )
+            db.add(machine)
+            await db.flush()
+            # Create 3 deepagent pending investigations (FIFO order by created_at)
+            inv_ids = []
+            for i in range(3):
+                inv = DfirInvestigation(
+                    machine_id=machine.id,
+                    velociraptor_client_id="test-client-id",
+                    artifacts=[],
+                    status="pending",
+                    external_orchestrator="deepagent",
+                    requested_by=admin.id,
+                )
+                db.add(inv)
+                await db.flush()
+                inv_ids.append(inv.id)
+            await db.commit()
+
+        # Simulate capacity=2 via monkeypatching the settings
+        from app.core import config as config_mod
+
+        original_capacity = config_mod.settings.deepagent_max_concurrent_jobs
+        config_mod.settings.deepagent_max_concurrent_jobs = 2
+
+        try:
+            result = await inv_svc.run_pending_investigations()
+        finally:
+            config_mod.settings.deepagent_max_concurrent_jobs = original_capacity
+    finally:
+        inv_svc._state_dispatch_deepagent = original_state_dispatch
+        inv_svc._is_llm_enabled = original_is_llm_enabled
+
+    # At capacity=2, at most 2 jobs should be dispatched
+    assert len(state_dispatch_calls) <= 2, (
+        f"Expected at most 2 dispatches at capacity=2, got {len(state_dispatch_calls)}: {state_dispatch_calls}"
+    )
+
+    # The dispatched jobs must be the oldest ones (FIFO)
+    if len(state_dispatch_calls) >= 1:
+        assert state_dispatch_calls[0] == str(inv_ids[0]), \
+            f"First dispatch should be oldest (id={inv_ids[0]}), got {state_dispatch_calls[0]}"
+    if len(state_dispatch_calls) == 2:
+        assert state_dispatch_calls[1] == str(inv_ids[1]), \
+            f"Second dispatch should be second-oldest (id={inv_ids[1]}), got {state_dispatch_calls[1]}"

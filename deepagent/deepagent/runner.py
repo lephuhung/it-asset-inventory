@@ -41,12 +41,27 @@ class InvestigationRunner:
             sensitive_values=sensitive_values,
         ):
             try:
+                # H-4 fix: set current_step and total_steps from phase/progress_percent
+                total_steps = self.settings.max_steps + 2  # +2 for event-log detail steps
                 await self._status(
                     request,
                     external_job_id=external_job_id,
                     phase="running",
                     progress_percent=0,
+                    current_step=0,
+                    total_steps=total_steps,
                     message="DeepAgent bắt đầu điều tra read-only",
+                )
+                # Emit collecting phase before triage/detail phases.
+                # Step counts are safe; never include raw event IDs, filters, or prompts.
+                await self._status(
+                    request,
+                    external_job_id=external_job_id,
+                    phase="collecting",
+                    progress_percent=30,
+                    current_step=1,
+                    total_steps=total_steps,
+                    message="Đang thu thập dữ liệu từ endpoint...",
                 )
                 state = await self.graph.ainvoke(
                     {"request": request},
@@ -57,6 +72,8 @@ class InvestigationRunner:
                     external_job_id=external_job_id,
                     phase="finalizing",
                     progress_percent=90,
+                    current_step=total_steps,
+                    total_steps=total_steps,
                     message="Đã thu thập xong, đang tổng hợp báo cáo",
                 )
                 assessment = state["assessment"]
@@ -116,6 +133,8 @@ class InvestigationRunner:
         external_job_id: str,
         phase: str,
         progress_percent: int,
+        current_step: int | None = None,
+        total_steps: int | None = None,
         message: str,
     ) -> None:
         try:
@@ -124,7 +143,8 @@ class InvestigationRunner:
                 external_job_id=external_job_id,
                 phase=phase,
                 progress_percent=progress_percent,
-                total_steps=self.settings.max_steps,
+                current_step=current_step,
+                total_steps=total_steps,
                 message=message,
             )
         except Exception:  # noqa: BLE001 - progress không làm fail investigation

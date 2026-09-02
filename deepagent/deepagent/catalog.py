@@ -11,6 +11,13 @@ class ToolPolicy:
 
 # Chỉ gồm helper thu thập read-only từ mcp-velociraptor. Không đưa run_vql,
 # hunt, collect_file, collect_artifact, YARA, quarantine hay kill_process vào graph.
+#
+# M-4 fix: windows_event_logs is in the allowlist so it survives plan sanitization,
+# but the graph MUST route it exclusively through the typed bounded triage/detail
+# APIs (collect_event_log_triage / collect_event_log_detail). The graph detects
+# windows_event_logs steps and routes them to the typed helpers; routing through
+# generic collect() would bypass the 100-row cap and VQL LIMIT. See graph.py
+# collect_step() which enforces this routing.
 WINDOWS_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "windows_pslist": ToolPolicy("Tiến trình đang chạy và command line"),
     "windows_netstat_enriched": ToolPolicy("Kết nối mạng gắn với tiến trình"),

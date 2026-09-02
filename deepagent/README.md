@@ -73,3 +73,44 @@ cd deepagent
 .venv/bin/ruff check deepagent tests
 .venv/bin/pytest -q
 ```
+
+## Dung lượng hàng đợi (Capacity)
+
+DeepAgent hỗ trợ xử lý song song nhiều investigation thông qua semaphore có dung lượng giới hạn:
+
+| Biến môi trường | Phạm vi | Mặc định | Mô tả |
+|---|---|---|---|
+| `DEEPAGENT_MAX_CONCURRENT_JOBS` | 1–3 | 2 | Số investigation chạy đồng thời |
+
+Khi đạt dung lượng tối đa, investigation mới được xếp vào hàng đợi FIFO theo `created_at ASC`. Job giữ trạng thái `queued` cho đến khi semaphore cho phép bắt đầu.
+
+### Thay đổi dung lượng
+
+```bash
+# Chỉnh sửa biến môi trường trong .env
+DEEPAGENT_MAX_CONCURRENT_JOBS=3
+
+# Rebuild và recreate service
+docker compose -p asset-inventory -f server/deploy/docker-compose.yml up -d --build deepagent
+```
+
+## Giới hạn vận hành
+
+| Giới hạn | Giá trị | Mô tả |
+|---|---|---|
+| Bước tối đa (triage) | 6 | Số bước plan ban đầu |
+| Bước chi tiết tối đa | 2 | Số lần gọi detail sau triage |
+| Dòng event log tối đa | 50 | Mỗi trang detail |
+| Metadata event log | 100 dòng | Kết quả triage đầu tiên |
+| Thời gian cửa sổ detail | 60 phút | Giới hạn mỗi expansion |
+| Ngân sách bằng chứng | 120.000 ký tự | Tổng evidence JSON |
+| Timeout tool | 180 giây | MCP bridge deadline |
+
+## Progress callback an toàn
+
+Progress callback chỉ gửi các trường an toàn, không bao gồm dữ liệu nhạy cảm:
+
+- `phase`: `running` → `collecting` → `finalizing` → hoàn thành
+- `progress_percent`: 0–100
+- `current_step` / `total_steps`: số bước (không có event ID thực)
+- `message`: chỉ mô tả tiến trình (không có filter/logs/prompts thực)

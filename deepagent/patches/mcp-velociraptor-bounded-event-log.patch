@@ -1,0 +1,438 @@
+diff --git a/mcp_velociraptor_bridge.py b/mcp_velociraptor_bridge.py
+index 2865fc5..1939dbe 100644
+--- a/mcp_velociraptor_bridge.py
++++ b/mcp_velociraptor_bridge.py
+@@ -406,7 +406,7 @@ async def linux_groups(
+ ) -> str:
+     """
+     List groups on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -431,7 +431,7 @@ async def linux_mounts(
+ ) -> str:
+     """
+     List mounts on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -463,7 +463,7 @@ async def linux_netstat_enriched(
+ ) -> str:
+     """
+     List network connections (netstat) with process metadata on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -504,7 +504,7 @@ async def linux_users(
+ ) -> str:
+     """
+     List users on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -970,7 +970,7 @@ async def windows_netstat_enriched(
+     return _run_collection_tool(client_id, artifact, parameters, Fields, result_scope, org_id)
+ 
+ ##
+-## Persistence 
++## Persistence
+ @mcp.tool()
+ async def windows_scheduled_tasks(
+     client_id: str,
+@@ -1020,7 +1020,7 @@ async def windows_services(
+ 
+ 
+ ##
+-## User Activity 
++## User Activity
+ 
+ @mcp.tool()
+ async def windows_recentdocs(
+@@ -1389,7 +1389,7 @@ async def windows_execution_shimcache(
+ async def windows_execution_prefetch(
+     client_id: str,
+     org_id: str = "",
+-    Fields: str = "Binary,CreationTime,LastRunTimes,RunCount,Hash" 
++    Fields: str = "Binary,CreationTime,LastRunTimes,RunCount,Hash"
+     #"Executable,LastRunTimes,RunCount,PrefetchFileName,Version,Hash,CreationTime,ModificationTime,Binary"
+ ) -> str:
+     """
+@@ -2142,6 +2142,334 @@ async def list_macos_artifacts(
+         name_regex,
+     )
+ 
++# This file contains the bounded event-log helpers to be appended to mcp_velociraptor_bridge.py
++# F-1 fix: bounded helpers defined BEFORE mcp.run() so decorators execute
++# F-2 fix: no try/except ImportError stub; use distinct _bounded_run_collection_tool
++# F-3 fix: numeric_limit = max_rows + 1 to probe truncation at source
++
++import json
++from typing import Any
++
++# Note: ArtifactParameters is defined at bridge line 23 (from ParameterValue).
++# Note: realtime_collection is available from bridge line 9 (from velociraptor_api import *).
++# We use a distinct helper name to avoid shadowing upstream _run_collection_tool.
++
++
++def _bounded_run_collection_tool(
++    client_id: str,
++    artifact: str,
++    parameters: ArtifactParameters | None,
++    fields: str,
++    result_scope: str,
++    org_id: str = "",
++    numeric_limit: int | None = None,
++) -> str:
++    """Run a realtime collection and return JSON result.
++
++    F-2 fix: uses the already-imported realtime_collection from velociraptor_api;
++    no ImportError fallback needed.
++    """
++    try:
++        # M-2 fix: pass numeric_limit as separate parameter, not concatenated to result_scope
++        rows = realtime_collection(
++            client_id=client_id,
++            artifact=artifact,
++            parameters=parameters,
++            fields=fields,
++            result_scope=result_scope,
++            org_id=org_id or None,
++            numeric_limit=numeric_limit,
++        )
++        return json.dumps({"ok": True, "data": rows})
++    except Exception as exc:
++        return json.dumps({"ok": False, "error": str(exc)})
++
++
++# ---------------------------------------------------------------------------
++# Bounded event-log helpers (deepagent-queue-bounded-log-triage)
++# ---------------------------------------------------------------------------
++# Validated event-log profiles (code-owned, no arbitrary field/vql/regex).
++# Each profile maps to an EvtxHunter (channel, id) tuple pre-quoted at
++# patch-load time; deepagent never passes raw VQL, arbitrary paths, arbitrary
++# field lists, or arbitrary regexes through these helpers.
++
++_EVENT_LOG_PROFILES = {
++    # High-frequency security events for initial triage
++    "security_core": (
++        "Security",
++        "4624|4625|4634|4647|4672|4720|4722|4723|4724|4725|4726|4732|4756|4757|4767|4768|4769|4776",
++    ),
++    # PowerShell script block events (4104/4105/4106)
++    "powershell": (
++        "Microsoft-Windows-PowerShell/Operational",
++        "4104|4105|4106",
++    ),
++    # Sysmon network/creation events
++    "sysmon": (
++        "Microsoft-Windows-Sysmon/Operational",
++        "1|3|7|8|10|11|12|13|14|15|17|18|19|20|21|22|23",
++    ),
++    # Application log core error/warning
++    "app_core": (
++        "Application",
++        "1000|1001|1002",
++    ),
++    # System log core events (service state, reboot, disk)
++    "system_core": (
++        "System",
++        "6005|6006|6008|7036|7045",
++    ),
++}
++
++# Fixed triage fields – metadata only, no raw event data
++_TRIAGE_FIELDS = "EventTime,Computer,Channel,Provider,EventID"
++# Fixed detail fields – metadata + compact EventData summary
++_DETAIL_FIELDS = "EventTime,Computer,Channel,Provider,EventID,EventData"
++
++
++def _bounded_realtime_collection(
++    client_id: str,
++    artifact: str,
++    parameters: ArtifactParameters | None,
++    fields: str,
++    result_scope: str,
++    org_id: str = "",
++    max_rows: int | None = None,
++) -> tuple[str, int, int]:
++    """Wrap _bounded_run_collection_tool with an optional LIMIT on source results.
++
++    F-3 fix: numeric_limit = max_rows + 1 probes the source for truncation.
++    The VQL LIMIT is set to max_rows + 1 so we can detect when more rows
++    exist than the cap. This allows:
++    - original_row_count = observed probe count
++    - was_truncated = len(rows) > max_rows (real detection)
++    - data["data"] = rows[:max_rows] (defense-in-depth)
++
++    Returns (result_json, original_row_count, was_truncated) so callers can
++    compute accurate metadata.
++    """
++    # F-3 fix: numeric_limit = max_rows + 1 to probe truncation at source.
++    # We request one more row than the cap so we can detect if there are
++    # more rows available (and report truncated=true).
++    if max_rows is not None and max_rows > 0:
++        numeric_limit = max_rows + 1
++    else:
++        numeric_limit = None
++
++    result = _bounded_run_collection_tool(
++        client_id, artifact, parameters, fields, result_scope, org_id, numeric_limit
++    )
++
++    data = json.loads(result)
++    if not data.get("ok"):
++        return result, 0, False
++
++    rows = data.get("data", [])
++    if not isinstance(rows, list):
++        return result, 0, False
++
++    # F-3 fix: original_row_count is the raw row count from the probe query.
++    original_row_count = len(rows)
++
++    # F-3 fix: was_truncated = observed rows > max_rows
++    # This is real truncation detection (not dead code like numeric_limit = max_rows).
++    was_truncated = max_rows is not None and original_row_count > max_rows
++
++    # Cap Python-side as defense-in-depth.
++    if was_truncated:
++        data["data"] = rows[:max_rows]
++
++    return json.dumps(data), original_row_count, was_truncated
++
++
++def _validate_event_ids(event_ids: str) -> str:
++    """Return validated comma-joined EventID string, or raise ValueError."""
++    if not event_ids.strip():
++        raise ValueError("event_ids must not be empty.")
++    parts = [p.strip() for p in event_ids.split(",")]
++    for eid in parts:
++        if not eid.isdigit():
++            raise ValueError(f"Invalid EventID: {eid!r}. Only numeric strings allowed.")
++    return ",".join(parts)
++
++
++def _extract_unique_event_ids(rows: list) -> list[str]:
++    """Extract unique EventIDs from raw rows for expansion guidance."""
++    seen: set[str] = set()
++    event_ids: list[str] = []
++    for row in rows:
++        if isinstance(row, dict):
++            eid = str(row.get("EventID", ""))
++            if eid and eid not in seen:
++                seen.add(eid)
++                event_ids.append(eid)
++    return event_ids
++
++
++@mcp.tool()
++async def windows_event_logs_triage(
++    client_id: str,
++    org_id: str = "",
++    DateAfter: str = "",
++    DateBefore: str = "",
++    profile_id: str = "security_core",
++    max_rows: int = 100,
++    fields: str = "",
++) -> str:
++    """
++    Bounded triage collector for Windows event logs.
++
++    Only pre-defined, code-owned profiles are accepted. The collector uses fixed
++    triage metadata fields and enforces a 100-row hard cap.
++
++    Args:
++        client_id: Velociraptor client ID.
++        org_id: Optional Velociraptor org ID for multi-tenant deployments.
++        DateAfter: ISO-8601 lower bound (inclusive).
++        DateBefore: ISO-8601 upper bound (inclusive).
++        profile_id: One of the validated profile IDs. Defaults to "security_core".
++        max_rows: Row cap; bridge enforces an absolute cap of 100 rows.
++        fields: Ignored (fixed fields are used). Accepted for interface compat.
++
++    Returns:
++        JSON envelope with bounded source-result metadata:
++        {rows, original_rows, returned_rows, truncated, sampled_event_ids}.
++    """
++    if profile_id not in _EVENT_LOG_PROFILES:
++        return json.dumps({
++            "ok": False,
++            "error": (
++                f"Unknown profile_id: {profile_id!r}. "
++                f"Valid profiles: {sorted(_EVENT_LOG_PROFILES)!r}"
++            ),
++        })
++
++    hard_cap = 100
++    enforced_max = min(max_rows, hard_cap)
++
++    channel_re, id_re = _EVENT_LOG_PROFILES[profile_id]
++    parameters = {
++        "ChannelRegex": channel_re,
++        "IdRegex": id_re,
++        "DateAfter": DateAfter,
++        "DateBefore": DateBefore,
++    }
++    result, original_rows, was_truncated = _bounded_realtime_collection(
++        client_id=client_id,
++        artifact="Windows.EventLogs.EvtxHunter",
++        parameters=parameters,
++        fields=_TRIAGE_FIELDS,
++        result_scope="",
++        org_id=org_id,
++        max_rows=enforced_max,
++    )
++    # Wrap with source-result metadata.
++    data = json.loads(result)
++    if data.get("ok"):
++        rows = data.get("data", [])
++        rows_in_payload = len(rows)
++        # F-3 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
++        # sampled_event_ids are extracted from the raw (pre-truncation) rows for
++        # expansion guidance.
++        sampled_event_ids = _extract_unique_event_ids(rows[:enforced_max])
++        data["data"] = {
++            "rows": rows_in_payload,
++            "original_rows": original_rows,
++            "returned_rows": rows_in_payload,
++            "truncated": was_truncated,
++            "sampled_event_ids": sampled_event_ids,
++        }
++        return json.dumps(data)
++    return result
++
++
++@mcp.tool()
++async def windows_event_logs_detail(
++    client_id: str,
++    org_id: str = "",
++    DateAfter: str = "",
++    DateBefore: str = "",
++    profile_id: str = "",
++    event_ids: str = "",
++    max_rows: int = 50,
++) -> str:
++    """
++    Bounded detail collector for Windows event logs with validated EventID list.
++
++    Accepts either a pre-defined profile_id OR an explicit event_ids list, but
++    not both. Enforces a 50-row hard cap and fixed detail fields.
++
++    Args:
++        client_id: Velociraptor client ID.
++        org_id: Optional Velociraptor org ID for multi-tenant deployments.
++        DateAfter: ISO-8601 lower bound.
++        DateBefore: ISO-8601 upper bound.
++        profile_id: Optional validated profile ID (mutually exclusive with event_ids).
++        event_ids: Comma-separated numeric EventID strings.
++        max_rows: Row cap; bridge enforces an absolute cap of 50 rows.
++
++    Returns:
++        JSON envelope with bounded source-result metadata.
++    """
++    # Mutually exclusive: profile OR event_ids
++    if profile_id and event_ids:
++        return json.dumps({
++            "ok": False,
++            "error": "Provide either profile_id or event_ids, not both.",
++        })
++    if not profile_id and not event_ids:
++        return json.dumps({
++            "ok": False,
++            "error": "Must provide either profile_id or event_ids.",
++        })
++
++    hard_cap = 50
++    enforced_max = min(max_rows, hard_cap)
++
++    if profile_id:
++        if profile_id not in _EVENT_LOG_PROFILES:
++            return json.dumps({
++                "ok": False,
++                "error": f"Unknown profile_id: {profile_id!r}.",
++            })
++        channel_re, id_re = _EVENT_LOG_PROFILES[profile_id]
++    else:
++        try:
++            _validate_event_ids(event_ids)
++        except ValueError as exc:
++            return json.dumps({"ok": False, "error": str(exc)})
++        channel_re = "."
++        id_re = event_ids
++
++    parameters = {
++        "ChannelRegex": channel_re,
++        "IdRegex": id_re,
++        "DateAfter": DateAfter,
++        "DateBefore": DateBefore,
++    }
++    result, original_rows, was_truncated = _bounded_realtime_collection(
++        client_id=client_id,
++        artifact="Windows.EventLogs.EvtxHunter",
++        parameters=parameters,
++        fields=_DETAIL_FIELDS,
++        result_scope="",
++        org_id=org_id,
++        max_rows=enforced_max,
++    )
++    data = json.loads(result)
++    if data.get("ok"):
++        rows = data.get("data", [])
++        rows_in_payload = len(rows)
++        # F-3 fix: original_rows is raw row count before VQL/Python truncation.
++        # was_truncated reflects whether truncation actually occurred.
++        data["data"] = {
++            "rows": rows_in_payload,
++            "original_rows": original_rows,
++            "returned_rows": rows_in_payload,
++            "truncated": was_truncated,
++        }
++        return json.dumps(data)
++    return result
+ 
+ if __name__ == "__main__":
+     mcp.run(show_banner=False)
+diff --git a/velociraptor_api.py b/velociraptor_api.py
+index ef10f3e..dce8f89 100644
+--- a/velociraptor_api.py
++++ b/velociraptor_api.py
+@@ -310,7 +310,7 @@ def run_vql_query(vql: str, org_id: str | None = None):
+     results = []
+     if DEBUG_VQL:
+         logger.debug("VQL request: %s", request)
+-    
++
+     for resp in stub.Query(request):
+         if hasattr(resp, "error") and resp.error:
+             raise RuntimeError(f"Velociraptor API error: {resp.error}")
+@@ -548,17 +548,21 @@ def realtime_collection(
+     fields: str = "*",
+     result_scope: str = "",
+     org_id: str | None = None,
++    numeric_limit: int | None = None,
+ ) -> list[dict]:
+     normalized_artifact = normalize_artifact_name(artifact)
+     normalized_result_artifact = normalize_artifact_name(f"{artifact}{result_scope}")
+     normalized_fields = normalize_fields(fields)
+     normalized_parameters = normalize_env_dict(parameters)
++    # F-3 fix: numeric_limit appends LIMIT to the final SELECT VQL expression,
++    # not to result_scope (which is concatenated to the artifact name).
++    limit_clause = f" LIMIT {int(numeric_limit)}" if numeric_limit is not None and numeric_limit > 0 else ""
+     vql = (
+         f"LET collection <= collect_client(urgent='TRUE',client_id={vql_literal(client_id)}, "
+         f"artifacts={vql_literal(normalized_artifact)}, env=dict({normalized_parameters})) "
+         f"LET get_monitoring = SELECT * FROM watch_monitoring(artifact='System.Flow.Completion') WHERE FlowId = collection.flow_id LIMIT 1 "
+         f"LET get_results = SELECT * FROM source(client_id=collection.request.client_id, flow_id=collection.flow_id,artifact={vql_literal(normalized_result_artifact)}) "
+-        f"SELECT {normalized_fields} FROM foreach(row=get_monitoring, query=get_results) "
++        f"SELECT {normalized_fields} FROM foreach(row=get_monitoring, query=get_results){limit_clause}"
+     )
+ 
+     return run_vql_query(vql, org_id=org_id)

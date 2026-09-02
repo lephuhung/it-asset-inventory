@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -8,6 +9,11 @@ from pydantic import BaseModel, Field, model_validator
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 Confidence = Literal["high", "medium", "low"]
+
+# Constants for event log expansion constraints
+MAX_DETAIL_CALLS: int = 2
+MAX_EVENT_LOG_DURATION_MINUTES: int = 60
+MAX_EVENT_LOG_EXPANSION_ROWS: int = 50
 
 
 class TimeRange(BaseModel):
@@ -133,3 +139,295 @@ class McpTestRequest(BaseModel):
     """Velociraptor config is supplied only for the lifetime of an MCP check."""
 
     velociraptor_api_client_yaml: str = Field(min_length=32, max_length=256_000)
+
+
+# =============================================================================
+# Task 3: Event log expansion and evidence budgeting
+# =============================================================================
+
+
+class EventLogExpansion(BaseModel):
+    """Validated event log expansion request.
+
+    Represents a bounded request to collect event log detail for specific
+    Event IDs within a constrained time window.
+    """
+
+    date_after: datetime
+    date_before: datetime
+    event_ids: list[str] = Field(min_length=1)
+    rationale: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> EventLogExpansion:
+        if self.date_after.tzinfo is None or self.date_before.tzinfo is None:
+            raise ValueError("Expansion timestamps must have timezone")
+        self.date_after = self.date_after.astimezone(UTC)
+        self.date_before = self.date_before.astimezone(UTC)
+        duration = self.date_before - self.date_after
+        if duration.total_seconds() < 0:
+            raise ValueError("date_after must be before date_before")
+        if duration > timedelta(minutes=MAX_EVENT_LOG_DURATION_MINUTES):
+            raise ValueError(f"Expansion window exceeds {MAX_EVENT_LOG_DURATION_MINUTES} minutes")
+        return self
+
+
+class EventLogExpansionList(BaseModel):
+    """H-2 fix: wrapper to allow LLM to return 0..2 expansions as a list.
+
+    Using a single-item schema (with_structured_output(EventLogExpansion)) capped
+    production at one expansion. This wrapper uses min_length=0 so the LLM can
+    return an empty list when no expansion is needed, and max_length=2 so it can
+    return up to two items. The downstream validate_event_log_expansions also caps
+    at MAX_DETAIL_CALLS=2.
+    """
+
+    expansions: list[EventLogExpansion] = Field(
+        default_factory=list,
+        min_length=0,
+        max_length=2,
+    )
+
+
+def validate_event_log_expansions(
+    expansions: list[dict | EventLogExpansion],
+    request_range: TimeRange,
+    sampled_event_ids: set[str],
+) -> tuple[list[EventLogExpansion], list[str]]:
+    """Validate a list of event log expansions.
+
+    Returns (accepted, rejections) where:
+    - accepted: list of valid EventLogExpansion objects, limited to MAX_DETAIL_CALLS
+    - rejections: safe static labels for invalid choices (never raw LLM text)
+
+    Validation rules:
+    - Reject more than MAX_DETAIL_CALLS items
+    - Reject expansions with duration over 60 minutes
+    - Reject timestamps outside request.time_range
+    - Reject empty or unknown Event IDs (must be in sampled_event_ids)
+    - Reject values that fail strict model schema validation
+
+    Rejection labels use only static strings; never echo raw LLM text.
+    """
+    validated: list[EventLogExpansion] = []
+    seen_ids: set[str] = set()  # Deduplicate by event_ids content
+    rejections: list[str] = []
+
+    for expansion in expansions:
+        if len(validated) >= MAX_DETAIL_CALLS:
+            # Record overflow as safe limitation (M-3 fix)
+            if len(expansions) > MAX_DETAIL_CALLS:
+                rejections.append("expansion_count_exceeded")
+            break  # Stop after MAX_DETAIL_CALLS
+
+        try:
+            # Parse dict input to EventLogExpansion
+            if isinstance(expansion, dict):
+                parsed = EventLogExpansion.model_validate(expansion)
+            else:
+                parsed = expansion
+
+            # Check event IDs are in sampled set
+            if not parsed.event_ids:
+                rejections.append("event_ids_empty")
+                continue
+            unknown_ids = set(parsed.event_ids) - sampled_event_ids
+            if unknown_ids:
+                rejections.append("event_ids_not_in_sample")
+                continue  # Skip expansions with unknown event IDs
+
+            # Check window is within request range
+            if parsed.date_after < request_range.from_:
+                rejections.append("window_before_case_range")
+                continue  # Outside case window
+            if parsed.date_before > request_range.to:
+                rejections.append("window_after_case_range")
+                continue  # Outside case window
+
+            # Check duration is within limit
+            duration = parsed.date_before - parsed.date_after
+            if duration > timedelta(minutes=MAX_EVENT_LOG_DURATION_MINUTES):
+                rejections.append("window_exceeds_60_minutes")
+                continue  # Duration exceeded
+
+            # Deduplicate by event_ids content
+            ids_key = frozenset(parsed.event_ids)
+            if ids_key in seen_ids:
+                rejections.append("expansion_duplicate")
+                continue
+            seen_ids.add(ids_key)
+
+            validated.append(parsed)
+
+        except Exception as exc:  # noqa: BLE001 - defensive catch preserves graph flow
+            # Reject values that fail strict model schema (M-3 fix: categorize the failure)
+            exc_msg = str(exc).lower()
+            if "60 minutes" in exc_msg or "exceeds" in exc_msg:
+                rejections.append("window_exceeds_60_minutes")
+            elif "before" in exc_msg or "after" in exc_msg:
+                rejections.append("window_before_case_range")
+            elif "timezone" in exc_msg:
+                rejections.append("expansion_schema_invalid")
+            else:
+                rejections.append("expansion_schema_invalid")
+            continue
+
+    return validated, rejections
+
+
+def fit_evidence_budget(
+    evidence: list[EvidenceItem],
+    max_chars: int,
+) -> list[EvidenceItem]:
+    """Bound evidence to fit within max_chars using deterministic JSON-size accounting.
+
+    Rules:
+    - Preserve evidence IDs, tools, success/error/timeout flags, truncation metadata
+    - Preserve the earliest safe preview (from truncated data)
+    - Reduce data fields until serialized list is at or below max_chars
+    - Never remove an evidence item entirely unless its data budget is zero
+    """
+    if max_chars <= 0:
+        return []  # Zero budget means no evidence
+
+    # First pass: check if we're already within budget
+    def serialize(items: list[EvidenceItem]) -> str:
+        return json.dumps(
+            [item.model_dump(mode="json") for item in items],
+            ensure_ascii=False,
+            default=str,
+        )
+
+    current = serialize(evidence)
+    if len(current) <= max_chars:
+        return evidence
+
+    # Need to reduce data. Create a copy to modify.
+    bounded: list[EvidenceItem] = []
+
+    for item in evidence:
+        # Copy the item
+        new_data = item.data
+        was_truncated = isinstance(new_data, dict) and new_data.get("truncated")
+
+        # For items with large data, try to reduce
+        if new_data is not None:
+            # Serialize with current data to estimate size
+            test_item = EvidenceItem(
+                evidence_id=item.evidence_id,
+                tool=item.tool,
+                collected_at=item.collected_at,
+                ok=item.ok,
+                data=new_data,
+                error=item.error,
+                timeout=item.timeout,
+            )
+            test_serialized = serialize(bounded + [test_item])
+
+            if len(test_serialized) <= max_chars:
+                bounded.append(test_item)
+            elif was_truncated:
+                # Already truncated, keep preview only
+                preview = new_data.get("preview", "") if isinstance(new_data, dict) else str(new_data)
+                new_item = EvidenceItem(
+                    evidence_id=item.evidence_id,
+                    tool=item.tool,
+                    collected_at=item.collected_at,
+                    ok=item.ok,
+                    data={"truncated": True, "preview": preview},
+                    error=item.error,
+                    timeout=item.timeout,
+                )
+                test_serialized = serialize(bounded + [new_item])
+                if len(test_serialized) <= max_chars:
+                    bounded.append(new_item)
+                else:
+                    # Keep only metadata, no data
+                    minimal_item = EvidenceItem(
+                        evidence_id=item.evidence_id,
+                        tool=item.tool,
+                        collected_at=item.collected_at,
+                        ok=item.ok,
+                        data={"truncated": True, "preview": preview[:100] if preview else ""},
+                        error=item.error,
+                        timeout=item.timeout,
+                    )
+                    bounded.append(minimal_item)
+            else:
+                # Try to truncate the data
+                if isinstance(new_data, dict):
+                    # Keep only simple metadata
+                    new_item = EvidenceItem(
+                        evidence_id=item.evidence_id,
+                        tool=item.tool,
+                        collected_at=item.collected_at,
+                        ok=item.ok,
+                        data={"truncated": True, "preview": f"{len(new_data)} fields truncated"},
+                        error=item.error,
+                        timeout=item.timeout,
+                    )
+                    test_serialized = serialize(bounded + [new_item])
+                    if len(test_serialized) <= max_chars:
+                        bounded.append(new_item)
+                    else:
+                        bounded.append(item)  # Fallback - keep as-is
+                elif isinstance(new_data, list):
+                    # Try reducing list size
+                    new_item = EvidenceItem(
+                        evidence_id=item.evidence_id,
+                        tool=item.tool,
+                        collected_at=item.collected_at,
+                        ok=item.ok,
+                        data={"truncated": True, "preview": f"{len(new_data)} rows truncated"},
+                        error=item.error,
+                        timeout=item.timeout,
+                    )
+                    test_serialized = serialize(bounded + [new_item])
+                    if len(test_serialized) <= max_chars:
+                        bounded.append(new_item)
+                    else:
+                        bounded.append(item)  # Fallback
+                else:
+                    # Other data types - keep as-is if we have room
+                    bounded.append(item)
+        else:
+            # No data field, just add metadata
+            bounded.append(item)
+
+    # Final check: if still over budget, truncate further
+    current = serialize(bounded)
+    if len(current) <= max_chars:
+        return bounded
+
+    # Aggressive truncation - keep only metadata
+    result: list[EvidenceItem] = []
+    for item in evidence:
+        minimal = EvidenceItem(
+            evidence_id=item.evidence_id,
+            tool=item.tool,
+            collected_at=item.collected_at,
+            ok=item.ok,
+            data={"truncated": True, "preview": "data truncated due to budget"},
+            error=item.error,
+            timeout=item.timeout,
+        )
+        test = serialize(result + [minimal])
+        if len(test) <= max_chars:
+            result.append(minimal)
+        else:
+            # Just metadata
+            bare = EvidenceItem(
+                evidence_id=item.evidence_id,
+                tool=item.tool,
+                collected_at=item.collected_at,
+                ok=item.ok,
+                data=None,
+                error=item.error,
+                timeout=item.timeout,
+            )
+            test = serialize(result + [bare])
+            if len(test) <= max_chars:
+                result.append(bare)
+            # If still doesn't fit, skip this item
+
+    return result
