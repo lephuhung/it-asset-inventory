@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -155,6 +155,21 @@ export default function StatsPage() {
   useEffect(() => {
     void loadList();
   }, [loadList]);
+
+  // Tự làm mới mỗi 10s để theo dõi trạng thái investigation đang chạy.
+  // Bỏ qua tick nếu lượt trước chưa xong (tránh request chồng lấn) hoặc tab đang ẩn.
+  const pollingRef = useRef(false);
+  useEffect(() => {
+    const tick = () => {
+      if (pollingRef.current || document.hidden) return;
+      pollingRef.current = true;
+      void Promise.allSettled([loadStats(), loadList()]).finally(() => {
+        pollingRef.current = false;
+      });
+    };
+    const id = setInterval(tick, 10_000);
+    return () => clearInterval(id);
+  }, [loadStats, loadList]);
 
   const handleStop = async () => {
     if (!confirmStop) return;
