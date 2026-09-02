@@ -338,18 +338,22 @@ class VelociraptorMCP:
 
         data = payload.get("data")
         # Source-result metadata envelope from bridge
+        # B-3 fix: include sampled_event_ids so graph uses actual EventIDs, not hardcoded fallback
         if isinstance(data, dict):
             return {
                 "rows": data.get("rows", 0),
                 "original_rows": data.get("original_rows", 0),
                 "returned_rows": data.get("returned_rows", 0),
                 "truncated": bool(data.get("truncated")),
+                # B-3: pass actual EventIDs from triage rows to graph for expansion validation
+                "event_ids": data.get("sampled_event_ids", []),
             }
         return {
             "rows": 0,
             "original_rows": 0,
             "returned_rows": 0,
             "truncated": False,
+            "event_ids": [],
         }
 
     async def collect_event_log_detail(

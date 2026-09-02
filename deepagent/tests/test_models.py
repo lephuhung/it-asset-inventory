@@ -68,8 +68,10 @@ def test_expansion_rejects_time_outside_case_window() -> None:
         "event_ids": ["4688"],
         "rationale": "x",
     }
-    result = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688"})
-    assert result == []
+    accepted, rejections = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688"})
+    assert accepted == []
+    # M-3 fix: rejection label is recorded
+    assert len(rejections) > 0
 
 
 def test_expansion_rejects_duration_over_60_minutes() -> None:
@@ -83,8 +85,10 @@ def test_expansion_rejects_duration_over_60_minutes() -> None:
         "event_ids": ["4688"],
         "rationale": "x",
     }
-    result = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688"})
-    assert result == []
+    accepted, rejections = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688"})
+    assert accepted == []
+    # M-3 fix: rejection label is recorded
+    assert "window_exceeds_60_minutes" in rejections
 
 
 def test_expansion_rejects_unknown_event_ids() -> None:
@@ -92,8 +96,10 @@ def test_expansion_rejects_unknown_event_ids() -> None:
     from deepagent.models import validate_event_log_expansions
 
     expansion = valid_expansion("99999")  # Not in sampled set
-    result = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688", "1102"})
-    assert result == []
+    accepted, rejections = validate_event_log_expansions([expansion], REQUEST_RANGE, {"4688", "1102"})
+    assert accepted == []
+    # M-3 fix: rejection label is recorded
+    assert "event_ids_not_in_sample" in rejections
 
 
 def test_expansion_keeps_at_most_two_50_row_requests_with_sampled_ids() -> None:
@@ -105,10 +111,12 @@ def test_expansion_keeps_at_most_two_50_row_requests_with_sampled_ids() -> None:
         valid_expansion("1102"),
         valid_expansion("4625"),
     ]
-    result = validate_event_log_expansions(
+    accepted, rejections = validate_event_log_expansions(
         expansions, REQUEST_RANGE, {"4688", "1102", "4625"}
     )
-    assert len(result) == 2
+    assert len(accepted) == 2
+    # M-3 fix: overflow rejection is recorded
+    assert "expansion_count_exceeded" in rejections
 
 
 def test_fit_evidence_budget_never_exceeds_global_max_chars() -> None:

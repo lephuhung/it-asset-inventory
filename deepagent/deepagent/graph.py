@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal, TypedDict
@@ -15,12 +14,12 @@ from deepagent.analysis_model import (
 from deepagent.config import Settings
 from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
 from deepagent.models import (
+    MAX_DETAIL_CALLS,
     Assessment,
-    EvidenceItem,
     EventLogExpansion,
+    EvidenceItem,
     InvestigationPlan,
     InvestigationRequest,
-    MAX_DETAIL_CALLS,
     fit_evidence_budget,
     validate_event_log_expansions,
 )
@@ -52,6 +51,8 @@ class InvestigationState(TypedDict, total=False):
     evidence: list[EvidenceItem]
     assessment: Assessment
     report_markdown: str
+    # M-3 fix: safe limitations from expansion validation (never raw LLM text)
+    limitations: list[str]
 
 
 def build_investigation_graph(
@@ -94,7 +95,7 @@ def build_investigation_graph(
 
         # Two-stage collection for windows_event_logs
         if step.tool == "windows_event_logs" and hasattr(mcp, "collect_event_log_triage"):
-            return await _collect_event_log_with_expansion(
+            result = await _collect_event_log_with_expansion(
                 mcp=mcp,
                 model=model,
                 request=request,
@@ -103,6 +104,13 @@ def build_investigation_graph(
                 index=index,
                 settings=settings,
             )
+            # M-3 fix: merge validation rejection labels as safe limitations
+            new_limitations = result.get("limitations", [])
+            existing_limitations = state.get("limitations", [])
+            return {
+                **{k: v for k, v in result.items() if k != "limitations"},
+                "limitations": [*existing_limitations, *new_limitations],
+            }
 
         # Generic collection for other tools
         timed_out = False
@@ -145,15 +153,23 @@ def build_investigation_graph(
             settings.max_evidence_chars,
         )
         assessment = await model.assess(state["request"], bounded_evidence)
-        return {
-            "assessment": validate_assessment_evidence(assessment, bounded_evidence)
-        }
+        # M-3 fix: append safe validation rejection labels to assessment limitations
+        validated = validate_assessment_evidence(assessment, bounded_evidence)
+        graph_limitations = state.get("limitations", [])
+        if graph_limitations:
+            validated.limitations = [*(validated.limitations or []), *graph_limitations]
+        return {"assessment": validated}
 
     def render_report(state: InvestigationState) -> dict:
         started_at = perf_counter()
         try:
+            # H-1 fix: apply evidence budget before report rendering
+            bounded_evidence = fit_evidence_budget(
+                state["evidence"],
+                settings.max_evidence_chars,
+            )
             report_markdown = build_markdown_report(
-                state["request"], state["assessment"], state["evidence"]
+                state["request"], state["assessment"], bounded_evidence
             )
         except Exception as exc:
             log_event(
@@ -207,6 +223,8 @@ async def _collect_event_log_with_expansion(
     triage_evidence_id = evidence_id
     triage_timed_out = False
     triage_result: dict[str, Any] = {}
+    # M-3 fix: initialize validation_rejections for the return value
+    validation_rejections: list[str] = []
 
     try:
         triage_result = await mcp.collect_event_log_triage(
@@ -226,7 +244,8 @@ async def _collect_event_log_with_expansion(
             timeout=triage_timed_out,
         )
         evidence = [*evidence, triage_item]
-        return {"evidence": evidence, "step_index": index + 1}
+        # M-3: no rejections yet (triage failed before validation)
+        return {"evidence": evidence, "step_index": index + 1, "limitations": []}
 
     # Create triage evidence item
     triage_item = EvidenceItem(
@@ -238,16 +257,15 @@ async def _collect_event_log_with_expansion(
     )
     evidence = [*evidence, triage_item]
 
-    # Extract sampled Event IDs from triage result (trusted envelope structure)
+    # Extract sampled Event IDs from triage result (B-3 fix: use actual EventIDs, not hardcoded fallback)
     sampled_event_ids: set[str] = set()
-    if isinstance(triage_result, dict):
-        # Event IDs from triage metadata
-        if "event_ids" in triage_result:
-            sampled_event_ids = set(str(eid) for eid in triage_result["event_ids"])
-        elif "rows" in triage_result:
-            # If no explicit event_ids, use a default security set
-            # This ensures we have something to expand from
-            sampled_event_ids = {"4688", "4672", "4624", "4625", "4634", "4670", "4720"}
+    if isinstance(triage_result, dict) and "event_ids" in triage_result:
+        # B-3 fix: adapter now includes actual EventIDs from triage rows in envelope
+        eids = triage_result["event_ids"]
+        if isinstance(eids, list):
+            sampled_event_ids = {str(eid) for eid in eids if eid}
+    # If no event_ids in envelope, use empty set (no expansion possible)
+    # — do NOT fall back to hardcoded IDs
 
     # Stage 2: Ask model for expansion plan
     expansion_items: list[EventLogExpansion] = []
@@ -258,8 +276,8 @@ async def _collect_event_log_with_expansion(
                 sampled_event_ids=sampled_event_ids,
                 triage_result=triage_result,
             )
-            # Validate expansions
-            expansion_items = validate_event_log_expansions(
+            # Validate expansions (M-3 fix: collect rejection labels as safe limitations)
+            expansion_items, validation_rejections = validate_event_log_expansions(
                 raw_expansions,
                 request.time_range,
                 sampled_event_ids,
@@ -269,6 +287,7 @@ async def _collect_event_log_with_expansion(
                 outcome="succeeded",
                 raw_expansion_count=len(raw_expansions),
                 validated_expansion_count=len(expansion_items),
+                rejected_expansion_count=len(validation_rejections),
             )
         except Exception as exc:
             # Expansion planning failure doesn't block graph
@@ -312,4 +331,5 @@ async def _collect_event_log_with_expansion(
             )
         evidence = [*evidence, detail_item]
 
-    return {"evidence": evidence, "step_index": index + 1}
+    # M-3 fix: include safe validation rejection labels as limitations
+    return {"evidence": evidence, "step_index": index + 1, "limitations": validation_rejections}

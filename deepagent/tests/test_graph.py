@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from deepagent.analysis_model import sanitize_plan
-from deepagent.models import validate_event_log_expansions, fit_evidence_budget
 from deepagent.config import Settings
 from deepagent.graph import build_investigation_graph
 from deepagent.mcp_client import MCPToolTimeout
@@ -17,6 +16,8 @@ from deepagent.models import (
     InvestigationPlan,
     InvestigationRequest,
     InvestigationStep,
+    fit_evidence_budget,
+    validate_event_log_expansions,
 )
 
 
@@ -264,7 +265,6 @@ async def test_graph_swallows_external_collection_exception_with_safe_error() ->
 async def test_graph_event_log_triggers_triage_and_detail_expansion() -> None:
     """windows_event_logs in plan should trigger two-stage collection."""
     from datetime import timedelta
-    from unittest.mock import AsyncMock
 
     triage_call_count = 0
     detail_call_count = 0
@@ -281,11 +281,13 @@ async def test_graph_event_log_triggers_triage_and_detail_expansion() -> None:
             triage_call_count += 1
             self.calls.append({"type": "triage", **kwargs})
             # Simulate triage response with sampled Event IDs
+            # B-3 fix: adapter now includes event_ids in envelope
             return {
                 "rows": 50,
                 "original_rows": 50,
                 "returned_rows": 50,
                 "truncated": False,
+                "event_ids": ["4688", "4672", "4624", "4625"],
             }
 
         async def collect_event_log_detail(self, **kwargs):
@@ -390,11 +392,13 @@ async def test_graph_detail_timeout_continues_to_assessment() -> None:
 
         async def collect_event_log_triage(self, **kwargs):
             self.calls.append({"type": "triage", **kwargs})
+            # B-3 fix: adapter now includes event_ids in envelope
             return {
                 "rows": 30,
                 "original_rows": 30,
                 "returned_rows": 30,
                 "truncated": False,
+                "event_ids": ["4688", "4672", "4624"],
             }
 
         async def collect_event_log_detail(self, **kwargs):
@@ -482,6 +486,7 @@ async def test_graph_detail_timeout_continues_to_assessment() -> None:
 def test_validate_event_log_expansions_max_two() -> None:
     """Validation should keep at most 2 expansions."""
     from datetime import timedelta
+
     from deepagent.models import TimeRange
 
     now = datetime.now(UTC)
@@ -496,17 +501,20 @@ def test_validate_event_log_expansions_max_two() -> None:
         }
         for eid in event_ids
     ]
-    result = validate_event_log_expansions(
+    accepted, rejections = validate_event_log_expansions(
         expansions,
         TimeRange(**{"from": now - timedelta(hours=1), "to": now}),
         set(event_ids),  # All event IDs are in sampled set
     )
-    assert len(result) == 2
+    assert len(accepted) == 2
+    # M-3 fix: overflow should be recorded as rejection
+    assert "expansion_count_exceeded" in rejections
 
 
 def test_validate_event_log_expansions_rejects_over_60_min() -> None:
     """Validation rejects expansions over 60 minutes."""
     from datetime import timedelta
+
     from deepagent.models import TimeRange
 
     now = datetime.now(UTC)
@@ -518,12 +526,14 @@ def test_validate_event_log_expansions_rejects_over_60_min() -> None:
             "rationale": "too long",
         }
     ]
-    result = validate_event_log_expansions(
+    accepted, rejections = validate_event_log_expansions(
         expansions,
         TimeRange(**{"from": now - timedelta(hours=1), "to": now}),
         {"4688"},
     )
-    assert len(result) == 0
+    assert len(accepted) == 0
+    # M-3 fix: duration rejection should be recorded
+    assert "window_exceeds_60_minutes" in rejections
 
 
 def test_fit_evidence_budget_respects_limit() -> None:
@@ -549,3 +559,105 @@ def test_fit_evidence_budget_respects_limit() -> None:
         default=str,
     )
     assert len(serialized) <= max_chars
+
+
+@pytest.mark.asyncio
+async def test_graph_does_not_use_hardcoded_event_ids_when_triage_has_no_event_ids() -> None:
+    """Regression test for B-3: hardcoded fallback must NOT be used.
+
+    When collect_event_log_triage returns a metadata envelope WITHOUT an 'event_ids'
+    key (the pre-fix production shape), the graph must NOT fall back to the
+    hardcoded 7-element set. It must use the actual EventIDs from the triage rows
+    or treat empty EventIDs as "no expansion possible".
+    """
+    plan_expansion_called = False
+    received_sampled_ids: set[str] | None = None
+
+    class NoEventIDsMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def verify_target(self, *, client_id, org_id):
+            return {"client_id": client_id, "os_info": {"OS": "windows"}}
+
+        async def collect_event_log_triage(self, **kwargs):
+            self.calls.append({"type": "triage", **kwargs})
+            # Simulate PRODUCTION envelope: metadata only, NO 'event_ids' key
+            # (This is what the current (broken) adapter returns.)
+            return {
+                "rows": 50,
+                "original_rows": 50,
+                "returned_rows": 50,
+                "truncated": False,
+                # NOTE: no 'event_ids' key — graph should NOT fall back to hardcoded
+            }
+
+        async def collect_event_log_detail(self, **kwargs):
+            self.calls.append({"type": "detail", **kwargs})
+            return {
+                "rows": 25,
+                "original_rows": 25,
+                "returned_rows": 25,
+                "truncated": False,
+            }
+
+        async def collect(self, **kwargs):
+            self.calls.append({"type": "generic", **kwargs})
+            return {"ok": True, "data": []}
+
+    class TrackingModel:
+        model_name = "test-model"
+
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Investigate Windows event logs",
+                steps=[
+                    InvestigationStep(
+                        tool="windows_event_logs",
+                        rationale="Collect event logs",
+                    ),
+                ],
+            )
+
+        async def plan_event_log_expansion(
+            self, request, sampled_event_ids, triage_result
+        ) -> list[dict]:
+            nonlocal plan_expansion_called, received_sampled_ids
+            plan_expansion_called = True
+            received_sampled_ids = sampled_event_ids
+            # Return no expansions so no detail calls are made
+            return []
+
+        async def assess(
+            self, _request: InvestigationRequest, evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="info",
+                confidence="high",
+                executive_summary="No issues found.",
+                conclusion="Ok.",
+            )
+
+    mcp = NoEventIDsMCP()
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(
+        mcp=mcp, model=TrackingModel(), settings=settings
+    )
+
+    await graph.ainvoke({"request": request()})
+
+    # The hardcoded set is: {"4688", "4672", "4624", "4625", "4634", "4670", "4720"}
+    HARDCODED_FALLBACK = {"4688", "4672", "4624", "4625", "4634", "4670", "4720"}
+
+    # When no event_ids in envelope, the graph should NOT call plan_event_log_expansion
+    # (empty sampled_event_ids is falsy, so the call is skipped)
+    assert not plan_expansion_called, (
+        "plan_event_log_expansion should NOT be called when sampled_event_ids is empty"
+    )
+
+    # If plan_expansion WAS called (broken code path), verify it didn't use hardcoded IDs
+    if received_sampled_ids is not None:
+        assert received_sampled_ids != HARDCODED_FALLBACK, (
+            f"Graph used hardcoded fallback {HARDCODED_FALLBACK!r}. "
+            f"received={received_sampled_ids!r}"
+        )

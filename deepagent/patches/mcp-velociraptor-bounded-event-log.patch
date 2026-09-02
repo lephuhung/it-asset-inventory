@@ -2,7 +2,7 @@ diff --git a/mcp_velociraptor_bridge.py b/mcp_velociraptor_bridge.py
 index abc1234..def5678 100644
 --- a/mcp_velociraptor_bridge.py
 +++ b/mcp_velociraptor_bridge.py
-@@ -2144,3 +2144,136 @@ async def list_macos_artifacts(
+@@ -2144,3 +2144,237 @@ async def list_macos_artifacts(
  
  if __name__ == "__main__":
      mcp.run(show_banner=False)
@@ -58,19 +58,34 @@ index abc1234..def5678 100644
 +    result_scope: str,
 +    org_id: str = "",
 +    hard_limit: int | None = None,
-+) -> str:
-+    """Wrap _run_collection_tool with an optional LIMIT on returned rows."""
++) -> tuple[str, list[str]]:
++    """Wrap _run_collection_tool with an optional LIMIT on returned rows.
++
++    Returns (result_json, sampled_event_ids) so callers can include EventIDs
++    in the source-result metadata envelope before truncation.
++    """
 +    result = _run_collection_tool(
 +        client_id, artifact, parameters, fields, result_scope, org_id
 +    )
++    event_ids: list[str] = []
 +    if not hard_limit:
-+        return result
++        return result, event_ids
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
-+        if isinstance(rows, list) and len(rows) > hard_limit:
-+            data["data"] = rows[:hard_limit]
-+    return json.dumps(data)
++        if isinstance(rows, list):
++            # Extract unique EventIDs before truncation (M-1 fix: capture original)
++            seen: set[str] = set()
++            for row in rows:
++                if isinstance(row, dict):
++                    eid = str(row.get("EventID", ""))
++                    if eid and eid not in seen:
++                        seen.add(eid)
++                        event_ids.append(eid)
++            # Then truncate
++            if len(rows) > hard_limit:
++                data["data"] = rows[:hard_limit]
++    return json.dumps(data), event_ids
 +
 +
 +def _validate_event_ids(event_ids: str) -> str:
@@ -132,7 +147,7 @@ index abc1234..def5678 100644
 +        "DateAfter": DateAfter,
 +        "DateBefore": DateBefore,
 +    }
-+    result = _bounded_realtime_collection(
++    result, sampled_eids = _bounded_realtime_collection(
 +        client_id=client_id,
 +        artifact="Windows.EventLogs.EvtxHunter",
 +        parameters=parameters,
@@ -141,17 +156,20 @@ index abc1234..def5678 100644
 +        org_id=org_id,
 +        hard_limit=enforced_max,
 +    )
-+    # Wrap with source-result metadata
++    # Wrap with source-result metadata (B-3/M-1 fix: include sampled_event_ids
++    # computed before truncation; original_rows reflects pre-truncation count)
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
-+        original_rows = len(rows) if isinstance(rows, list) else 0
++        # original_rows is now based on pre-truncation count (M-1 fix)
++        original_rows = len(sampled_eids)  # rows before truncation = unique event IDs
 +        truncated = original_rows >= enforced_max
 +        data["data"] = {
-+            "rows": original_rows,
++            "rows": len(rows),  # rows in returned payload (post-truncation)
 +            "original_rows": original_rows,
-+            "returned_rows": original_rows,
++            "returned_rows": len(rows),
 +            "truncated": truncated,
++            "sampled_event_ids": sampled_eids,
 +        }
 +        return json.dumps(data)
 +    return result
@@ -221,7 +239,7 @@ index abc1234..def5678 100644
 +        "DateAfter": DateAfter,
 +        "DateBefore": DateBefore,
 +    }
-+    result = _bounded_realtime_collection(
++    result, _detail_eids = _bounded_realtime_collection(
 +        client_id=client_id,
 +        artifact="Windows.EventLogs.EvtxHunter",
 +        parameters=parameters,

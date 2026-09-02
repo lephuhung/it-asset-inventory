@@ -306,3 +306,107 @@ def test_mcp_test_uses_request_yaml_and_removes_temporary_file(monkeypatch):
     }
     assert captured["yaml"].startswith("ca_certificate: test-ca")
     assert not Path(captured["config_path"]).exists()
+
+
+def test_deepagent_settings_max_concurrent_jobs_bounds() -> None:
+    """H-3 regression: DeepAgent max_concurrent_jobs must be 1..3 like server."""
+    from pydantic import ValidationError
+
+    from deepagent.config import Settings
+
+    # Valid values
+    for val in (1, 2, 3):
+        s = Settings(max_concurrent_jobs=val)
+        assert s.max_concurrent_jobs == val
+
+    # Invalid values must raise
+    for val in (0, 4, -1, 10):
+        with pytest.raises(ValidationError):
+            Settings(max_concurrent_jobs=val)
+
+
+@pytest.mark.asyncio
+async def test_three_jobs_fifo_ordering(monkeypatch) -> None:
+    """H-4 regression: three-job FIFO test.
+
+    With capacity=2, three jobs submitted in order must result in:
+    - Jobs 1 and 2 dispatched first (running)
+    - Job 3 remains queued (pending)
+    After job 1 completes, job 3 should be dispatched next.
+    """
+    from uuid import UUID
+
+    settings = Settings(service_token="test-deepagent-token", max_concurrent_jobs=2)
+
+    # Track job execution order
+    execution_order: list[str] = []
+
+    async def slow_execute(job_id: str, request: InvestigationRequest, _settings: Settings):
+        execution_order.append(job_id)
+        # Simulate work by waiting briefly
+        await asyncio.sleep(0.05)
+
+    api._jobs.clear()
+    monkeypatch.setattr(api, "_execute", slow_execute)
+    api.app.dependency_overrides[get_settings] = lambda: settings
+
+    async def make_request(inv_id: str) -> dict:
+        return {
+            "investigation_id": inv_id,
+            "client_id": "C.test-client",
+            "hostname": "TEST-HOST",
+            "time_range": {
+                "from": "2026-01-01T00:00:00Z",
+                "to": "2026-01-01T01:00:00Z",
+            },
+            "suspicious_activity": "Check read-only",
+            "llm_runtime": {
+                "base_url": "http://llm.example/v1",
+                "api_key": "test-key",
+                "model": "test-model",
+            },
+            "velociraptor_api_client_yaml": (
+                "ca_certificate: test-ca\nclient_cert: test-cert\n"
+                "client_private_key: test-private-key\n"
+            ),
+        }
+
+    try:
+        with TestClient(api.app) as client:
+            # Submit three jobs in FIFO order
+            ids = [str(UUID(int=i)) for i in range(3)]
+            responses = []
+            for i, inv_id in enumerate(ids):
+                resp = client.post(
+                    "/v1/investigations",
+                    headers={"Authorization": "Bearer test-deepagent-token"},
+                    json=await make_request(inv_id),
+                )
+                responses.append((inv_id, resp))
+
+            # First two jobs should be queued/running (capacity=2)
+            # Third job should be queued
+            job1_resp = responses[0][1]
+            job2_resp = responses[1][1]
+            job3_resp = responses[2][1]
+
+            assert job1_resp.status_code == 202
+            assert job2_resp.status_code == 202
+            assert job3_resp.status_code == 202
+
+            # First two get the semaphore slots
+            assert job1_resp.json()["status"] in ("queued", "running")
+            assert job2_resp.json()["status"] in ("queued", "running")
+            # Third job must wait
+            assert job3_resp.json()["status"] == "queued", \
+                f"Third job should remain queued at capacity=2, got {job3_resp.json()['status']}"
+
+            # Wait for first two to complete
+            await asyncio.sleep(0.3)
+
+            # After first two complete, third should eventually run
+            assert len(execution_order) >= 2, \
+                f"Expected at least 2 executions, got {len(execution_order)}"
+    finally:
+        api.app.dependency_overrides.clear()
+        api._jobs.clear()

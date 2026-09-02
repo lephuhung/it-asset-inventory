@@ -207,15 +207,36 @@ async def test_runner_reports_event_log_triage_and_detail_progress(monkeypatch, 
     # Must have collecting phase before finalizing
     phases = [s["phase"] for s in collected_statuses]
     assert "collecting" in phases, f"Expected 'collecting' in phases: {phases}"
-    
-    # Collecting phase must have step counts, not raw event IDs
+
+    # H-4 fix: verify current_step and total_steps are set on each status
+    for status in collected_statuses:
+        assert "current_step" in status, f"current_step missing in {status}"
+        assert "total_steps" in status, f"total_steps missing in {status}"
+        assert isinstance(status["current_step"], int), \
+            f"current_step must be int, got {type(status['current_step'])}"
+        assert isinstance(status["total_steps"], int), \
+            f"total_steps must be int, got {type(status['total_steps'])}"
+
+    # Collecting phase must have safe messages without raw event IDs
     for status in collected_statuses:
         if status["phase"] == "collecting":
-            # Safe: current_step and total_steps are integers
-            assert "current_step" in status or "message" in status
             # Never expose raw event IDs in message
             assert "4624" not in str(status.get("message", ""))
             assert "Security" not in str(status.get("message", ""))
+
+    # Verify phase progression: running(0) -> collecting(1) -> finalizing(8)
+    running_status = next((s for s in collected_statuses if s["phase"] == "running"), None)
+    collecting_status = next((s for s in collected_statuses if s["phase"] == "collecting"), None)
+    finalizing_status = next((s for s in collected_statuses if s["phase"] == "finalizing"), None)
+    if running_status is not None:
+        assert running_status["current_step"] == 0, \
+            f"running phase should have current_step=0, got {running_status['current_step']}"
+    if collecting_status is not None:
+        assert collecting_status["current_step"] == 1, \
+            f"collecting phase should have current_step=1, got {collecting_status['current_step']}"
+    if finalizing_status is not None:
+        assert finalizing_status["current_step"] == finalizing_status["total_steps"], \
+            f"finalizing should have current_step == total_steps, got {finalizing_status}"
 
 
 @pytest.mark.asyncio

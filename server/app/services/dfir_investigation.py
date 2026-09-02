@@ -274,13 +274,36 @@ async def run_pending_investigations() -> dict:
         if not await _is_llm_enabled(db):
             return {"skipped": True, "reason": "llm_disabled"}
 
-        active = (
+        # ── B-2 fix: use capacity-bounded FIFO claim for DeepAgent rows ──────
+        # First reconcile active (analyzing) DeepAgent slots.
+        # Then atomically claim up to available slots using the claim helper.
+        # Non-DeepAgent rows (local LLM) are processed unchanged.
+        active_deepagent_claimed = await claim_deepagent_dispatches(
+            db, capacity=settings.deepagent_max_concurrent_jobs
+        )
+        # Process claimed DeepAgent rows first (they are already locked to analyzing)
+        for inv in active_deepagent_claimed:
+            try:
+                await _state_dispatch_deepagent(db, inv)
+                processed.append(str(inv.id))
+            except Exception as e:  # noqa: BLE001
+                err = f"{type(e).__name__}: {e}"
+                errors.append(f"{inv.id}: {err}")
+                logger.exception("Investigation %s failed", inv.id)
+                inv.status = "failed"
+                inv.error = err[:2000]
+                inv.completed_at = datetime.now(UTC)
+                await db.commit()
+
+        # ── Process non-DeepAgent rows (local LLM) unchanged ─────────────────
+        non_deepagent = (
             await db.execute(
                 select(DfirInvestigation)
                 .where(
                     DfirInvestigation.status.in_(
                         ["pending", "running", "collecting", "analyzing"]
-                    )
+                    ),
+                    DfirInvestigation.external_orchestrator != "deepagent",
                 )
                 .order_by(DfirInvestigation.created_at)
                 .limit(5)
@@ -288,7 +311,7 @@ async def run_pending_investigations() -> dict:
             )
         ).scalars().all()
 
-        for inv in active:
+        for inv in non_deepagent:
             try:
                 await _process_one(db, inv)
                 processed.append(str(inv.id))

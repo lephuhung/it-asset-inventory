@@ -234,7 +234,7 @@ docker compose -p asset-inventory -f server/deploy/docker-compose.yml logs deepa
 
 ## 9. TÍCH HỢP VELOCIRAPTOR (DFIR)
 
-### 8.0. Triển khai nhanh bằng Docker (khuyến nghị)
+### 9.0. Triển khai nhanh bằng Docker (khuyến nghị)
 
 Repo đã có sẵn compose tại `deploy/velociraptor/` — chạy độc lập với Inventory Server:
 
@@ -250,14 +250,14 @@ bash create-api-key.sh "inventory-portal"        # sinh API key → paste vào /
 
 Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/README.md`.
 
-### 8.1. Kiến trúc
+### 9.1. Kiến trúc
 
 - [Velociraptor](https://github.com/velocidex/velociraptor) chạy độc lập (cùng host hoặc host riêng) với GUI/API ở port 8889 (hoặc tuỳ cấu hình).
 - Velociraptor Client (cài thủ công trên từng máy Windows theo cách admin chọn — không qua agent inventory) tự enroll với Velociraptor Server.
 - **Inventory Server** gọi Velociraptor REST API mỗi 5 phút để đối chiếu `os_info.hostname` ↔ `machines.hostname` trong DB, lưu mapping `velociraptor_links(machine_id, client_id)`. KHÔNG cần thay đổi agent.
 - **Portal** cho admin chạy hunt / collect artifact qua API `POST /api/admin/velociraptor/hunt`. Kết quả lưu trên Velociraptor Server, portal deep-link sang GUI.
 
-### 8.2. Triển khai lần đầu
+### 9.2. Triển khai lần đầu
 
 1. **Triển khai Velociraptor Server** (tham khảo [docs chính thức](https://docs.velociraptor.app/docs/installation/)):
    - Cấu hình GUI + datastore + filename ở 1 thư mục persistent (vd `/var/lib/velociraptor`).
@@ -285,7 +285,7 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
    - Sau khi enroll xong, client sẽ xuất hiện trong `SearchClients` → sau 5 phút sẽ có mapping trong `/dfir`.
 6. **Audit**: mỗi lần admin chạy hunt/collect đều ghi vào `audit_log` (action `dfir.hunt.create`) + bảng `dfir_hunts` (status, hunt_id, deep-link).
 
-### 8.3. Vận hành hằng ngày
+### 9.3. Vận hành hằng ngày
 
 - **Sync hostname tự động**: mỗi 5 phút. Xem trạng thái ở `/dfir` (panel "Số máy đã link") hoặc `/dfir/settings` (panel "Trạng thái sync").
 - **Sync thủ công**: bấm **Sync thủ công** ở `/dfir` (Super Admin). Có confirm dialog cảnh báo Velociraptor rate-limit ở fleet lớn.
@@ -299,7 +299,7 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
   3. Token còn hiệu lực (Velociraptor GUI → API Keys).
   4. CA cert nếu Velociraptor dùng self-signed: `verify_ssl=False` trong client wrapper — KHÔNG khuyến nghị cho prod, dùng reverse proxy có TLS hợp lệ.
 
-### 8.4. Xử lý sự cố
+### 9.4. Xử lý sự cố
 
 | Triệu chứng | Nguyên nhân | Cách xử lý |
 |---|---|---|
@@ -310,7 +310,7 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
 | Lỗi `RuntimeError` khi sync | DB engine loop issue (chỉ test) | Báo dev; production code đã chạy ổn |
 | Hunt thất bại với 403 | Artifact không trong allowlist | Super Admin vào `/dfir/settings` → thêm artifact vào allowlist |
 
-### 8.5. Bảo mật
+### 9.5. Bảo mật
 
 - **API Token**: mã hoá AES-256-GCM phía DB; chỉ hiển thị `api_token_set=True/False` ra portal; KHÔNG log giá trị thật.
 - **Audit log**: `velociraptor.config.update` (thay đổi URL/token/allowlist) + `dfir.hunt.create` (chạy hunt) — cùng hash chain với các action khác.
@@ -318,20 +318,20 @@ Chi tiết (network, port, backup, troubleshoot): xem `deploy/velociraptor/READM
 - **Allowlist**: chống lạm quyền — nếu Velociraptor token bị lộ, attacker vẫn chỉ chạy được artifact trong allowlist (read-only, không xoá dữ liệu).
 - **Không cache payload**: kết quả hunt KHÔNG cache trên Inventory Server — Velociraptor là nguồn gốc. Nếu cần lưu trữ lâu dài → backup Velociraptor datastore (`/var/lib/velociraptor`).
 
-### 8.6. KHÔNG ĐƯỢC LÀM (Velociraptor)
+### 9.6. KHÔNG ĐƯỢC LÀM (Velociraptor)
 
 - KHÔNG dùng Velociraptor làm kênh C2 / exfiltration — chỉ dùng cho DFIR khi có sự cố.
 - KHÔNG bật allowlist artifact có side-effect xoá dữ liệu (vd `Windows.Kape.Targets` nếu không hiểu rõ) mà chưa review.
 - KHÔNG share API token qua kênh không mã hoá (email, chat). Lưu trong Vault/KMS.
 - KHÔNG tự ý tắt sync khi "không thấy lỗi" — last_sync_at cũ có thể che giấu sự cố Velociraptor server đã down.
 
-## 9. KHÔNG ĐƯỢC LÀM
+## 11. KHÔNG ĐƯỢC LÀM
 
 - Không upload agent lên VirusTotal (phát tán mẫu → ML vendor học theo).
 - Không thay đổi agent thành công cụ giám sát (screenshot/keylog/remote shell) — mục 6.6 tài liệu gốc.
 - Không tắt mTLS/verify để "cho nhanh".
 
-## 10. Cài đặt và vận hành agent Linux
+## 12. Cài đặt và vận hành agent Linux
 
 ### Quick-start (khuyến nghị)
 
@@ -441,7 +441,7 @@ ls dist/rpm/RPMS/x86_64/*.rpm
 | Agent log spam "enroll retry" | Token hết hạn hoặc sai | Sinh token mới từ Portal, cập nhật config, restart |
 
 
-## 11. VẬN HÀNH ALERT (Telegram)
+## 13. VẬN HÀNH ALERT (Telegram)
 
 ### 11.1 Cấu hình bot Telegram (Super Admin)
 

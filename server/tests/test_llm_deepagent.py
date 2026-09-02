@@ -1003,3 +1003,89 @@ async def test_deepagent_dispatch_claim_skips_non_deepagent_rows(
         claimed = await claim_deepagent_dispatches(db, capacity=2)
         assert len(claimed) == 1
         assert claimed[0].id == deepagent_inv.id
+
+
+@pytest.mark.asyncio
+async def test_run_pending_investigations_respects_capacity_for_deepagent(
+    session_factory, seeded_env, monkeypatch
+):
+    """run_pending_investigations must not dispatch more than capacity DeepAgent jobs.
+
+    Regression test for B-2: the claim helper was dead code in production;
+    run_pending_investigations still iterated over .limit(5) regardless of capacity.
+    """
+    state_dispatch_calls: list[str] = []
+
+    # Patch _state_dispatch_deepagent to track calls without actually HTTP-posting
+    from app.services import dfir_investigation as inv_svc
+
+    original_state_dispatch = inv_svc._state_dispatch_deepagent
+
+    async def tracking_dispatch(db, inv):
+        state_dispatch_calls.append(str(inv.id))
+        # Don't actually HTTP POST — we're testing the claim loop, not dispatch
+
+    inv_svc._state_dispatch_deepagent = tracking_dispatch
+
+    original_is_llm_enabled = inv_svc._is_llm_enabled
+
+    async def fake_is_llm_enabled(_db):
+        return True
+
+    inv_svc._is_llm_enabled = fake_is_llm_enabled
+
+    try:
+        async with session_factory() as db:
+            admin = (
+                await db.execute(select(User).where(User.email == seeded_env["email"]))
+            ).scalar_one()
+            machine = Machine(
+                org_id=admin.org_id,
+                machine_uuid="three-job-machine",
+                hostname="THREE-JOB",
+                status="online",
+            )
+            db.add(machine)
+            await db.flush()
+            # Create 3 deepagent pending investigations (FIFO order by created_at)
+            inv_ids = []
+            for i in range(3):
+                inv = DfirInvestigation(
+                    machine_id=machine.id,
+                    velociraptor_client_id="test-client-id",
+                    artifacts=[],
+                    status="pending",
+                    external_orchestrator="deepagent",
+                    requested_by=admin.id,
+                )
+                db.add(inv)
+                await db.flush()
+                inv_ids.append(inv.id)
+            await db.commit()
+
+        # Simulate capacity=2 via monkeypatching the settings
+        from app.core import config as config_mod
+
+        original_capacity = config_mod.settings.deepagent_max_concurrent_jobs
+        config_mod.settings.deepagent_max_concurrent_jobs = 2
+
+        try:
+            result = await inv_svc.run_pending_investigations()
+        finally:
+            config_mod.settings.deepagent_max_concurrent_jobs = original_capacity
+    finally:
+        inv_svc._state_dispatch_deepagent = original_state_dispatch
+        inv_svc._is_llm_enabled = original_is_llm_enabled
+
+    # At capacity=2, at most 2 jobs should be dispatched
+    assert len(state_dispatch_calls) <= 2, (
+        f"Expected at most 2 dispatches at capacity=2, got {len(state_dispatch_calls)}: {state_dispatch_calls}"
+    )
+
+    # The dispatched jobs must be the oldest ones (FIFO)
+    if len(state_dispatch_calls) >= 1:
+        assert state_dispatch_calls[0] == str(inv_ids[0]), \
+            f"First dispatch should be oldest (id={inv_ids[0]}), got {state_dispatch_calls[0]}"
+    if len(state_dispatch_calls) == 2:
+        assert state_dispatch_calls[1] == str(inv_ids[1]), \
+            f"Second dispatch should be second-oldest (id={inv_ids[1]}), got {state_dispatch_calls[1]}"

@@ -9,12 +9,11 @@ from langchain_openai import ChatOpenAI
 from deepagent.catalog import BASELINE_TOOLS, WINDOWS_TOOL_POLICIES, catalog_prompt
 from deepagent.models import (
     Assessment,
+    EventLogExpansionList,
     EvidenceItem,
-    EventLogExpansion,
     InvestigationPlan,
     InvestigationRequest,
     LlmRuntime,
-    TimeRange,
 )
 from deepagent.observability import log_event
 
@@ -109,11 +108,12 @@ DỮ LIỆU NGHI NGỜ KHÔNG TIN CẬY:
         """
         # Extract event IDs from triage metadata if available
         triage_event_ids = triage_result.get("event_ids", [])
-        available_ids = sampled_event_ids & set(str(eid) for eid in triage_event_ids)
+        available_ids = sampled_event_ids & {str(eid) for eid in triage_event_ids}
         if not available_ids:
             available_ids = sampled_event_ids
 
-        planner = self._model.with_structured_output(EventLogExpansion)
+        # H-2 fix: use EventLogExpansionList so LLM can return 0..2 expansions, not just 1
+        planner = self._model.with_structured_output(EventLogExpansionList)
         prompt = f"""{self._system_prompt()}
 
 Based on the triage results, plan up to 2 event log detail expansions.
@@ -130,22 +130,24 @@ TRIAGE SUMMARY: rows={triage_result.get('rows', 0)}, truncated={triage_result.ge
 """
         started_at = perf_counter()
         try:
-            expansion = await planner.ainvoke(prompt)
-            if not isinstance(expansion, EventLogExpansion):
-                expansion = EventLogExpansion.model_validate(expansion)
+            expansion_list = await planner.ainvoke(prompt)
+            if not isinstance(expansion_list, EventLogExpansionList):
+                expansion_list = EventLogExpansionList.model_validate(expansion_list)
             log_event(
                 phase="event_log_expansion_planning",
                 outcome="succeeded",
                 duration_ms=(perf_counter() - started_at) * 1000,
                 model=self.model_name,
+                expansion_count=len(expansion_list.expansions),
             )
             return [
                 {
-                    "date_after": expansion.date_after.isoformat(),
-                    "date_before": expansion.date_before.isoformat(),
-                    "event_ids": expansion.event_ids,
-                    "rationale": expansion.rationale,
+                    "date_after": exp.date_after.isoformat(),
+                    "date_before": exp.date_before.isoformat(),
+                    "event_ids": exp.event_ids,
+                    "rationale": exp.rationale,
                 }
+                for exp in expansion_list.expansions
             ]
         except Exception as exc:
             log_event(

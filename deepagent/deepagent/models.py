@@ -172,14 +172,33 @@ class EventLogExpansion(BaseModel):
         return self
 
 
+class EventLogExpansionList(BaseModel):
+    """H-2 fix: wrapper to allow LLM to return 0..2 expansions as a list.
+
+    Using a single-item schema (with_structured_output(EventLogExpansion)) capped
+    production at one expansion. This wrapper uses min_length=0 so the LLM can
+    return an empty list when no expansion is needed, and max_length=2 so it can
+    return up to two items. The downstream validate_event_log_expansions also caps
+    at MAX_DETAIL_CALLS=2.
+    """
+
+    expansions: list[EventLogExpansion] = Field(
+        default_factory=list,
+        min_length=0,
+        max_length=2,
+    )
+
+
 def validate_event_log_expansions(
     expansions: list[dict | EventLogExpansion],
     request_range: TimeRange,
     sampled_event_ids: set[str],
-) -> list[EventLogExpansion]:
+) -> tuple[list[EventLogExpansion], list[str]]:
     """Validate a list of event log expansions.
 
-    Returns a list of valid EventLogExpansion objects, limited to MAX_DETAIL_CALLS.
+    Returns (accepted, rejections) where:
+    - accepted: list of valid EventLogExpansion objects, limited to MAX_DETAIL_CALLS
+    - rejections: safe static labels for invalid choices (never raw LLM text)
 
     Validation rules:
     - Reject more than MAX_DETAIL_CALLS items
@@ -187,12 +206,18 @@ def validate_event_log_expansions(
     - Reject timestamps outside request.time_range
     - Reject empty or unknown Event IDs (must be in sampled_event_ids)
     - Reject values that fail strict model schema validation
+
+    Rejection labels use only static strings; never echo raw LLM text.
     """
     validated: list[EventLogExpansion] = []
     seen_ids: set[str] = set()  # Deduplicate by event_ids content
+    rejections: list[str] = []
 
     for expansion in expansions:
         if len(validated) >= MAX_DETAIL_CALLS:
+            # Record overflow as safe limitation (M-3 fix)
+            if len(expansions) > MAX_DETAIL_CALLS:
+                rejections.append("expansion_count_exceeded")
             break  # Stop after MAX_DETAIL_CALLS
 
         try:
@@ -204,35 +229,50 @@ def validate_event_log_expansions(
 
             # Check event IDs are in sampled set
             if not parsed.event_ids:
+                rejections.append("event_ids_empty")
                 continue
             unknown_ids = set(parsed.event_ids) - sampled_event_ids
             if unknown_ids:
+                rejections.append("event_ids_not_in_sample")
                 continue  # Skip expansions with unknown event IDs
 
             # Check window is within request range
             if parsed.date_after < request_range.from_:
+                rejections.append("window_before_case_range")
                 continue  # Outside case window
             if parsed.date_before > request_range.to:
+                rejections.append("window_after_case_range")
                 continue  # Outside case window
 
             # Check duration is within limit
             duration = parsed.date_before - parsed.date_after
             if duration > timedelta(minutes=MAX_EVENT_LOG_DURATION_MINUTES):
+                rejections.append("window_exceeds_60_minutes")
                 continue  # Duration exceeded
 
             # Deduplicate by event_ids content
             ids_key = frozenset(parsed.event_ids)
             if ids_key in seen_ids:
+                rejections.append("expansion_duplicate")
                 continue
             seen_ids.add(ids_key)
 
             validated.append(parsed)
 
-        except Exception:
-            # Reject values that fail strict model schema
+        except Exception as exc:
+            # Reject values that fail strict model schema (M-3 fix: categorize the failure)
+            exc_msg = str(exc).lower()
+            if "60 minutes" in exc_msg or "exceeds" in exc_msg:
+                rejections.append("window_exceeds_60_minutes")
+            elif "before" in exc_msg or "after" in exc_msg:
+                rejections.append("window_before_case_range")
+            elif "timezone" in exc_msg:
+                rejections.append("expansion_schema_invalid")
+            else:
+                rejections.append("expansion_schema_invalid")
             continue
 
-    return validated
+    return validated, rejections
 
 
 def fit_evidence_budget(

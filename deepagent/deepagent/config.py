@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8090
     service_token: str = "CHANGE_ME_service_token"
-    max_concurrent_jobs: int = 2
+    # H-3 fix: validate capacity 1..3 to match server-side constraint
+    max_concurrent_jobs: int = Field(default=2, ge=1, le=3)
 
     backend_url: str = "http://127.0.0.1:8000"
     backend_api_key: str = ""
