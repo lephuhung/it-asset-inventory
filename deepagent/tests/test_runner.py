@@ -86,6 +86,7 @@ async def test_runner_emits_progress_before_final_result(monkeypatch, capsys):
     assert summary["total_duration_ms"] >= 0
     assert summary["successful_tool_count"] == 0
     assert summary["failed_tool_count"] == 0
+    assert summary["timed_out_tool_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -140,5 +141,85 @@ async def test_runner_logs_safe_failed_job_summary(monkeypatch, capsys):
     assert summary["total_duration_ms"] >= 0
     assert summary["successful_tool_count"] == 0
     assert summary["failed_tool_count"] == 0
+    assert summary["timed_out_tool_count"] == 0
     assert summary["error_type"] == "RuntimeError"
     assert raw_activity not in json.dumps(summary)
+
+
+@pytest.mark.asyncio
+async def test_runner_job_summary_counts_timed_out_evidence_safely(monkeypatch, capsys):
+    raw_evidence = "raw-evidence-should-never-appear"
+
+    from deepagent.models import EvidenceItem
+
+    timed_out = EvidenceItem(
+        evidence_id="E-001",
+        tool="windows_pslist",
+        collected_at=datetime.now(UTC),
+        ok=False,
+        timeout=True,
+        error="MCP collection timed out.",
+    )
+    succeeded = EvidenceItem(
+        evidence_id="E-002",
+        tool="windows_powershell_scriptblock",
+        collected_at=datetime.now(UTC),
+        ok=True,
+        data={"marker": raw_evidence},
+    )
+
+    class FakeGraph:
+        async def ainvoke(self, *_args, **_kwargs):
+            return {
+                "assessment": Assessment(
+                    severity="info",
+                    confidence="high",
+                    executive_summary="Không phát hiện bất thường rõ ràng.",
+                    conclusion="Tiếp tục theo dõi.",
+                ),
+                "report_markdown": "# Báo cáo",
+                "evidence": [timed_out, succeeded],
+            }
+
+    class FakeCallback:
+        async def submit_status(self, *_args, **_kwargs):
+            return {"accepted": True}
+
+        async def submit(self, *_args, **_kwargs):
+            return {"status": "completed"}
+
+    monkeypatch.setattr(
+        "deepagent.runner.build_investigation_graph",
+        lambda **_kwargs: FakeGraph(),
+    )
+    runner = InvestigationRunner(
+        settings=Settings(max_steps=4),
+        mcp=object(),
+        model=type("FakeModel", (), {"model_name": "test-model"})(),
+        callback=FakeCallback(),
+    )
+    request = InvestigationRequest(
+        investigation_id="11111111-1111-4111-8111-111111111111",
+        client_id="C.test-client",
+        hostname="TEST-HOST",
+        time_range={
+            "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+            "to": datetime.now(UTC).isoformat(),
+        },
+        suspicious_activity="Kiểm tra timeout",
+        llm_runtime=LlmRuntime(
+            base_url="http://llm.example/v1",
+            api_key="test-key",
+            model="test-model",
+        ),
+        velociraptor_api_client_yaml="ca_certificate: test\nclient_cert: test\nclient_private_key: test\n",
+    )
+
+    await runner.run(request, job_id="deepagent-test-job")
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    summary = next(event for event in events if event["phase"] == "job_summary")
+    assert summary["successful_tool_count"] == 1
+    assert summary["failed_tool_count"] == 1
+    assert summary["timed_out_tool_count"] == 1
+    assert raw_evidence not in json.dumps(summary)

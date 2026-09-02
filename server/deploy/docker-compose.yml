@@ -73,10 +73,17 @@ services:
     environment:
       DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
       DEEPAGENT_BACKEND_URL: http://api:8000
-      DEEPAGENT_BACKEND_API_KEY: ${DEEPAGENT_BACKEND_API_KEY:-}
+      # Required: DeepAgent must authenticate callbacks to the API. Do not default to empty.
+      DEEPAGENT_BACKEND_API_KEY: "${DEEPAGENT_BACKEND_API_KEY:?DEEPAGENT_BACKEND_API_KEY must be set}"
       DEEPAGENT_MCP_COMMAND: /opt/mcp-venv/bin/python
       DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
       DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false"}'
+      # Caller deadline for every MCP tool call. A DeepAgent timeout only proves
+      # the MCP call did not return before the deadline (mcp_call_deadline);
+      # it is NOT a Velociraptor flow-level guarantee. Phase 2 will classify
+      # flow-level causes through a tracked bridge patch/fork. Accepted range
+      # 10–1800 seconds; default 180.
+      DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS: "${DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS:-180}"
     depends_on:
       api:
         condition: service_started

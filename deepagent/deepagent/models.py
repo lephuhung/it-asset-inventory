@@ -33,7 +33,7 @@ class LlmRuntime(BaseModel):
     model: str = Field(min_length=1, max_length=255)
     temperature: float = Field(default=0, ge=0, le=2)
     timeout_seconds: int = Field(default=180, ge=10, le=600)
-    max_tokens: int = Field(default=4096, ge=64, le=32000)
+    max_tokens: int = Field(default=64_000, ge=64_000, le=128_000)
     system_prompt: str | None = Field(default=None, max_length=8000)
 
 
@@ -66,6 +66,10 @@ class EvidenceItem(BaseModel):
     ok: bool
     data: object | None = None
     error: str | None = None
+    # Explicit non-sensitive marker set when the MCP call hit its caller
+    # deadline. The runner uses it to compute `timed_out_tool_count` without
+    # matching external error strings, which may contain sensitive content.
+    timeout: bool = False
 
 
 class Finding(BaseModel):

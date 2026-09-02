@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 
 from deepagent.config import Settings
-from deepagent.mcp_client import VelociraptorMCP
+from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
 from deepagent.observability import investigation_context, log_event
 
 
@@ -93,3 +93,37 @@ async def test_mcp_tool_event_reports_size_without_evidence_content(capsys) -> N
     assert event["result_truncated"] is True
     assert event["result_chars"] > event["truncated_preview_chars"]
     assert evidence not in json.dumps(event)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_timeout_event_keeps_caller_deadline_semantics(capsys) -> None:
+    import asyncio
+
+    class HangingTool:
+        async def ainvoke(self, _arguments):
+            await asyncio.Event().wait()
+
+    mcp = VelociraptorMCP.__new__(VelociraptorMCP)
+    mcp.settings = Settings(mcp_tool_timeout_seconds=10)
+    object.__setattr__(mcp.settings, "mcp_tool_timeout_seconds", 0.01)
+    mcp._tools = {"windows_pslist": HangingTool()}  # type: ignore[attr-defined]
+
+    with investigation_context(investigation_id="investigation-1", job_id="job-1"), \
+        pytest.raises(MCPToolTimeout):
+        await mcp.collect(
+            tool_name="windows_pslist",
+            client_id="C.1",
+            org_id=None,
+            time_from=datetime.now(UTC),
+            time_to=datetime.now(UTC),
+        )
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    timeout_event = next(event for event in events if event.get("error_type") == "MCPToolTimeout")
+    serialized = json.dumps(timeout_event)
+    assert timeout_event["phase"] == "mcp_tool_call"
+    assert timeout_event["outcome"] == "failed"
+    assert timeout_event["tool_name"] == "windows_pslist"
+    assert timeout_event["error_message"] == "MCP tool call exceeded its configured deadline."
+    # Caller deadline must never expose raw tool input or output.
+    assert "raw-evidence-should-never-appear" not in serialized

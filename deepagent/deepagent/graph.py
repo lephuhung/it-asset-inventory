@@ -12,10 +12,31 @@ from deepagent.analysis_model import (
     validate_assessment_evidence,
 )
 from deepagent.config import Settings
-from deepagent.mcp_client import VelociraptorMCP
-from deepagent.models import Assessment, EvidenceItem, InvestigationPlan, InvestigationRequest
+from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
+from deepagent.models import (
+    Assessment,
+    EvidenceItem,
+    InvestigationPlan,
+    InvestigationRequest,
+)
 from deepagent.observability import log_event
 from deepagent.report import build_markdown_report
+
+_TIMEOUT_ERROR = "MCP collection timed out."
+_FAILED_ERROR_TEMPLATE = "MCP collection failed: {exception_type}."
+_FAILED_ENVELOPE_ERROR = "MCP tool returned a failed envelope."
+
+
+def _safe_collection_error(exc: BaseException) -> tuple[str, bool]:
+    """Map a collection failure to a constant safe error and timeout flag.
+
+    Never include raw exception messages: they may contain VQL, YAML, evidence
+    bodies, prompts or external error bodies. The timeout flag lets the runner
+    count caller-deadline failures without parsing external text.
+    """
+    if isinstance(exc, MCPToolTimeout):
+        return _TIMEOUT_ERROR, True
+    return _FAILED_ERROR_TEMPLATE.format(exception_type=type(exc).__name__), False
 
 
 class InvestigationState(TypedDict, total=False):
@@ -64,6 +85,7 @@ def build_investigation_graph(
         index = state["step_index"]
         step = state["plan"].steps[index]
         evidence_id = f"E-{index + 1:03d}"
+        timed_out = False
         try:
             payload = await mcp.collect(
                 tool_name=step.tool,
@@ -79,15 +101,17 @@ def build_investigation_graph(
                 collected_at=datetime.now(UTC),
                 ok=ok,
                 data=payload.get("data") if ok else None,
-                error=None if ok else str(payload.get("error") or "MCP tool failed"),
+                error=None if ok else _FAILED_ENVELOPE_ERROR,
             )
         except Exception as exc:  # noqa: BLE001 - một tool lỗi không làm mất bằng chứng khác
+            error_message, timed_out = _safe_collection_error(exc)
             item = EvidenceItem(
                 evidence_id=evidence_id,
                 tool=step.tool,
                 collected_at=datetime.now(UTC),
                 ok=False,
-                error=f"{type(exc).__name__}: {exc}",
+                error=error_message,
+                timeout=timed_out,
             )
         return {"evidence": [*state.get("evidence", []), item], "step_index": index + 1}
 

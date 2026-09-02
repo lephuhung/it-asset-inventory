@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +10,17 @@ from fastapi.testclient import TestClient
 from deepagent import api
 from deepagent.config import Settings, get_settings
 from deepagent.models import InvestigationRequest, JobStatus, LlmRuntime
+
+
+def test_llm_runtime_accepts_128000_max_tokens() -> None:
+    runtime = LlmRuntime(
+        base_url="http://llm.example/v1",
+        api_key="test-key",
+        model="test-model",
+        max_tokens=128_000,
+    )
+
+    assert runtime.max_tokens == 128_000
 
 
 def test_job_id_is_deterministic_for_investigation_retries(monkeypatch):
@@ -107,6 +119,52 @@ async def test_failed_job_and_backend_callback_withhold_external_error_bodies(mo
     assert callback_payloads[0].error == expected_error
     assert yaml_secret not in job.error
     assert yaml_secret not in callback_payloads[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_runner_none_job_summary_includes_timed_out_tool_count(capsys, monkeypatch):
+    request = InvestigationRequest(
+        investigation_id="11111111-1111-1111-1111-111111111111",
+        client_id="C.test-client",
+        hostname="TEST-HOST",
+        time_range={"from": "2026-01-01T00:00:00Z", "to": "2026-01-01T01:00:00Z"},
+        suspicious_activity="Read-only check",
+        llm_runtime=LlmRuntime(
+            base_url="http://llm.example/v1",
+            api_key="test-key",
+            model="test-model",
+        ),
+        velociraptor_api_client_yaml=(
+            "ca_certificate: test-ca\nclient_cert: test-cert\n"
+            "client_private_key: test-private-key\n"
+        ),
+    )
+    job_id = "deepagent-11111111-1111-1111-1111-111111111111"
+    api._jobs[job_id] = JobStatus(
+        job_id=job_id,
+        investigation_id=request.investigation_id,
+        status="queued",
+        created_at=datetime.now(UTC),
+    )
+
+    class FailingMCP:
+        def __init__(self, _settings: Settings):
+            raise RuntimeError("MCP bootstrap failed before any tool call")
+
+    monkeypatch.setattr(api, "VelociraptorMCP", FailingMCP)
+
+    try:
+        await api._execute(request, job_id, Settings())
+    finally:
+        api._jobs.clear()
+
+    summary = next(
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"phase":"job_summary"' in line
+    )
+    assert summary["timed_out_tool_count"] == 0
+    assert summary["outcome"] == "failed"
 
 
 def test_mcp_test_does_not_return_yaml_from_a_bridge_error(monkeypatch):

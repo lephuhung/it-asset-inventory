@@ -87,6 +87,9 @@ class InvestigationRunner:
                     model=self.model.model_name,
                     successful_tool_count=sum(item.ok for item in evidence),
                     failed_tool_count=sum(not item.ok for item in evidence),
+                    timed_out_tool_count=sum(
+                        bool(getattr(item, "timeout", False)) for item in evidence
+                    ),
                     total_duration_ms=int((perf_counter() - started_at) * 1000),
                     error=exc,
                 )
@@ -99,6 +102,9 @@ class InvestigationRunner:
                 model=self.model.model_name,
                 successful_tool_count=sum(item.ok for item in evidence),
                 failed_tool_count=sum(not item.ok for item in evidence),
+                timed_out_tool_count=sum(
+                    bool(getattr(item, "timeout", False)) for item in evidence
+                ),
                 total_duration_ms=int((perf_counter() - started_at) * 1000),
             )
             return payload

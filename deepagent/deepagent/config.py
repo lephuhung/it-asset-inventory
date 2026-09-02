@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     max_steps: int = 8
     max_evidence_chars: int = 120_000
     max_tool_result_chars: int = 30_000
+
+    # Caller deadline for every MCP tool invocation. A DeepAgent timeout is
+    # only proof that the MCP call did not return before the deadline; it is
+    # NOT a Velociraptor flow-level guarantee. Phase 2 will add flow-level
+    # diagnosis through a tracked bridge patch/fork.
+    mcp_tool_timeout_seconds: int = Field(default=180, ge=10, le=1800)
 
     @field_validator("mcp_transport")
     @classmethod

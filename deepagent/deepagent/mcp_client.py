@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime
@@ -15,6 +16,34 @@ from deepagent.observability import log_event
 
 class MCPPolicyError(RuntimeError):
     pass
+
+
+class MCPToolTimeout(TimeoutError):
+    """The caller deadline expired before an MCP tool returned.
+
+    A DeepAgent-side timeout is only proof that the MCP call did not return
+    before the configured deadline. It is NOT a Velociraptor flow-level
+    guarantee. Flow-level diagnosis (client_unavailable, collection_timeout,
+    flow_error, result_read_timeout) is owned by a tracked bridge patch/fork
+    delivered in Phase 2; this class deliberately does not classify external
+    causes from raw error text.
+    """
+
+    def __init__(self, tool_name: str) -> None:
+        # Tool name is treated as non-sensitive allowlist metadata only.
+        super().__init__(f"MCP tool call exceeded its configured deadline: {tool_name}")
+        self.tool_name = tool_name
+
+
+_MCP_TIMEOUT_MESSAGE = "MCP tool call exceeded its configured deadline."
+
+
+async def _suppress_after_cancel(task: asyncio.Task) -> None:
+    """Await a cancelled MCP tool task, discarding any error from cancel propagation."""
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001 - cleanup only
+        return
 
 
 def _iso_z(value: datetime) -> str:
@@ -95,9 +124,34 @@ class VelociraptorMCP:
         self, *, tool: Any, tool_name: str, arguments: dict[str, Any]
     ) -> tuple[dict[str, Any], float]:
         started_at = perf_counter()
+        timeout_seconds = float(self.settings.mcp_tool_timeout_seconds)
+        tool_task = asyncio.ensure_future(tool.ainvoke(arguments))
         try:
-            raw = await tool.ainvoke(arguments)
-            payload = _decode_envelope(raw)
+            _done, pending = await asyncio.wait(
+                {tool_task}, timeout=timeout_seconds
+            )
+        except BaseException:
+            tool_task.cancel()
+            raise
+        if pending:
+            # The caller deadline expired before the tool finished. Cancel the
+            # tool task and report the bounded deadline to the runner.
+            tool_task.cancel()
+            _ = await _suppress_after_cancel(tool_task)
+            log_event(
+                phase="mcp_tool_call",
+                outcome="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                tool_name=tool_name,
+                error_type="MCPToolTimeout",
+                error_message=_MCP_TIMEOUT_MESSAGE,
+                timeout_seconds=timeout_seconds,
+            )
+            raise MCPToolTimeout(tool_name) from None
+        # Tool task finished in time. Surface its result or exception as-is so
+        # a tool-raised TimeoutError is not misclassified as a caller deadline.
+        try:
+            raw = tool_task.result()
         except Exception as exc:
             log_event(
                 phase="mcp_tool_call",
@@ -107,6 +161,7 @@ class VelociraptorMCP:
                 error=exc,
             )
             raise
+        payload = _decode_envelope(raw)
         return payload, (perf_counter() - started_at) * 1000
 
     @staticmethod

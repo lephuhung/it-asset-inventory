@@ -8,6 +8,7 @@ import pytest
 from deepagent.analysis_model import sanitize_plan
 from deepagent.config import Settings
 from deepagent.graph import build_investigation_graph
+from deepagent.mcp_client import MCPToolTimeout
 from deepagent.models import (
     Assessment,
     EvidenceItem,
@@ -122,3 +123,132 @@ async def test_graph_binds_target_and_emits_evidence_backed_markdown(capsys) -> 
     assert by_phase["target_verification"]["duration_ms"] >= 0
     assert by_phase["report_rendering"]["outcome"] == "succeeded"
     assert by_phase["report_rendering"]["report_chars"] == len(result["report_markdown"])
+
+
+@pytest.mark.asyncio
+async def test_failed_envelope_error_does_not_leak_bridge_message() -> None:
+    raw_error = "raw-evidence-should-never-appear"
+
+    class EnvelopeMCP:
+        async def verify_target(self, *, client_id, org_id):
+            return {"client_id": client_id, "os_info": {"OS": "windows"}}
+
+        async def collect(self, **kwargs):
+            return {"ok": False, "error": f"bridge error: {raw_error}"}
+
+    class SingleStepModel:
+        model_name = "fake-model"
+
+        async def plan(self, _request):
+            return InvestigationPlan(
+                hypothesis="collect evidence",
+                steps=[InvestigationStep(tool="windows_pslist", rationale="ps")],
+            )
+
+        async def assess(self, _request, evidence):
+            return Assessment(
+                severity="info",
+                confidence="low",
+                executive_summary="ok",
+                conclusion="ok",
+            )
+
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(mcp=EnvelopeMCP(), model=SingleStepModel(), settings=settings)
+
+    result = await graph.ainvoke({"request": request()})
+
+    assert len(result["evidence"]) == 1
+    failed = result["evidence"][0]
+    assert failed.ok is False
+    assert failed.error == "MCP tool returned a failed envelope."
+    assert raw_error not in failed.error
+
+
+async def test_graph_continues_after_a_timed_out_collection() -> None:
+    raw_evidence = "raw-evidence-should-never-appear"
+
+    class TimingOutMCP(FakeMCP):
+        async def collect(self, *, tool_name, **_kwargs):
+            self.calls.append({"tool_name": tool_name})
+            if tool_name == "windows_pslist":
+                raise MCPToolTimeout("windows_pslist")
+            return {
+                "ok": True,
+                "data": [{"tool": tool_name, "marker": raw_evidence}],
+            }
+
+    class ContinuationModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Continue past a timed-out collection",
+                steps=[
+                    InvestigationStep(tool="windows_pslist", rationale="may hang"),
+                    InvestigationStep(
+                        tool="windows_powershell_scriptblock", rationale="still useful"
+                    ),
+                ],
+            )
+
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(
+        mcp=TimingOutMCP(), model=ContinuationModel(), settings=settings
+    )
+
+    result = await graph.ainvoke({"request": request()})
+
+    assert [item.ok for item in result["evidence"]] == [False, True]
+    failed = result["evidence"][0]
+    assert failed.timeout is True
+    assert failed.error == "MCP collection timed out."
+    assert raw_evidence not in failed.error
+    surviving = result["evidence"][1]
+    assert surviving.ok is True
+    assert surviving.timeout is False
+    assert surviving.error is None
+
+
+@pytest.mark.asyncio
+async def test_graph_swallows_external_collection_exception_with_safe_error() -> None:
+    class ExplodingMCP(FakeMCP):
+        async def collect(self, *, tool_name, **_kwargs):
+            raise RuntimeError(
+                f"bridge leaked raw-evidence-should-never-appear for {tool_name}"
+            )
+
+    class SingleStepModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="External failure",
+                steps=[
+                    InvestigationStep(
+                        tool="windows_powershell_scriptblock",
+                        rationale="only step",
+                    )
+                ],
+            )
+
+        async def assess(
+            self, _request: InvestigationRequest, evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="medium",
+                confidence="medium",
+                executive_summary="Có lỗi ngoài ở một truy vấn MCP.",
+                conclusion="Cần tiếp tục giám sát.",
+                findings=[],
+            )
+
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(
+        mcp=ExplodingMCP(), model=SingleStepModel(), settings=settings
+    )
+
+    result = await graph.ainvoke({"request": request()})
+
+    assert len(result["evidence"]) == 1
+    failed = result["evidence"][0]
+    assert failed.ok is False
+    assert failed.timeout is False
+    assert failed.error == "MCP collection failed: RuntimeError."
+    assert "raw-evidence-should-never-appear" not in failed.error

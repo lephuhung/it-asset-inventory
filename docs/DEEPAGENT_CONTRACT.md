@@ -47,6 +47,19 @@ Phase chuẩn: `queued`, `verifying_target`, `planning`, `collecting`, `assessin
 
 Body gồm `report_markdown`, `severity`, `findings_count`, `findings`, `iocs`, `llm_provider`, `llm_model`, `external_job_id` và tùy chọn `error`. Backend là nơi duy nhất lưu kết quả và gửi notification.
 
+## Độ tin cậy MCP và deadline
+
+DeepAgent áp dụng deadline phía caller cho mọi lệnh gọi MCP (`DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS`, mặc định `180`, khoảng hợp lệ `10–1800`). Khi deadline trước khi tool trả về, DeepAgent:
+
+- log một sự kiện `mcp_tool_call` với `outcome=failed`, `error_type=MCPToolTimeout`, `error_message="MCP tool call exceeded its configured deadline."`, `tool_name` và `timeout_seconds`. Không ghi VQL, YAML, prompt, evidence, kết quả thô hay nội dung lỗi từ bridge.
+- nâng `MCPToolTimeout(tool_name)` để graph tiếp tục thay vì dừng.
+- chuyển evidence lỗi thành `EvidenceItem(ok=False, timeout=True, error="MCP collection timed out.")`. Raw exception không đi vào evidence, prompt model, report, callback hay log.
+- cộng `timed_out_tool_count` vào `job_summary`. Số đếm successful/failed cũ vẫn tương thích.
+
+Một timeout phía DeepAgent chỉ chứng minh cuộc gọi MCP không về trước deadline (gọi là `mcp_call_deadline`); nó KHÔNG phải bằng chứng Velociraptor flow thất bại. Phân loại nguyên nhân flow-level (`client_unavailable`, `collection_timeout`, `flow_error`, `result_read_timeout`) thuộc sở hữu của bridge MCP và chỉ được thực hiện qua patch/fork được theo dõi, áp dụng bằng Dockerfile sau khi clone pinned upstream. Phase 2 của plan DeepAgent MCP reliability phụ trách phần này và phải không chỉnh sửa bridge trong container đang chạy.
+
+Không có automatic duplicate collection retry: sau timeout, chỉ hành động thủ công của operator mới tạo flow mới.
+
 ## Cấu hình Velociraptor
 
 Super Admin nhập URL bằng `PUT /api/admin/velociraptor/config` và upload `api_client.yaml` qua `POST /api/admin/velociraptor/config/api-client/upload`. Backend validate, mã hoá file và không trả private key. Nút **Kiểm tra MCP → Velociraptor** gọi backend, backend gửi YAML chỉ qua network Docker tới DeepAgent, và DeepAgent chạy `list_clients(limit=1)` read-only trước khi xóa tệp tạm.

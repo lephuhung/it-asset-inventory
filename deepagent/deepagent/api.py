@@ -89,6 +89,7 @@ async def _execute(request: InvestigationRequest, job_id: str, settings: Setting
                         model=request.llm_runtime.model,
                         successful_tool_count=0,
                         failed_tool_count=0,
+                        timed_out_tool_count=0,
                         total_duration_ms=int((perf_counter() - started_at) * 1000),
                         error=exc,
                     )
