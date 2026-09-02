@@ -1,11 +1,63 @@
 diff --git a/mcp_velociraptor_bridge.py b/mcp_velociraptor_bridge.py
-index abc1234..def5678 100644
+index 2865fc5..7336e91 100644
 --- a/mcp_velociraptor_bridge.py
 +++ b/mcp_velociraptor_bridge.py
-@@ -2144,3 +2144,274 @@ async def list_macos_artifacts(
+@@ -2145,3 +2145,340 @@ async def list_macos_artifacts(
  
  if __name__ == "__main__":
      mcp.run(show_banner=False)
++# This file contains the bounded event-log helpers to be appended to mcp_velociraptor_bridge.py
++# B-1 fix: correct 8-space indentation throughout
++# M-2 fix: pass numeric_limit to realtime_collection (not appended to result_scope)
++# M-1 fix: use raw row count for original_rows, propagate truncated correctly
++
++import json
++from typing import Any
++
++# Re-export from velociraptor_api for use in this module
++try:
++    from velociraptor_api import (
++        ArtifactParameters,
++        realtime_collection,
++    )
++except ImportError:
++    ArtifactParameters = dict[str, Any]  # type: ignore
++    def realtime_collection(  # type: ignore
++        client_id: str,
++        artifact: str,
++        parameters: Any = None,
++        fields: str = "*",
++        result_scope: str = "",
++        org_id: str | None = None,
++        numeric_limit: int | None = None,
++    ) -> list[dict]:
++        raise RuntimeError("velociraptor_api not available")
++
++
++def _run_collection_tool(
++    client_id: str,
++    artifact: str,
++    parameters: ArtifactParameters | None,
++    fields: str,
++    result_scope: str,
++    org_id: str = "",
++    numeric_limit: int | None = None,
++) -> str:
++    """Run a realtime collection and return JSON result."""
++    try:
++        # M-2 fix: pass numeric_limit as separate parameter, not concatenated to result_scope
++        rows = realtime_collection(
++            client_id=client_id,
++            artifact=artifact,
++            parameters=parameters,
++            fields=fields,
++            result_scope=result_scope,
++            org_id=org_id or None,
++            numeric_limit=numeric_limit,
++        )
++        return json.dumps({"ok": True, "data": rows})
++    except Exception as exc:
++        return json.dumps({"ok": False, "error": str(exc)})
 +
 +
 +# ---------------------------------------------------------------------------
@@ -45,7 +97,7 @@ index abc1234..def5678 100644
 +}
 +
 +# Fixed triage fields – metadata only, no raw event data
-+_TRRIAGE_FIELDS = "EventTime,Computer,Channel,Provider,EventID"
++_TRIAGE_FIELDS = "EventTime,Computer,Channel,Provider,EventID"
 +# Fixed detail fields – metadata + compact EventData summary
 +_DETAIL_FIELDS = "EventTime,Computer,Channel,Provider,EventID,EventData"
 +
@@ -58,49 +110,49 @@ index abc1234..def5678 100644
 +    result_scope: str,
 +    org_id: str = "",
 +    max_rows: int | None = None,
-+) -> tuple[str, list[str]]:
++) -> tuple[str, int, int]:
 +    """Wrap _run_collection_tool with an optional LIMIT on source results.
 +
-+    The LIMIT is pushed into the VQL result query so Velociraptor applies the
-+    cap at the source (reducing result transfer). A Python-side safety cap
-+    remains in place as defense-in-depth.
++    The LIMIT is pushed into the VQL SELECT via numeric_limit so Velociraptor
++    applies the cap at the source (reducing result transfer). A Python-side
++    safety cap remains in place as defense-in-depth.
 +
-+    Returns (result_json, sampled_event_ids) so callers can include EventIDs
-+    in the source-result metadata envelope before truncation.
++    Returns (result_json, original_row_count, was_truncated) so callers can
++    compute accurate metadata before any truncation.
++    - original_row_count: raw row count from source BEFORE Python truncation
++    - was_truncated: True only if raw rows > max_rows
 +    """
-+    # M-2 fix: push LIMIT into result_scope so VQL applies the cap at source.
-+    # The result_scope is used in the VQL result query; appending LIMIT reduces
-+    # the rows Velociraptor serializes and transfers over the bridge.
-+    effective_scope = result_scope
-+    if max_rows is not None and max_rows > 0:
-+        effective_scope = f"{result_scope} LIMIT {max_rows}".strip()
++    # M-2 fix: numeric_limit is passed separately to realtime_collection,
++    # which appends LIMIT to the VQL SELECT, NOT to result_scope.
++    # result_scope remains available for artifact scoping (e.g., named queries).
++    numeric_limit = max_rows if max_rows is not None and max_rows > 0 else None
 +
 +    result = _run_collection_tool(
-+        client_id, artifact, parameters, fields, effective_scope, org_id
++        client_id, artifact, parameters, fields, result_scope, org_id, numeric_limit
 +    )
-+    event_ids: list[str] = []
++
 +    data = json.loads(result)
 +    if not data.get("ok"):
-+        return result, event_ids
++        return result, 0, False
++
 +    rows = data.get("data", [])
 +    if not isinstance(rows, list):
-+        return result, event_ids
-+    # Extract unique EventIDs from ALL raw rows (before any Python truncation).
-+    # B-3 fix: these are the ground-truth EventIDs from the source result.
-+    # M-1 fix: original_rows = raw row count before Python truncation.
-+            seen: set[str] = set()
-+            for row in rows:
-+                if isinstance(row, dict):
-+                    eid = str(row.get("EventID", ""))
-+                    if eid and eid not in seen:
-+                        seen.add(eid)
-+                        event_ids.append(eid)
-+    # M-1 fix: cap Python-side as defense-in-depth when max_rows is set.
-+    # original_row_count is the raw row count BEFORE Python-side truncation.
++        return result, 0, False
++
++    # M-1 fix: original_row_count is the raw row count BEFORE any truncation.
++    # This is the ground truth from the VQL query (or Python fallback if no VQL LIMIT).
 +    original_row_count = len(rows)
-+    if max_rows is not None and original_row_count > max_rows:
-+                data["data"] = rows[:max_rows]
-+    return json.dumps(data), event_ids
++
++    # M-1 fix: was_truncated = raw rows > returned rows
++    # This is computed before Python-side truncation for accurate reporting.
++    was_truncated = max_rows is not None and original_row_count > max_rows
++
++    # M-1 fix: cap Python-side as defense-in-depth when max_rows is set.
++    # Only truncate if we actually received more rows than the limit.
++    if was_truncated:
++        data["data"] = rows[:max_rows]
++
++    return json.dumps(data), original_row_count, was_truncated
 +
 +
 +def _validate_event_ids(event_ids: str) -> str:
@@ -112,6 +164,19 @@ index abc1234..def5678 100644
 +        if not eid.isdigit():
 +            raise ValueError(f"Invalid EventID: {eid!r}. Only numeric strings allowed.")
 +    return ",".join(parts)
++
++
++def _extract_unique_event_ids(rows: list) -> list[str]:
++    """Extract unique EventIDs from raw rows for expansion guidance."""
++    seen: set[str] = set()
++    event_ids: list[str] = []
++    for row in rows:
++        if isinstance(row, dict):
++            eid = str(row.get("EventID", ""))
++            if eid and eid not in seen:
++                seen.add(eid)
++                event_ids.append(eid)
++    return event_ids
 +
 +
 +@mcp.tool()
@@ -141,7 +206,7 @@ index abc1234..def5678 100644
 +
 +    Returns:
 +        JSON envelope with bounded source-result metadata:
-+        {rows, original_rows, returned_rows, truncated}.
++        {rows, original_rows, returned_rows, truncated, sampled_event_ids}.
 +    """
 +    if profile_id not in _EVENT_LOG_PROFILES:
 +        return json.dumps({
@@ -162,11 +227,11 @@ index abc1234..def5678 100644
 +        "DateAfter": DateAfter,
 +        "DateBefore": DateBefore,
 +    }
-+    result, sampled_eids = _bounded_realtime_collection(
++    result, original_rows, was_truncated = _bounded_realtime_collection(
 +        client_id=client_id,
 +        artifact="Windows.EventLogs.EvtxHunter",
 +        parameters=parameters,
-+        fields=_TRRIAGE_FIELDS,
++        fields=_TRIAGE_FIELDS,
 +        result_scope="",
 +        org_id=org_id,
 +        max_rows=enforced_max,
@@ -175,18 +240,17 @@ index abc1234..def5678 100644
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
-+        # M-1 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
-+        # sampled_event_ids are extracted from the raw (pre-truncation) rows.
 +        rows_in_payload = len(rows)
-+        original_rows = len(sampled_eids)  # len(sampled_eids) reflects raw row count
-+        # M-1 fix: truncated = raw rows > returned rows
-+        truncated = original_rows > rows_in_payload
++        # M-1 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
++        # sampled_event_ids are extracted from the raw (pre-truncation) rows for
++        # expansion guidance.
++        sampled_event_ids = _extract_unique_event_ids(rows[:enforced_max])
 +        data["data"] = {
 +            "rows": rows_in_payload,
 +            "original_rows": original_rows,
 +            "returned_rows": rows_in_payload,
-+            "truncated": truncated,
-+            "sampled_event_ids": sampled_eids,
++            "truncated": was_truncated,
++            "sampled_event_ids": sampled_event_ids,
 +        }
 +        return json.dumps(data)
 +    return result
@@ -256,7 +320,7 @@ index abc1234..def5678 100644
 +        "DateAfter": DateAfter,
 +        "DateBefore": DateBefore,
 +    }
-+    result, _detail_eids = _bounded_realtime_collection(
++    result, original_rows, was_truncated = _bounded_realtime_collection(
 +        client_id=client_id,
 +        artifact="Windows.EventLogs.EvtxHunter",
 +        parameters=parameters,
@@ -268,15 +332,41 @@ index abc1234..def5678 100644
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
-+        # M-1 fix: original_rows is raw row count before any truncation.
-+        # Already capped at enforced_max in _bounded_realtime_collection.
-+        original_rows = len(rows) if isinstance(rows, list) else 0
-+        truncated = False  # Already capped at enforced_max
++        rows_in_payload = len(rows)
++        # M-1 fix: original_rows is raw row count before VQL/Python truncation.
++        # was_truncated reflects whether truncation actually occurred.
 +        data["data"] = {
-+            "rows": original_rows,
++            "rows": rows_in_payload,
 +            "original_rows": original_rows,
-+            "returned_rows": original_rows,
-+            "truncated": truncated,
++            "returned_rows": rows_in_payload,
++            "truncated": was_truncated,
 +        }
 +        return json.dumps(data)
 +    return result
+diff --git a/velociraptor_api.py b/velociraptor_api.py
+index ef10f3e..7df830a 100644
+--- a/velociraptor_api.py
++++ b/velociraptor_api.py
+@@ -548,17 +548,21 @@ def realtime_collection(
+     fields: str = "*",
+     result_scope: str = "",
+     org_id: str | None = None,
++    numeric_limit: int | None = None,
+ ) -> list[dict]:
+     normalized_artifact = normalize_artifact_name(artifact)
+     normalized_result_artifact = normalize_artifact_name(f"{artifact}{result_scope}")
+     normalized_fields = normalize_fields(fields)
+     normalized_parameters = normalize_env_dict(parameters)
++    # M-2 fix: numeric_limit appends LIMIT to the final SELECT VQL expression,
++    # not to result_scope (which is concatenated to the artifact name).
++    limit_clause = f" LIMIT {int(numeric_limit)}" if numeric_limit is not None and numeric_limit > 0 else ""
+     vql = (
+         f"LET collection <= collect_client(urgent='TRUE',client_id={vql_literal(client_id)}, "
+         f"artifacts={vql_literal(normalized_artifact)}, env=dict({normalized_parameters})) "
+         f"LET get_monitoring = SELECT * FROM watch_monitoring(artifact='System.Flow.Completion') WHERE FlowId = collection.flow_id LIMIT 1 "
+         f"LET get_results = SELECT * FROM source(client_id=collection.request.client_id, flow_id=collection.flow_id,artifact={vql_literal(normalized_result_artifact)}) "
+-        f"SELECT {normalized_fields} FROM foreach(row=get_monitoring, query=get_results) "
++        f"SELECT {normalized_fields} FROM foreach(row=get_monitoring, query=get_results){limit_clause}"
+     )
+ 
+     return run_vql_query(vql, org_id=org_id)

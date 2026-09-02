@@ -5,7 +5,6 @@ from time import perf_counter
 from typing import Any, Protocol
 
 from langchain_openai import ChatOpenAI
-from pydantic import ValidationError
 
 from deepagent.catalog import BASELINE_TOOLS, WINDOWS_TOOL_POLICIES, catalog_prompt
 from deepagent.models import (
@@ -150,7 +149,7 @@ TRIAGE SUMMARY: rows={triage_result.get('rows', 0)}, truncated={triage_result.ge
                 }
                 for exp in expansion_list.expansions
             ]
-        except ValidationError as exc:
+        except Exception as exc:  # noqa: BLE001 - defensive catch preserves graph flow
             log_event(
                 phase="event_log_expansion_planning",
                 outcome="failed",
