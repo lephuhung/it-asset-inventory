@@ -79,7 +79,7 @@ export default function NotificationPrefsPage() {
   const enabledItems = items.filter((it) => it.opt_out_controls.length > 0);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       {/* Header — icon tile + title heavy (700, tracking âm) + mô tả stone,
           theo pattern header của Design.md (chrome trắng, một accent primary). */}
       <header className="flex items-center gap-3">
@@ -120,7 +120,8 @@ export default function NotificationPrefsPage() {
           />
         </Card>
       ) : (
-        Object.entries(grouped).map(([category, list]) => (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+          {Object.entries(grouped).map(([category, list]) => (
           <Card
             key={category}
             title={
@@ -145,21 +146,25 @@ export default function NotificationPrefsPage() {
                     </div>
                     <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">{it.template_code}</Badge>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-6 gap-y-2">
+                  {/* Các control được nhóm vào từng "control group" có nền mờ + viền để
+                      dễ đọc hơn thay vì trải trên một hàng flex dài, dễ rối. */}
+                  <div className="mt-3 space-y-2">
                     {it.opt_out_controls.includes("template") && (
-                      <div className="flex items-center gap-2 text-sm text-slate-700">
+                      <div className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2.5 ring-1 ring-inset ring-slate-200">
                         <Toggle checked={!it.muted} onChange={(v: boolean) => update(it.template_code, { muted: !v })} label={`Nhận ${it.template_name}`} disabled={isSuperAdmin} />
-                        <span className={it.muted ? "text-slate-400" : "text-slate-700"}>
+                        <span className={`text-sm font-medium ${it.muted ? "text-slate-400" : "text-slate-700"}`}>
                           {it.muted ? "Đang tắt" : "Đang nhận"}
                         </span>
                       </div>
                     )}
                     {it.opt_out_controls.includes("severity") && (
-                      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 text-sm ${it.muted ? "text-slate-300" : "text-slate-700"}`}>
-                        <span className={`text-xs ${it.muted ? "text-slate-300" : "text-slate-500"}`}>Chỉ nhận từ mức:</span>
+                      <div className={`rounded-lg px-3 py-2.5 ring-1 ring-inset ${it.muted ? "bg-slate-50/50 ring-slate-100" : "bg-white ring-slate-200"}`}>
+                        <p className={`text-xs font-medium ${it.muted ? "text-slate-300" : "text-slate-500"}`}>
+                          Chỉ nhận từ mức:
+                        </p>
                         {/* Severity pill nhóm — thay dropdown: active = chip tint màu severity
                             (giống badge "Mức mặc định"), disabled khi super admin / template đang tắt. */}
-                        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={`Chọn mức tối thiểu cho ${it.template_name}`}>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5" role="group" aria-label={`Chọn mức tối thiểu cho ${it.template_name}`}>
                           {SEVERITY_OPTIONS.map((s) => {
                             const meta = ALERT_SEVERITY_META[s];
                             const active = (it.min_severity ?? it.default_severity) === s;
@@ -199,7 +204,8 @@ export default function NotificationPrefsPage() {
               ))}
             </div>
           </Card>
-        ))
+          ))}
+        </div>
       )}
 
       {!isSuperAdmin && enabledItems.length > 0 && (
