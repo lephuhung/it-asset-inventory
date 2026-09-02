@@ -1,15 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, ClipboardCheck, Monitor, RefreshCw, Search } from "lucide-react";
+import { ClipboardCheck, Monitor, RefreshCw, Search } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MachineListItem, MachineStatus, Organization, Tag } from "@/lib/types";
-import { useRealtime } from "@/components/realtime-context";
+import type { MachineListItem, Organization, Tag } from "@/lib/types";
+import { useRealtimeEvents } from "@/components/realtime-context";
 import {
-  Badge,
-  PageResponse,
-  Pagination,
   Button,
   Card,
   EmptyState,
@@ -17,19 +14,15 @@ import {
   Field,
   Input,
   PageHeader,
+  PageResponse,
   Select,
   Spinner,
-  StatusDot,
-  TABLE,
-  TABLE_WRAP,
-  TD,
-  TH,
-  THEAD,
-  TR_HOVER,
 } from "@/components/ui";
-import { LIFECYCLE_META, MACHINE_STATUS_META, ORG_TYPE_META, classificationTag, flattenOrgTree, formatDateTime, purposeTags, tagBadgeClass, timeAgo } from "@/lib/format";
+import { ORG_TYPE_META } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 import { useAuth } from "@/components/auth-context";
-import { DeleteButton } from "@/components/delete-button";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { MachineResultsTable } from "@/components/machine-results-table";
 
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "", label: "Tất cả trạng thái" },
@@ -40,66 +33,9 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "decommissioned", label: "Đã thanh lý" },
 ];
 
-
-const OSLogo = ({ platform, className = "size-3.5" }: { platform: string | null | undefined; className?: string }) => {
-  const p = (platform ?? "").toLowerCase();
-
-  if (p.includes("win")) {
-    // Windows logo (4 ô vuông — Windows 8/10/11 mark)
-    return (
-      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Windows" role="img">
-        <title>Windows</title>
-        <path fill="#0078D4" d="M0 3.5L10.5 2v9H0zM11.5 1.9L24 0v11h-12.5zM0 12.5h10.5v9L0 20.5zM11.5 12.5H24V24l-12.5-1.9z" />
-      </svg>
-    );
-  }
-  if (p.includes("linux") || p.includes("ubuntu") || p.includes("debian") || p.includes("rhel") || p.includes("rocky")) {
-    // Tux — con cánh cụt đơn giản (penguin silhouette). Mắt trắng + body đen.
-    return (
-      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Linux" role="img">
-        <title>Linux</title>
-        {/* đầu */}
-        <ellipse cx="12" cy="9" rx="4" ry="5" fill="#000" />
-        {/* bụng trắng + cằm trắng */}
-        <ellipse cx="12" cy="10.5" rx="2.4" ry="3" fill="#fff" />
-        {/* mắt */}
-        <circle cx="10.6" cy="7.6" r="0.85" fill="#fff" />
-        <circle cx="13.4" cy="7.6" r="0.85" fill="#fff" />
-        <circle cx="10.6" cy="7.7" r="0.35" fill="#000" />
-        <circle cx="13.4" cy="7.7" r="0.35" fill="#000" />
-        {/* mỏ cam */}
-        <path fill="#F4A100" d="M11 9.6l1 0.6 1-0.6 -1 1.2z" />
-        {/* thân + chân */}
-        <path fill="#000" d="M8 13c0 4 1.8 6 4 6s4-2 4-6c0 0-1 1.2-4 1.2S8 13 8 13z" />
-        {/* chân (chỉ 2 ngón) */}
-        <ellipse cx="10" cy="20" rx="1.6" ry="0.9" fill="#F4A100" />
-        <ellipse cx="14" cy="20" rx="1.6" ry="0.9" fill="#F4A100" />
-      </svg>
-    );
-  }
-  if (p.includes("mac") || p.includes("darwin") || p.includes("osx")) {
-    // Apple logo (đơn giản)
-    return (
-      <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="macOS" role="img">
-        <title>macOS</title>
-        <path fill="#000" d="M17.05 12.04c-.02-2.16 1.76-3.2 1.84-3.25-1-1.46-2.57-1.66-3.13-1.69-1.32-.13-2.59.78-3.27.78-.68 0-1.72-.76-2.83-.74-1.45.02-2.79.85-3.54 2.15-1.51 2.62-.39 6.5 1.08 8.62.72 1.05 1.57 2.21 2.69 2.17 1.08-.04 1.49-.7 2.79-.7 1.31 0 1.67.7 2.81.68 1.16-.02 1.9-1.06 2.61-2.11.83-1.2 1.17-2.37 1.19-2.43-.03-.01-2.27-.87-2.29-3.46zM14.95 5.84c.6-.72 1-1.73.89-2.74-.86.04-1.91.57-2.53 1.29-.55.64-1.04 1.67-.91 2.66.96.08 1.95-.49 2.55-1.21z" />
-      </svg>
-    );
-  }
-  // Unknown — hiển thị chấm hỏi giúp admin biết máy chưa gửi v4 envelope.
-  return (
-    <svg viewBox="0 0 24 24" className={`inline align-middle ${className}`} aria-label="Unknown OS" role="img">
-      <title>Unknown OS (chưa gửi platform)</title>
-      <circle cx="12" cy="12" r="11" fill="#94a3b8" />
-      <text x="12" y="17" textAnchor="middle" fontFamily="sans-serif" fontSize="14" fontWeight="bold" fill="#fff">?</text>
-    </svg>
-  );
-};
-
-
 export default function MachinesPage() {
   const { user } = useAuth();
-  const { lastEvent } = useRealtime();
+  const { lastEvent } = useRealtimeEvents();
 
   const [machines, setMachines] = useState<MachineListItem[]>([]);
   const [page, setPage] = useState<PageResponse<MachineListItem>>({
@@ -109,6 +45,7 @@ export default function MachinesPage() {
     offset: 0,
   });
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const flatOrgs = useFlatOrgs(orgs);
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -120,18 +57,55 @@ export default function MachinesPage() {
   const [offset, setOffset] = useState(0);
   const [pendingCount, setPendingCount] = useState(0);
 
+  // Debounce 350ms cho q — không phát request theo từng ký tự.
+  const debouncedQ = useDebouncedValue(q, 350);
+  // AbortController cho request search đang chạy — request trước bị hủy khi
+  // user gõ tiếp.
+  const searchAbortRef = useRef<AbortController | null>(null);
+  // Guard chống burst refresh từ realtime + poll 30s: chỉ một silent refresh
+  // trong cửa sổ 5 giây và không xếp chồng khi refresh đang in-flight.
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshAtRef = useRef(0);
+
   const load = useCallback(
-    async (silent = false, overrideOffset?: number) => {
+    async (silent = false, overrideOffset?: number, overrideQ?: string) => {
+      // Hủy request cũ (nếu đang pending) — bỏ qua kết quả lỗi thời.
+      // Tạo controller mới và gán vào ref TRƯỚC khi await — đảm bảo các lần
+      // gọi load() tiếp theo thấy được controller hiện tại để abort/stale-check.
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
+      // Mọi load (initial, manual "Làm mới" / "Áp dụng", silent pagination /
+      // delete, realtime qua WebSocket, poll 30s) đều tham gia in-flight
+      // guard và ghi timestamp ngay khi bắt đầu — đảm bảo:
+      //  - Khi bất kỳ load nào đang chạy, `refreshFromRealtime` thấy
+      //    `refreshInFlightRef.current = true` và skip — không có silent
+      //    refresh chồng với request đang in-flight.
+      //  - Cửa sổ throttle 5 giây được thiết lập từ lúc load bắt đầu (không
+      //    phải từ lúc kết thúc), nên burst WebSocket event ngay sau khi load
+      //    hoàn tất cũng không thể lọt qua guard.
+      // Manual click vẫn luôn được phép vì `onClick` gọi `load()` trực tiếp
+      // chứ không qua `refreshFromRealtime` — chỉ guard throttling mới bị
+      // tham gia vào cửa sổ 5s (chấp nhận được, không phá khả năng thao
+      // tác manual). Stale finally của controller cũ được chặn bởi guard
+      // `searchAbortRef.current === controller` ở dưới.
+      refreshInFlightRef.current = true;
+      lastRefreshAtRef.current = Date.now();
       const useOffset = overrideOffset ?? offset;
       try {
-        const data = await api.get<PageResponse<MachineListItem>>("/machines", {
-          q: q || undefined,
-          status: status || undefined,
-          org_id: orgId || undefined,
-          tag: tag || undefined,
-          limit: 50,
-          offset: useOffset,
-        });
+        const data = await api.get<PageResponse<MachineListItem>>(
+          "/machines",
+          {
+            q: (overrideQ ?? debouncedQ) || undefined,
+            status: status || undefined,
+            org_id: orgId || undefined,
+            tag: tag || undefined,
+            limit: 50,
+            offset: useOffset,
+          },
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted || searchAbortRef.current !== controller) return;
         setMachines(data.items);
         setPage(data);
         // Ẩn máy "pending" khỏi Assets — máy chờ duyệt chỉ hiện ở trang /approvals.
@@ -142,14 +116,36 @@ export default function MachinesPage() {
           setMachines(data.items.filter((m) => m.status !== "pending"));
         }
         setError(null);
-      } catch (e) {
+      } catch (e: any) {
+        // AbortError hoặc request đã lỗi thời — im lặng, không log error UI.
+        if (e?.name === "AbortError" || controller.signal.aborted || searchAbortRef.current !== controller) return;
         if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách máy");
       } finally {
-        setLoading(false);
+        // Stale result guard: chỉ reset trạng thái cho controller hiện tại.
+        // Nếu controller cũ còn finally chờ (vì promise của nó bị abort
+        // khi manual / pagination / realtime load mới bắt đầu), nó không
+        // được phép đè in-flight của controller mới — nếu không, cửa sổ
+        // throttle bị phá vỡ và `refreshFromRealtime` có thể bắn thêm một
+        // silent refresh chồng với controller đang chạy.
+        // In-flight giờ là cờ chung cho mọi load (silent hay manual), nên
+        // reset unconditional cho bất kỳ controller nào còn là hiện tại —
+        // không phân biệt silent/manual nữa.
+        if (searchAbortRef.current === controller) {
+          setLoading(false);
+          refreshInFlightRef.current = false;
+        }
       }
     },
-    [q, status, orgId, tag, offset],
+    [debouncedQ, status, orgId, tag, offset],
   );
+
+  // Cleanup AbortController khi rời trang.
+  useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+    };
+  }, []);
 
   // Org list (admin toàn cục) — endpoint /api/orgs chưa có ở backend → ẩn bộ lọc khi thiếu.
   useEffect(() => {
@@ -166,23 +162,51 @@ export default function MachinesPage() {
       .catch(() => setTags([]));
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(true), 30_000);
-    return () => clearInterval(timer);
+  // Callback dùng chung cho cả effect lastEvent và poll 30s — cả hai
+  // nguồn kích hoạt đều đi qua cùng guard burst throttle. Timestamp được
+  // ghi ở `load()` ngay khi controller mới được tạo, nên callback này
+  // chỉ cần kiểm tra guard và gọi `load(true)` — không ghi timestamp
+  // thủ công (tránh duplicate và đảm bảo single source of truth).
+  const refreshFromRealtime = useCallback(() => {
+    const now = Date.now();
+    if (refreshInFlightRef.current || now - lastRefreshAtRef.current < 5000) return;
+    void load(true);
   }, [load]);
 
-  // Realtime: máy online/offline → refresh nhẹ
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => refreshFromRealtime(), 30_000);
+    return () => clearInterval(timer);
+  }, [load, refreshFromRealtime]);
+
+  // Realtime: máy online/offline → refresh nhẹ (qua guard).
   useEffect(() => {
     if (!lastEvent) return;
-    const t = setTimeout(() => void load(true), 1200);
-    return () => clearTimeout(t);
-  }, [lastEvent, load]);
+    refreshFromRealtime();
+  }, [lastEvent, refreshFromRealtime]);
 
-  const countByStatus = (machines ?? []).reduce<Record<string, number>>((acc, m) => {
-    acc[m.status] = (acc[m.status] ?? 0) + 1;
-    return acc;
-  }, {});
+  const countByStatus = useMemo(
+    () =>
+      (machines ?? []).reduce<Record<string, number>>((acc, m) => {
+        acc[m.status] = (acc[m.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+    [machines],
+  );
+
+  // Callback cho bảng kết quả — giữ tham chiếu ổn định để `MachineResultsTable`
+  // (memo) không re-render khi chỉ `q`/filter thay đổi.
+  const handleMachineReload = useCallback(() => {
+    void load(true);
+  }, [load]);
+
+  const handleMachinePageChange = useCallback(
+    (newOffset: number) => {
+      setOffset(newOffset);
+      void load(true, newOffset);
+    },
+    [load],
+  );
 
   return (
     <div>
@@ -222,7 +246,7 @@ export default function MachinesPage() {
             <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Tất cả</option>
-                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                {flatOrgs.map(({ org, depth }) => {
                   const meta = ORG_TYPE_META[org.type];
                   return (
                     <option key={org.id} value={org.id}>
@@ -249,7 +273,9 @@ export default function MachinesPage() {
               variant="secondary"
               onClick={() => {
                 setOffset(0);
-                void load(false, 0);
+                // Apply là thao tác chủ động: dùng giá trị đang hiển thị thay vì
+                // giá trị debounced cũ nếu user bấm ngay sau khi nhập.
+                void load(false, 0, q);
               }}
               disabled={loading}
             >
@@ -292,120 +318,13 @@ export default function MachinesPage() {
           description="Tạo token triển khai tại mục Token để đưa máy vào hệ thống."
         />
       ) : (
-        <div className={TABLE_WRAP}>
-          <table className={TABLE}>
-            <thead className={THEAD}>
-              <tr>
-                <th scope="col" className={TH}>Hostname</th>
-                <th scope="col" className={TH}>Trạng thái</th>
-                <th scope="col" className={TH}>Vòng đời</th>
-                <th scope="col" className={TH}>Phân loại</th>
-                <th scope="col" className={TH}>Lần cuối online</th>
-                <th scope="col" className={TH}>Enroll</th>
-                <th scope="col" className={TH}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(machines ?? []).map((m) => {
-                const meta = MACHINE_STATUS_META[m.status];
-                const life = LIFECYCLE_META[m.lifecycle] ?? { label: m.lifecycle, badge: "bg-slate-100 text-slate-500 ring-slate-500/20" };
-                return (
-                  <tr key={m.id} className={TR_HOVER}>
-                    <td className={`${TD} font-medium text-slate-800`}>
-                      <div className="flex items-center gap-1.5">
-                        <OSLogo platform={m.platform} />
-                        <span>{m.hostname ?? "(chưa đặt tên)"}</span>
-                        {m.velociraptor_client_id && (
-                          <span
-                            className="ml-1 inline-flex items-center gap-0.5 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700"
-                            title={`DFIR: Velociraptor đã enroll\nclient_id: ${m.velociraptor_client_id}\nLast seen: ${m.velociraptor_last_seen_at || "unknown"}`}
-                          >
-                            <svg viewBox="0 0 24 24" className="inline size-3" aria-hidden="true">
-                              <path fill="currentColor" d="M12 2L4 6v6c0 5 3.5 9.5 8 10.5 4.5-1 8-5.5 8-10.5V6l-8-4zm0 2.2l6 3v4.8c0 4-2.7 7.7-6 8.7-3.3-1-6-4.7-6-8.7V7.2l6-3z" />
-                            </svg>
-                            DFIR
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className={TD}>
-                      <Badge className={meta.badge}>
-                        <StatusDot className={meta.dot} />
-                        {meta.label}
-                      </Badge>
-                      {m.status !== "online" && m.last_seen_at && (
-                        <p className="mt-1 text-[11px] text-slate-400">Cuối: {timeAgo(m.last_seen_at)}</p>
-                      )}
-                    </td>
-                    <td className={TD}>
-                      <Badge className={life.badge}>{life.label}</Badge>
-                    </td>
-                    <td className={TD}>
-                      {/* Tag nổi bật theo type (classification) + kind (purpose) của máy */}
-                      <div className="flex flex-wrap items-center gap-1">
-                        {(() => {
-                          const cls = classificationTag(m.tags);
-                          return cls ? (
-                            <Badge className={tagBadgeClass(cls)}>{cls.label}</Badge>
-                          ) : (
-                            <Badge className="bg-slate-100 text-slate-500 ring-slate-500/20">Chưa phân loại</Badge>
-                          );
-                        })()}
-                        {purposeTags(m.tags).map((t) => (
-                          <Badge key={t.key} className={tagBadgeClass(t)}>{t.label}</Badge>
-                        ))}
-                        <Badge
-                          className={
-                            m.is_vm
-                              ? "bg-sky-50 text-sky-700 ring-sky-600/20"
-                              : "bg-slate-100 text-slate-700 ring-slate-600/20"
-                          }
-                        >
-                          {m.is_vm ? "Máy ảo" : "Vật lý"}
-                        </Badge>
-                      </div>
-                    </td>
-                    <td className={`${TD} text-xs`}>{formatDateTime(m.last_seen_at)}</td>
-                    <td className={`${TD} text-xs`}>{formatDateTime(m.enrolled_at)}</td>
-                    <td className={TD}>
-                      <div className="flex items-center gap-2">
-                        <Link
-                          href={`/machines/${m.id}`}
-                          className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
-                        >
-                          Chi tiết <ChevronRight className="size-3.5" />
-                        </Link>
-                        <DeleteButton
-                          resource="máy"
-                          itemName={m.hostname ?? m.machine_uuid}
-                          deletePath={`/machines/${m.id}`}
-                          onDeleted={() => void load(true)}
-                        />
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <Pagination
-            page={page}
-            onChange={(newOffset) => {
-              setOffset(newOffset);
-              void load(true, newOffset);
-            }}
-          />
-          {Object.keys(countByStatus).length > 0 && (
-            <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-500">
-              {Object.entries(countByStatus).map(([s, n]) => (
-                <span key={s} className="inline-flex items-center gap-1">
-                  <StatusDot className={MACHINE_STATUS_META[s as MachineStatus]?.dot ?? "bg-slate-400"} />
-                  {MACHINE_STATUS_META[s as MachineStatus]?.label ?? s}: <b>{n}</b>
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
+        <MachineResultsTable
+          machines={machines}
+          page={page}
+          countByStatus={countByStatus}
+          onReload={handleMachineReload}
+          onPageChange={handleMachinePageChange}
+        />
       )}
     </div>
   );

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { BellRing, Plus, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { AlertRule, AlertTemplate, AlertRuleTestResult, Organization } from "@/lib/types";
-import { ALERT_CATEGORY_META, flattenOrgTree, ORG_TYPE_META } from "@/lib/format";
+import { ALERT_CATEGORY_META, ORG_TYPE_META } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 import {
   Badge, Button, Card, ConfirmDialog, EmptyState, ErrorBanner,
   Field, IconButton, Input, PageResponse, Select, Spinner, Pagination,
@@ -26,6 +27,7 @@ export default function SubscriptionsTab({
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [page, setPage] = useState<PageResponse<AlertRule>>({ items: [], total: 0, limit: 50, offset: 0 });
   const [offset, setOffset] = useState(0);
+  const flatOrgs = useFlatOrgs(orgs);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -184,7 +186,7 @@ export default function SubscriptionsTab({
             <Field label="Tổ chức" required hint="Chọn tổ chức trong phạm vi bạn quản lý">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">— Chọn tổ chức —</option>
-                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                {flatOrgs.map(({ org, depth }) => {
                   const meta = ORG_TYPE_META[org.type];
                   return (
                     <option key={org.id} value={org.id}>{"— ".repeat(depth)}{org.name} ({meta?.label ?? org.type})</option>

@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertOctagon,
@@ -11,7 +11,6 @@ import {
   Info,
   Loader2,
   RefreshCcw,
-  Send,
   ShieldAlert,
   Trash2,
   XCircle,
@@ -24,7 +23,6 @@ import {
   ConfirmDialog,
   ErrorBanner,
   Spinner,
-  Textarea,
 } from "@/components/ui";
 import type {
   DfirInvestigation,
@@ -33,6 +31,8 @@ import type {
   InvestigationStatus,
 } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
+import { InvestigationMarkdown } from "@/components/investigation-markdown";
+import { InvestigationChatPanel } from "@/components/investigation-chat-panel";
 
 /* Badge pill tinted theo Design.md — màu đã remap trong globals.css */
 const STATUS_META: Record<InvestigationStatus, { label: string; badge: string; icon: any }> = {
@@ -52,73 +52,6 @@ const SEVERITY_META: Record<InvestigationSeverity, { label: string; badge: strin
   info: { label: "Info", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
 };
 
-// Render markdown tối thiểu — style theo Design.md typography + prose-md trong globals.css
-function renderMarkdown(md: string): React.ReactElement {
-  const lines = md.split("\n");
-  const out: React.ReactElement[] = [];
-  let inCode = false;
-  let codeBuf: string[] = [];
-  let codeKey = 0;
-  lines.forEach((line, idx) => {
-    if (line.startsWith("```")) {
-      if (inCode) {
-        out.push(
-          <pre key={`c${codeKey++}`} className="my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs leading-relaxed text-slate-100">
-            <code>{codeBuf.join("\n")}</code>
-          </pre>,
-        );
-        codeBuf = [];
-        inCode = false;
-      } else {
-        inCode = true;
-      }
-      return;
-    }
-    if (inCode) {
-      codeBuf.push(line);
-      return;
-    }
-    if (line.startsWith("# ")) {
-      out.push(<h1 key={idx} className="mb-2 mt-4 text-lg font-bold tracking-tight text-slate-900">{line.slice(2)}</h1>);
-    } else if (line.startsWith("## ")) {
-      out.push(<h2 key={idx} className="mb-2 mt-4 text-base font-semibold tracking-tight text-slate-900">{line.slice(3)}</h2>);
-    } else if (line.startsWith("### ")) {
-      out.push(<h3 key={idx} className="mb-1 mt-3 text-sm font-semibold text-slate-900">{line.slice(4)}</h3>);
-    } else if (line.startsWith("- ")) {
-      out.push(<li key={idx} className="ml-4 list-disc text-sm leading-relaxed text-slate-600">{formatInline(line.slice(2))}</li>);
-    } else if (/^\d+\.\s/.test(line)) {
-      out.push(<li key={idx} className="ml-4 list-decimal text-sm leading-relaxed text-slate-600">{formatInline(line.replace(/^\d+\.\s/, ""))}</li>);
-    } else if (line.trim() === "") {
-      out.push(<br key={idx} />);
-    } else {
-      out.push(<p key={idx} className="my-1 text-sm leading-relaxed text-slate-600">{formatInline(line)}</p>);
-    }
-  });
-  return <div>{out}</div>;
-}
-
-function formatInline(text: string): React.ReactNode {
-  // **bold**
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((p, i) => {
-    if (p.startsWith("**") && p.endsWith("**")) {
-      return <strong key={i}>{p.slice(2, -2)}</strong>;
-    }
-    // `code`
-    const codeParts = p.split(/(`[^`]+`)/g);
-    return codeParts.map((cp, j) => {
-      if (cp.startsWith("`") && cp.endsWith("`")) {
-        return (
-          <code key={`${i}-${j}`} className="rounded bg-slate-100 px-1 py-0.5 font-mono text-xs text-slate-700">
-            {cp.slice(1, -1)}
-          </code>
-        );
-      }
-      return <span key={`${i}-${j}`}>{cp}</span>;
-    });
-  });
-}
-
 export default function InvestigationDetailPage({
   params,
 }: {
@@ -132,12 +65,9 @@ export default function InvestigationDetailPage({
   const [inv, setInv] = useState<DfirInvestigation | null>(null);
   const [messages, setMessages] = useState<DfirInvestigationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [chatInput, setChatInput] = useState("");
-  const [chatting, setChatting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notFound, setNotFound] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -175,17 +105,12 @@ export default function InvestigationDetailPage({
     return () => clearInterval(t);
   }, [inv, load]);
 
-  // Auto-scroll chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const sendChat = async () => {
-    const msg = chatInput.trim();
+  /** Gửi chat qua panel — parent chịu trách nhiệm optimistic add + endpoint.
+   *  Panel giữ `chatInput`/`chatting` local; panel đã clear input trước khi gọi
+   *  callback nên ta chỉ push 2 message tạm vào state messages. */
+  const sendChat = async (msg: string) => {
     if (!msg || !inv) return;
-    setChatting(true);
-    setChatInput("");
-    // Optimistic add
+    // Optimistic add user message
     setMessages((m) => [
       ...m,
       {
@@ -213,8 +138,6 @@ export default function InvestigationDetailPage({
       ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Chat lỗi");
-    } finally {
-      setChatting(false);
     }
   };
 
@@ -379,7 +302,7 @@ export default function InvestigationDetailPage({
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Report panel */}
+        {/* Report panel — render markdown qua component memoized */}
         <Card title="Báo cáo">
           {inv.status === "pending" && (
             <p className="text-sm text-slate-500">⏳ Đang chờ worker xử lý…</p>
@@ -407,76 +330,20 @@ export default function InvestigationDetailPage({
             </div>
           )}
           {inv.status === "completed" && inv.report_markdown && (
+            // Memoized — không re-render khi user gõ vào chat input.
             <div className="max-w-none">
-              {renderMarkdown(inv.report_markdown)}
+              <InvestigationMarkdown content={inv.report_markdown} />
             </div>
           )}
         </Card>
 
-        {/* Chat panel */}
-        <Card title="Hỏi tiếp AI" className="flex flex-col" bodyClass="flex flex-1 flex-col min-h-0">
-          <div className="min-h-[400px] max-h-[600px] flex-1 space-y-3 overflow-y-auto pr-2">
-            {messages.length === 0 && inv.status === "completed" && (
-              <p className="text-sm text-slate-500">
-                Đặt câu hỏi tiếp về cuộc điều tra này. AI sẽ trả lời dựa trên dữ liệu đã thu thập.
-              </p>
-            )}
-            {messages.length === 0 && inv.status !== "completed" && (
-              <p className="text-sm text-slate-500">
-                Chat khả dụng sau khi cuộc điều tra hoàn thành.
-              </p>
-            )}
-            {messages
-              .filter((m) => m.role !== "system")
-              .map((m) => (
-                <div
-                  key={m.id}
-                  className={`rounded-lg p-3 ${
-                    m.role === "user"
-                      ? "ml-10 bg-brand-100"
-                      : "mr-10 bg-slate-100"
-                  }`}
-                >
-                  <div className="mb-1 text-xs text-slate-400">
-                    {m.role === "user" ? "Bạn" : "AI Assistant"}
-                  </div>
-                  {m.role === "assistant" ? (
-                    <div className="max-w-none">{renderMarkdown(m.content)}</div>
-                  ) : (
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
-                      {m.content}
-                    </div>
-                  )}
-                </div>
-              ))}
-            <div ref={chatEndRef} />
-          </div>
-          <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
-            <Textarea
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  void sendChat();
-                }
-              }}
-              rows={2}
-              disabled={inv.status !== "completed" || chatting}
-              placeholder="VD: Có dấu hiệu crypto miner không? Có kết nối ra ngoài đáng ngờ không?"
-              className="min-h-0 resize-none"
-            />
-            <Button
-              onClick={sendChat}
-              disabled={!chatInput.trim() || chatting || inv.status !== "completed"}
-              className="w-full"
-            >
-              {chatting && <Loader2 className="size-4 animate-spin" />}
-              <Send className="size-4" />
-              Gửi (Ctrl+Enter)
-            </Button>
-          </div>
-        </Card>
+        {/* Chat panel — input state local trong component con */}
+        <InvestigationChatPanel
+          investigationId={id}
+          status={inv.status}
+          messages={messages}
+          onSend={sendChat}
+        />
       </div>
 
       <ConfirmDialog

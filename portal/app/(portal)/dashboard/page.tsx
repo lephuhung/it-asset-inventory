@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Briefcase, ChevronRight, Ghost, HardDriveDownload, Hourglass, Monitor, Timer, Ticket, User, Wifi, WifiOff, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MachineEvent, MachineListItem, StatsOverview } from "@/lib/types";
-import { useRealtime } from "@/components/realtime-context";
+import { useRealtimeEvents, useRealtimeStatus } from "@/components/realtime-context";
 import {
   Badge,
   Card,
@@ -34,42 +34,80 @@ const EVENT_ICON: Record<string, string> = {
 };
 
 export default function DashboardPage() {
-  const { connected, events } = useRealtime();
+  const { connected } = useRealtimeStatus();
+  const { events, lastEvent } = useRealtimeEvents();
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [recent, setRecent] = useState<MachineListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
 
+  // Guard chống burst refresh: khi WebSocket bắn nhiều event liên tiếp
+  // hoặc poll 30s trùng pha với event, chỉ cho phép 1 silent refresh
+  // trong cửa sổ 5 giây và không xếp chồng khi một refresh đang in-flight.
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshAtRef = useRef(0);
+  // Generation counter để stale `finally` của load cũ không reset trạng thái
+  // của load mới (Dashboard không dùng AbortController như Machines/EOL).
+  // Mỗi lần gọi `load()` tăng counter; chỉ load có generation khớp mới được
+  // phép set state / reset cờ in-flight ở cuối.
+  const loadGenerationRef = useRef(0);
+
   const load = useCallback(async (silent = false) => {
+    const myGeneration = ++loadGenerationRef.current;
+    refreshInFlightRef.current = true;
+    // Ghi timestamp khi load bắt đầu để mọi refresh (initial + silent
+    // realtime/poll) đều tham gia cửa sổ throttle tối thiểu 5 giây. Trước
+    // đây chỉ callback realtime ghi timestamp — initial load hoàn tất có
+    // thể để lại cửa sổ mở, để event WebSocket đầu tiên sau đó lọt qua
+    // guard và chồng thêm một silent refresh ngay trong burst. Vì Dashboard
+    // không có manual load button, việc đóng cửa sổ ngay từ initial load
+    // không xung đột với UX.
+    lastRefreshAtRef.current = Date.now();
     try {
       const [s, m] = await Promise.all([
         api.get<StatsOverview>("/stats/overview"),
         api.get<PageResponse<MachineListItem>>("/machines", { limit: 50 }),
       ]);
+      if (myGeneration !== loadGenerationRef.current) return;
       setStats(s);
       setRecent(m.items.slice(0, 10));
       setUpdatedAt(new Date());
       setError(null);
     } catch (e) {
+      if (myGeneration !== loadGenerationRef.current) return;
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được dữ liệu");
     } finally {
-      setLoading(false);
+      // Stale guard: chỉ load còn là generation hiện tại mới được reset trạng
+      // thái. Nếu không có guard, finally của load cũ (vẫn pending sau khi
+      // load mới bắt đầu) có thể set in-flight=false và mở đường cho
+      // `refreshFromRealtime` bắn thêm silent refresh chồng với load mới.
+      if (myGeneration === loadGenerationRef.current) {
+        setLoading(false);
+        refreshInFlightRef.current = false;
+      }
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-    const timer = setInterval(() => void load(true), 30_000);
-    return () => clearInterval(timer);
+  // Callback dùng chung cho cả effect lastEvent và poll 30s — đảm bảo
+  // cả hai nguồn kích hoạt đều đi qua cùng guard.
+  const refreshFromRealtime = useCallback(() => {
+    const now = Date.now();
+    if (refreshInFlightRef.current || now - lastRefreshAtRef.current < 5000) return;
+    lastRefreshAtRef.current = now;
+    void load(true);
   }, [load]);
 
-  const lastEvent = useMemo(() => events[0] ?? null, [events]);
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => refreshFromRealtime(), 30_000);
+    return () => clearInterval(timer);
+  }, [load, refreshFromRealtime]);
+
   useEffect(() => {
     if (!lastEvent) return;
-    const t = setTimeout(() => void load(true), 1500);
-    return () => clearTimeout(t);
-  }, [lastEvent, load]);
+    refreshFromRealtime();
+  }, [lastEvent, refreshFromRealtime]);
 
   return (
     <div>

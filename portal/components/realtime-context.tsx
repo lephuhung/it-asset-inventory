@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -12,14 +13,24 @@ import {
 import { api } from "@/lib/api";
 import type { MachineEvent } from "@/lib/types";
 
-interface RealtimeContextValue {
+interface RealtimeStatusValue {
   connected: boolean;
+}
+
+interface RealtimeEventsValue {
   /** Sự kiện máy gần nhất, mới nhất trước (tối đa 50). */
   events: MachineEvent[];
   lastEvent: MachineEvent | null;
 }
 
-const RealtimeContext = createContext<RealtimeContextValue | null>(null);
+/**
+ * Tách context thành status (connected) và events (events/lastEvent) để:
+ *   - Layout chỉ rerender khi `connected` đổi, không rerender theo từng event.
+ *   - Pages chỉ subscribe channel mà chúng thực sự dùng.
+ * `useRealtime` (ghép hai hook) được giữ để không phá call site chưa migrate.
+ */
+const RealtimeStatusContext = createContext<RealtimeStatusValue | null>(null);
+const RealtimeEventsContext = createContext<RealtimeEventsValue | null>(null);
 
 const MAX_EVENTS = 50;
 
@@ -167,17 +178,40 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
   }, [connect]);
 
-  const lastEvent = events[0] ?? null;
+  const statusValue = useMemo(() => ({ connected }), [connected]);
+  const eventsValue = useMemo(
+    () => ({ events, lastEvent: events[0] ?? null }),
+    [events],
+  );
 
   return (
-    <RealtimeContext.Provider value={{ connected, events, lastEvent }}>
-      {children}
-    </RealtimeContext.Provider>
+    <RealtimeStatusContext.Provider value={statusValue}>
+      <RealtimeEventsContext.Provider value={eventsValue}>
+        {children}
+      </RealtimeEventsContext.Provider>
+    </RealtimeStatusContext.Provider>
   );
 }
 
-export function useRealtime(): RealtimeContextValue {
-  const ctx = useContext(RealtimeContext);
-  if (!ctx) throw new Error("useRealtime phải dùng trong <RealtimeProvider>");
+export function useRealtimeStatus(): RealtimeStatusValue {
+  const ctx = useContext(RealtimeStatusContext);
+  if (!ctx) throw new Error("useRealtimeStatus phải dùng trong <RealtimeProvider>");
   return ctx;
+}
+
+export function useRealtimeEvents(): RealtimeEventsValue {
+  const ctx = useContext(RealtimeEventsContext);
+  if (!ctx) throw new Error("useRealtimeEvents phải dùng trong <RealtimeProvider>");
+  return ctx;
+}
+
+/**
+ * Backwards-compat: gộp status + events cho call site chưa migrate.
+ * Lưu ý: subscriber hook này sẽ rerender theo cả `connected` lẫn `events`
+ * — chỉ dùng khi component thực sự cần cả hai.
+ */
+export function useRealtime(): RealtimeStatusValue & RealtimeEventsValue {
+  const status = useRealtimeStatus();
+  const events = useRealtimeEvents();
+  return { ...status, ...events };
 }

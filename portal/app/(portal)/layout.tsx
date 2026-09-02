@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, Wifi, WifiOff } from "lucide-react";
 import { AuthProvider, useAuth } from "@/components/auth-context";
-import { RealtimeProvider, useRealtime } from "@/components/realtime-context";
+import { RealtimeProvider, useRealtimeStatus } from "@/components/realtime-context";
 import { NotificationProvider, NotificationBell, NotificationToast } from "@/components/notification-bell";
 import { ComplianceGate } from "@/components/compliance-gate";
 import { Sidebar } from "@/components/sidebar";
@@ -35,7 +35,7 @@ function titleFor(pathname: string): string {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  const { connected } = useRealtime();
+  const { connected } = useRealtimeStatus();
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);

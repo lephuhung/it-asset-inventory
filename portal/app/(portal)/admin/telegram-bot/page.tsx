@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -39,6 +39,7 @@ import type {
   TelegramBotConfigUpdateIn,
   TelegramLinkedUser,
 } from "@/lib/types";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 /**
  * Cấu hình Telegram bot (Super Admin).
@@ -104,9 +105,17 @@ export default function TelegramBotConfigPage() {
     void load();
   }, [load]);
 
+  // Debounce 350ms cho search linked-users — không gọi API mỗi ký tự.
+  const debouncedLinkedQ = useDebouncedValue(linkedQ, 350);
+  const linkedAbortRef = useRef<AbortController | null>(null);
+
   const loadLinked = useCallback(
     async (q: string, offset: number) => {
       setLinkedLoading(true);
+      // Hủy request trước (nếu có) để tránh race khi user gõ nhanh.
+      linkedAbortRef.current?.abort();
+      const controller = new AbortController();
+      linkedAbortRef.current = controller;
       try {
         const qs = new URLSearchParams({
           limit: String(linkedLimit),
@@ -116,22 +125,31 @@ export default function TelegramBotConfigPage() {
         const data = await api.get<{
           items: TelegramLinkedUser[];
           total: number;
-        }>(`/admin/telegram-bot/linked-users?${qs.toString()}`);
+        }>(`/admin/telegram-bot/linked-users?${qs.toString()}`, undefined, {
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted || linkedAbortRef.current !== controller) return;
         setLinkedUsers(data.items);
         setLinkedTotal(data.total);
-      } catch (e) {
+      } catch (e: any) {
+        // Stale request — bỏ qua im lặng.
+        if (e?.name === "AbortError" || controller.signal.aborted || linkedAbortRef.current !== controller) return;
         // im lặng — panel phụ, không chặn flow chính
         console.warn("linked-users load failed:", e);
       } finally {
-        setLinkedLoading(false);
+        if (linkedAbortRef.current === controller) setLinkedLoading(false);
       }
     },
     [linkedLimit],
   );
 
   useEffect(() => {
-    if (isSuperAdmin) void loadLinked(linkedQ, linkedOffset);
-  }, [isSuperAdmin, linkedQ, linkedOffset, loadLinked]);
+    if (isSuperAdmin) void loadLinked(debouncedLinkedQ, linkedOffset);
+    return () => {
+      // Cleanup khi effect chạy lại hoặc component unmount.
+      linkedAbortRef.current?.abort();
+    };
+  }, [isSuperAdmin, debouncedLinkedQ, linkedOffset, loadLinked]);
 
   const forceUnlink = async (u: TelegramLinkedUser) => {
     if (

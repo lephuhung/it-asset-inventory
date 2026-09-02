@@ -40,7 +40,6 @@ import {
   Select,
   Spinner,
   StatusDot,
-  Textarea,
 } from "@/components/ui";
 import {
   LIFECYCLE_META,
@@ -56,6 +55,7 @@ import { EOL_STATUS_META, getWindowsEol } from "@/lib/eol";
 import { MachineTimelineSection } from "@/components/machine-timeline";
 import { VeloLogDrawer, VelociraptorLiveCard } from "@/components/velociraptor-live";
 import { MachineInvestigationPanel } from "@/components/machine-investigation-panel";
+import { InvestigationPromptModal } from "@/components/investigation-prompt-modal";
 
 /** "—" nếu rỗng; object → JSON. */
 function kv(value: unknown): string {
@@ -342,9 +342,7 @@ export default function MachineDetailPage() {
   // LLM-DFIR investigation
   const [llmBusy, setLlmBusy] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
-  const [llmInvestigationId, setLlmInvestigationId] = useState<string | null>(null);
   const [showInvestigationModal, setShowInvestigationModal] = useState(false);
-  const [investigationInstructions, setInvestigationInstructions] = useState("");
   const [collectArtifact, setCollectArtifact] = useState("");
   // ── Panel log Velociraptor (trượt vào từ bên phải, đẩy nội dung sang trái) ──
   const [showVeloLog, setShowVeloLog] = useState(false);
@@ -587,8 +585,10 @@ export default function MachineDetailPage() {
   /** Trigger LLM-DFIR investigation cho máy này.
    *  Tự động thu thập 10 artifact Velociraptor mặc định + gọi LLM phân tích.
    *  Background worker xử lý; chuyển trang sang chi tiết investigation.
+   *  Nhận `customInstructions` từ `InvestigationPromptModal` — state input
+   *  được giữ trong modal nên page này không re-render theo từng ký tự.
    */
-  const investigateWithAI = async () => {
+  const investigateWithAI = async (customInstructions: string) => {
     if (!machine) return;
     setLlmBusy(true);
     setLlmError(null);
@@ -596,11 +596,10 @@ export default function MachineDetailPage() {
       const inv = await api.post<DfirInvestigation>("/admin/llm-dfir/investigations", {
         machine_id: machine.id,
         artifacts: null, // dùng default
-        custom_instructions: investigationInstructions.trim() || null,
+        custom_instructions: customInstructions || null,
       });
-      setLlmInvestigationId(inv.id);
       // Chuyển trang sau khi tạo xong
-      window.location.href = `/admin/llm-dfir/investigations/${inv.id}`;
+      window.location.href = `/llm-dfir/investigations/${inv.id}`;
     } catch (e) {
       setLlmError(e instanceof Error ? e.message : "Tạo investigation thất bại");
     } finally {
@@ -1244,22 +1243,14 @@ export default function MachineDetailPage() {
         onClose={() => setShowInvestigationPanel(false)}
       />
 
-      {showInvestigationModal && (
-        <Modal
-          open={showInvestigationModal}
-          title="Khởi tạo điều tra AI"
-          onClose={() => setShowInvestigationModal(false)}
-        >
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">Điều tra máy <strong>{machine.hostname}</strong> qua LangGraph và Velociraptor. Agent dùng policy cố định; chỉ thời gian hiện tại và dấu hiệu dưới đây được đưa vào cuộc điều tra.</p>
-            <Field label="Dấu hiệu nghi ngờ / yêu cầu điều tra">
-              <Textarea value={investigationInstructions} onChange={(e) => setInvestigationInstructions(e.target.value)} placeholder="Ví dụ: nghi ngờ PowerShell thực thi bất thường trong 24 giờ gần đây" rows={5} />
-            </Field>
-            {llmError && <p className="text-sm text-rose-600">{llmError}</p>}
-            <div className="flex justify-end gap-2"><Button variant="secondary" onClick={() => setShowInvestigationModal(false)}>Hủy</Button><Button loading={llmBusy} onClick={() => void investigateWithAI()}>Bắt đầu điều tra</Button></div>
-          </div>
-        </Modal>
-      )}
+      <InvestigationPromptModal
+        open={showInvestigationModal}
+        machineHostname={machine?.hostname ?? null}
+        busy={llmBusy}
+        error={llmError}
+        onClose={() => setShowInvestigationModal(false)}
+        onSubmit={(instructions) => void investigateWithAI(instructions)}
+      />
 
     </div>
   );

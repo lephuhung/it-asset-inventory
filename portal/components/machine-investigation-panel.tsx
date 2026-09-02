@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertOctagon,
@@ -37,6 +37,7 @@ import type {
   InvestigationSeverity,
   InvestigationStatus,
 } from "@/lib/types";
+import { InvestigationMarkdown } from "@/components/investigation-markdown";
 
 /* ── Pill tinted theo Design.md — màu đã remap trong globals.css
    (đồng bộ với trang /admin/llm-dfir/investigations). Các style ở
@@ -222,7 +223,7 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
     <>
       {/* Backdrop — gradient + blur nhẹ cho cảm giác panel "nổi" lên trên */}
       <div
-        className="fixed inset-0 z-40 bg-slate-900/45 backdrop-blur-[2px] transition-opacity duration-300"
+        className="fixed inset-0 z-40 bg-slate-900/45 transition-opacity duration-300"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -760,7 +761,7 @@ function InvestigationDetailModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 p-4"
       onClick={onClose}
     >
       <div
@@ -809,7 +810,7 @@ function InvestigationDetailModal({
         </div>
 
         {/* Body */}
-        <div className="flex-1 space-y-5 overflow-y-auto p-5">
+        <div className="flex-1 space-y-5 overflow-y-auto overscroll-contain p-5">
           {loading && !inv ? (
             <Spinner label="Đang tải kết quả..." />
           ) : error ? (
@@ -847,7 +848,11 @@ function InvestigationDetailModal({
   );
 }
 
-function InvestigationDetailContent({ inv }: { inv: DfirInvestigation }) {
+const InvestigationDetailContent = memo(function InvestigationDetailContent({
+  inv,
+}: {
+  inv: DfirInvestigation;
+}) {
   const sev = (inv.severity || "info").toLowerCase() as InvestigationSeverity;
   const statusStyle = STATUS_STYLES[inv.status] ?? STATUS_FALLBACK;
   const StatusIcon = statusStyle.icon;
@@ -968,14 +973,14 @@ function InvestigationDetailContent({ inv }: { inv: DfirInvestigation }) {
       {/* Report markdown */}
       {inv.report_markdown && (
         <Section title="Báo cáo" icon={<Brain className="size-4" />}>
-          <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 p-3 font-sans text-sm leading-relaxed text-slate-600">
-            {inv.report_markdown}
-          </pre>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <InvestigationMarkdown content={inv.report_markdown} />
+          </div>
         </Section>
       )}
     </>
   );
-}
+});
 
 function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (

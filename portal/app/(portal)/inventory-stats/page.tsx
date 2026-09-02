@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { InventoryStatsResponse, Organization, StatBucket } from "@/lib/types";
-import { flattenOrgTree, ORG_TYPE_META } from "@/lib/format";
+import { ORG_TYPE_META } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 import {
   Badge,
   Card,
@@ -46,6 +47,7 @@ import {
 export default function InventoryStatsPage() {
   const [data, setData] = useState<InventoryStatsResponse | null>(null);
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const flatOrgs = useFlatOrgs(orgs);
   const [orgId, setOrgId] = useState<string>("");
   const [topLimit, setTopLimit] = useState<number>(20);
   const [loading, setLoading] = useState(true);
@@ -150,7 +152,7 @@ export default function InventoryStatsPage() {
             <Field label="Tổ chức">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Toàn bộ (cây tổ chức)</option>
-                {flattenOrgTree(orgs).map(({ org, depth }) => (
+                {flatOrgs.map(({ org, depth }) => (
                   <option key={org.id} value={org.id}>
                     {"— ".repeat(depth)}
                     {org.name} ({ORG_TYPE_META[org.type]?.label ?? org.type})

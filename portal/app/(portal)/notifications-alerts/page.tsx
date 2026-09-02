@@ -100,8 +100,7 @@ export default function NotificationsAlertsPage() {
     api.get<Organization[]>("/orgs")
       .then((list) => setOrgs(Array.isArray(list) ? list : []))
       .catch(() => setOrgs([]));
-    void refresh();
-  }, [loadTemplates, refresh]);
+  }, [loadTemplates]);
 
   // ── Notification compose handlers ──────────────────────────
   const openCompose = () => {

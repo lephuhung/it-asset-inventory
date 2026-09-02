@@ -503,7 +503,7 @@ export function Modal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-slate-900/55" onClick={onClose} />
       <div
         ref={panelRef}
         role="dialog"
@@ -513,7 +513,7 @@ export function Modal({
           wide ? "max-w-3xl" : "max-w-lg"
         }`}
       >
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white/95 px-6 py-4 backdrop-blur">
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-6 py-4">
           <h3 id={titleId} className="text-[15px] font-semibold text-slate-800">{title}</h3>
           <IconButton label="Đóng" onClick={onClose} className="hover:bg-slate-100 hover:text-slate-600">
             <X className="size-4" />

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertTriangle, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApiKey, ApiKeyCreated, Organization } from "@/lib/types";
-import { ORG_TYPE_META, flattenOrgTree, formatDateTime, timeAgo } from "@/lib/format";
+import { ORG_TYPE_META, formatDateTime, timeAgo } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 import {
   Badge,
   Button,
@@ -41,6 +42,11 @@ export default function ApiKeysPage() {
   });
   const [offset, setOffset] = useState(0);
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const flatOrgs = useFlatOrgs(orgs);
+  const flatOrgMap = useMemo(
+    () => new Map(flatOrgs.map(({ org }) => [org.id, org.name])),
+    [flatOrgs],
+    );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,11 +123,8 @@ export default function ApiKeysPage() {
     }
   };
 
-  const orgName = (id: string | null) => {
-    if (!id) return "Toàn hệ thống";
-    const f = flattenOrgTree(orgs).find((x) => x.org.id === id);
-    return f ? f.org.name : id.slice(0, 8);
-  };
+  const orgName = (id: string | null) =>
+    id ? flatOrgMap.get(id) ?? id.slice(0, 8) : "Toàn hệ thống";
 
   return (
     <div>
@@ -208,7 +211,7 @@ export default function ApiKeysPage() {
               <Field label="Phạm vi" hint="Bỏ trống = toàn hệ thống (chỉ Super Admin)">
                 <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                   <option value="">— Toàn hệ thống —</option>
-                  {flattenOrgTree(orgs).map(({ org, depth }) => {
+                  {flatOrgs.map(({ org, depth }) => {
                     const meta = ORG_TYPE_META[org.type];
                     return (
                       <option key={org.id} value={org.id}>

@@ -37,7 +37,8 @@ import {
   THEAD,
   TR_HOVER,
 } from "@/components/ui";
-import { ORG_TYPE_META, ROLE_META, flattenOrgTree, formatDateTime } from "@/lib/format";
+import { ORG_TYPE_META, ROLE_META, formatDateTime } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 
 const ROLE_OPTIONS: Array<{ value: UserRole; label: string }> = [
   { value: "super_admin", label: "Super Admin (toàn hệ thống)" },
@@ -68,6 +69,7 @@ export default function UsersPage() {
   });
   const [offset, setOffset] = useState(0);
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const flatOrgs = useFlatOrgs(orgs);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -335,7 +337,7 @@ export default function UsersPage() {
                 required
               >
                 <option value="">Chọn tổ chức…</option>
-                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                {flatOrgs.map(({ org, depth }) => {
                   const meta = ORG_TYPE_META[org.type];
                   return (
                     <option key={org.id} value={org.id}>

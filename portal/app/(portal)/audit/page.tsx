@@ -1,10 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { CheckCircle2, RefreshCw, ScrollText, ShieldAlert, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { RefreshCw, ScrollText, ShieldAlert, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AuditLogEntry } from "@/lib/types";
 import {
   Badge,
   Button,
@@ -14,25 +12,12 @@ import {
   Field,
   Input,
   PageHeader,
-  Pagination,
   Select,
   Spinner,
   StatusDot,
-  TABLE,
-  TABLE_WRAP,
-  TD,
-  TH,
-  THEAD,
-  TR_HOVER,
 } from "@/components/ui";
-import { formatDateTime, shortUuid } from "@/lib/format";
-
-interface AuditPageResponse {
-  items: AuditLogEntry[];
-  total: number;
-  limit: number;
-  offset: number;
-}
+import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { AuditResultsTable, type AuditPageResponse } from "@/components/audit-results-table";
 
 interface VerifyResponse {
   ok: boolean;
@@ -56,6 +41,16 @@ export default function AuditPage() {
   const [actor, setActor] = useState("");
   const [offset, setOffset] = useState(0);
 
+  // Debounce 350ms — gõ vào q/actor không phát request từng ký tự.
+  const debouncedQ = useDebouncedValue(q, 350);
+  const debouncedActor = useDebouncedValue(actor, 350);
+  // Hủy request trước nếu user gõ tiếp.
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const skipNextLoadRef = useRef(false);
+  const filterRef = useRef({ action: "", q: "", actor: "" });
+  const rawSearchRef = useRef({ q: "", actor: "" });
+  rawSearchRef.current = { q, actor };
+
   // Verify hash chain
   const [verify, setVerify] = useState<VerifyResponse | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
@@ -63,26 +58,71 @@ export default function AuditPage() {
   const load = useCallback(
     async (silent = false, overrideOffset?: number) => {
       const useOffset = overrideOffset ?? offset;
+      searchAbortRef.current?.abort();
+      const controller = new AbortController();
+      searchAbortRef.current = controller;
       try {
-        const res = await api.get<AuditPageResponse>("/audit", {
-          limit: PAGE_SIZE,
-          offset: useOffset,
-          action: action || undefined,
-          actor: actor || undefined,
-          q: q || undefined,
-        });
+        const res = await api.get<AuditPageResponse>(
+          "/audit",
+          {
+            limit: PAGE_SIZE,
+            offset: useOffset,
+            action: action || undefined,
+            actor: debouncedActor || undefined,
+            q: debouncedQ || undefined,
+          },
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted || searchAbortRef.current !== controller) return;
         setData(res);
         setError(null);
-      } catch (e) {
+      } catch (e: any) {
+        // AbortError hoặc request đã lỗi thời — bỏ qua.
+        if (e?.name === "AbortError" || controller.signal.aborted || searchAbortRef.current !== controller) return;
         if (!silent) setError(e instanceof Error ? e.message : "Không tải được audit log");
       } finally {
-        setLoading(false);
+        if (searchAbortRef.current === controller) setLoading(false);
       }
     },
-    [action, actor, q, offset],
+    [action, debouncedQ, debouncedActor, offset],
   );
 
+  // Cleanup khi rời trang.
   useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const filterChanged =
+      filterRef.current.action !== action ||
+      filterRef.current.q !== q ||
+      filterRef.current.actor !== actor;
+    if (!filterChanged) return;
+    filterRef.current = { action, q, actor };
+    if (offset !== 0) {
+      // Chờ debounced filter thay đổi; không tải lại ngay với giá trị tìm kiếm cũ.
+      skipNextLoadRef.current = true;
+      setOffset(0);
+    }
+  }, [action, q, actor, offset]);
+
+  useEffect(() => {
+    if (skipNextLoadRef.current) {
+      // Nếu search text còn chưa debounce, tiếp tục chờ giá trị mới thay vì
+      // tải với filter cũ sau lần reset offset.
+      if (rawSearchRef.current.q !== debouncedQ || rawSearchRef.current.actor !== debouncedActor) return;
+      // Chờ `setOffset(0)` từ filter effect commit xong trước khi gọi load().
+      // Nếu gọi ngay, closure của `load` vẫn capture `offset` cũ (page > 1)
+      // và phát một request trung gian với filter mới nhưng offset cũ — vi
+      // phạm acceptance "một request sau khi filter ổn định với offset 0".
+      if (offset !== 0) return;
+      skipNextLoadRef.current = false;
+      void load();
+      return;
+    }
     void load();
   }, [load]);
 
@@ -92,10 +132,6 @@ export default function AuditPage() {
       .then((list) => setActions(Array.isArray(list) ? list : []))
       .catch(() => setActions([]));
   }, []);
-
-  useEffect(() => {
-    setOffset(0);
-  }, [action, q, actor]);
 
   const runVerify = async () => {
     setVerifyBusy(true);
@@ -108,9 +144,15 @@ export default function AuditPage() {
     }
   };
 
-  const total = data?.total ?? 0;
-  const pageStart = offset + 1;
-  const pageEnd = Math.min(offset + PAGE_SIZE, total);
+  // Callback cho bảng kết quả — giữ tham chiếu ổn định để `AuditResultsTable`
+  // (memo) không re-render khi chỉ `q`/`actor`/`action` thay đổi.
+  const handleAuditPageChange = useCallback(
+    (newOffset: number) => {
+      setOffset(newOffset);
+      void load(true, newOffset);
+    },
+    [load],
+  );
 
   return (
     <div>
@@ -186,69 +228,11 @@ export default function AuditPage() {
           description="Khi có hoạt động (đăng nhập, sinh token, enroll máy…), các bản ghi sẽ liệt kê tại đây."
         />
       ) : (
-        <Card
-          padded={false}
-          title={`${total.toLocaleString("vi-VN")} bản ghi`}
-          subtitle={`Hiển thị ${pageStart}–${pageEnd}`}
-        >
-          <div className={TABLE_WRAP}>
-            <table className={TABLE}>
-              <thead className={THEAD}>
-                <tr>
-                  <th scope="col" className={TH}>#</th>
-                  <th scope="col" className={TH}>Thời gian</th>
-                  <th scope="col" className={TH}>Người thực hiện</th>
-                  <th scope="col" className={TH}>Hành động</th>
-                  <th scope="col" className={TH}>Đối tượng</th>
-                  <th scope="col" className={TH}>Máy liên quan</th>
-                  <th scope="col" className={TH}>IP</th>
-                  <th scope="col" className={TH}>Content hash</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.items.map((e) => (
-                  <tr key={e.id} className={TR_HOVER}>
-                    <td className={`${TD} font-mono text-[11px] text-slate-400`}>{e.id}</td>
-                    <td className={`${TD} text-xs whitespace-nowrap`}>{formatDateTime(e.ts)}</td>
-                    <td className={`${TD} font-mono text-xs text-slate-600`} title={e.actor ?? ""}>
-                      {shortUuid(e.actor, 20)}
-                    </td>
-                    <td className={`${TD} text-xs font-medium text-slate-800`}>{e.action}</td>
-                    <td className={`${TD} font-mono text-xs text-slate-500`}>{shortUuid(e.target, 20)}</td>
-                    <td className={`${TD} text-xs`}>
-                      {e.machine_id ? (
-                        <Link href={`/machines/${e.machine_id}`} className="font-mono text-blue-600 hover:underline">
-                          {e.machine_id.slice(0, 8)}…
-                        </Link>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className={`${TD} font-mono text-xs text-slate-500`}>{e.ip ?? "—"}</td>
-                    <td className={`${TD} font-mono text-[11px] text-slate-400`} title={`prev: ${e.prev_hash}`}>
-                      {e.content_hash.slice(0, 12)}…
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Phân trang */}
-          <Pagination
-            page={{ items: data.items, total, limit: PAGE_SIZE, offset }}
-            onChange={(newOffset) => {
-              setOffset(newOffset);
-              void load(true, newOffset);
-            }}
-          />
-
-          <p className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs text-slate-400">
-            <CheckCircle2 className="size-3.5" />
-            Append-only: chỉ INSERT qua service; hash chain nối qua <code>prev_hash</code> — mọi sửa
-            đổi/xóa giữa chuỗi đều bị phát hiện bởi mục "Kiểm tra" phía trên.
-          </p>
-        </Card>
+        <AuditResultsTable
+          data={data}
+          pageOffset={offset}
+          onPageChange={handleAuditPageChange}
+        />
       )}
     </div>
   );

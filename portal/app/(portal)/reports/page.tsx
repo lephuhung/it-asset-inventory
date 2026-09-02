@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Download, FileSpreadsheet, FileText, ShieldCheck } from "lucide-react";
 import { api, downloadFromApi } from "@/lib/api";
 import type { Organization } from "@/lib/types";
-import { ORG_TYPE_META, flattenOrgTree } from "@/lib/format";
+import { ORG_TYPE_META } from "@/lib/format";
+import { useFlatOrgs } from "@/lib/use-flat-orgs";
 import { useAuth } from "@/components/auth-context";
 import {
   Button,
@@ -28,6 +29,7 @@ const STATUS_OPTIONS = [
 export default function ReportsPage() {
   const { user } = useAuth();
   const [orgs, setOrgs] = useState<Organization[]>([]);
+  const flatOrgs = useFlatOrgs(orgs);
   const [orgId, setOrgId] = useState("");
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
@@ -112,7 +114,7 @@ export default function ReportsPage() {
             <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
                 <option value="">Tất cả</option>
-                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                {flatOrgs.map(({ org, depth }) => {
                   const meta = ORG_TYPE_META[org.type];
                   return (
                     <option key={org.id} value={org.id}>

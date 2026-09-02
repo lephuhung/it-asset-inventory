@@ -58,8 +58,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  get<T>(path: string, params?: Record<string, string | number | boolean | null | undefined>): Promise<T> {
-    return request<T>(`${path}${buildQuery(params)}`);
+  get<T>(
+    path: string,
+    params?: Record<string, string | number | boolean | null | undefined>,
+    options?: Pick<RequestInit, "signal">,
+  ): Promise<T> {
+    return request<T>(`${path}${buildQuery(params)}`, options);
   },
   post<T>(path: string, body?: unknown): Promise<T> {
     return request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });

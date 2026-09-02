@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { CalendarClock, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
@@ -25,22 +25,36 @@ import { formatDate } from "@/lib/format";
 import { EOL_STATUS_META, getWindowsEol, type EolInfo } from "@/lib/eol";
 
 /** Nạp chi tiết máy giới hạn song song (backend chưa có endpoint EOL chuyên dụng). */
-async function fetchDetailsSequential(list: MachineListItem[], limit = 400): Promise<MachineDetail[]> {
-  const targets = list.slice(0, limit);
-  const out: MachineDetail[] = [];
+async function fetchMachineDetails(
+  list: MachineListItem[],
+  signal: AbortSignal,
+  concurrency = 4,
+): Promise<MachineDetail[]> {
+  const targets = list.slice(0, 400);
+  const results: Array<MachineDetail | null> = Array(targets.length).fill(null);
   let cursor = 0;
-  const workers = Array.from({ length: 8 }, async () => {
-    while (cursor < targets.length) {
-      const i = cursor++;
+
+  const worker = async () => {
+    while (true) {
+      if (signal.aborted) return;
+      const index = cursor++;
+      if (index >= targets.length) return;
       try {
-        out.push(await api.get<MachineDetail>(`/machines/${targets[i].id}`));
-      } catch {
-        // bỏ qua máy lỗi — vẫn đi tiếp
+        results[index] = await api.get<MachineDetail>(
+          `/machines/${targets[index].id}`,
+          undefined,
+          { signal },
+        );
+      } catch (error) {
+        if (signal.aborted || (error as { name?: string })?.name === "AbortError") return;
       }
     }
-  });
-  await Promise.all(workers);
-  return out;
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()),
+  );
+  return results.filter((item): item is MachineDetail => item !== null);
 }
 
 function EolSummary({ expired, warning, ok, unknown }: { expired: number; warning: number; ok: number; unknown: number }) {
@@ -74,14 +88,25 @@ export default function EolPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const loadAbortRef = useRef<AbortController | null>(null);
+  const loadInFlightRef = useRef(false);
 
   const load = useCallback(async () => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
     setLoading(true);
     try {
-      const data = await api.get<PageResponse<MachineListItem>>("/machines", { status: undefined, limit: 50 });
-      const list = data.items;
-      const details = await fetchDetailsSequential(list);
-      const mapped = (details ?? []).map((d) => ({
+      const data = await api.get<PageResponse<MachineListItem>>(
+        "/machines",
+        { status: undefined, limit: 50 },
+        { signal: controller.signal },
+      );
+      const details = await fetchMachineDetails(data.items, controller.signal, 4);
+      if (controller.signal.aborted || loadAbortRef.current !== controller) return;
+      const mapped = details.map((d) => ({
         machine: d as MachineListItem,
         eol: getWindowsEol(d.latest_spec?.os_name, d.latest_spec?.os_build),
       }));
@@ -89,15 +114,32 @@ export default function EolPage() {
       setRows(mapped);
       setGeneratedAt(new Date().toLocaleTimeString("vi-VN"));
       setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Không tải được dữ liệu EOL");
+    } catch (error) {
+      if (controller.signal.aborted || (error as { name?: string })?.name === "AbortError") return;
+      if (loadAbortRef.current === controller) {
+        setError(error instanceof Error ? error.message : "Không tải được dữ liệu EOL");
+      }
     } finally {
-      setLoading(false);
+      if (loadAbortRef.current === controller) {
+        loadInFlightRef.current = false;
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     void load();
+    return () => {
+      // React StrictMode chạy effect mount → cleanup → mount trong dev.
+      // Nếu cleanup chỉ abort mà không reset in-flight/abort ref, lần mount
+      // thứ hai sẽ thấy `loadInFlightRef.current = true` và bị chặn ngay
+      // từ đầu `load()` — trang kẹt ở EmptyState cho tới khi user bấm Tính lại.
+      // Đặt cả hai ref về trạng thái ban đầu để drop stale controller và cho
+      // phép mount kế tiếp (kể cả khi abort xảy ra giữa chừng) khởi động lại.
+      loadAbortRef.current?.abort();
+      loadInFlightRef.current = false;
+      loadAbortRef.current = null;
+    };
   }, [load]);
 
   const summary = useMemo(() => {
@@ -116,7 +158,7 @@ export default function EolPage() {
         title="Báo cáo Windows hết hỗ trợ"
         description="Máy chạy Windows sắp/đã hết vòng đời hỗ trợ — cơ sở cho lộ trình nâng cấp (tính năng #5)"
         actions={
-          <Button variant="secondary" size="sm" onClick={() => void load()}>
+          <Button variant="secondary" size="sm" disabled={loading} onClick={() => void load()}>
             <CalendarClock className="size-3.5" /> Tính lại
           </Button>
         }

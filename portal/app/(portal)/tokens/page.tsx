@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Check,
   Clock,
@@ -120,8 +120,26 @@ export default function TokensPage() {
   const [csvClassification, setCsvClassification] = useState<MachineClassification>("official");
   const [csvPurposeTags, setCsvPurposeTags] = useState<string[]>([]);
 
-  const classificationTags = tags.filter((t) => t.kind === "classification");
-  const purposeTagOptions = tags.filter((t) => t.kind === "purpose");
+  // Memoize derived tag lists — filter không chạy mỗi render nữa.
+  const classificationTags = useMemo(
+    () => tags.filter((t) => t.kind === "classification"),
+    [tags],
+  );
+  const purposeTagOptions = useMemo(
+    () => tags.filter((t) => t.kind === "purpose"),
+    [tags],
+  );
+
+  // Cache install commands lưu trong sessionStorage.
+  // KHÔNG đọc trong render (parse JSON mỗi lần gõ phím sẽ tăng chi phí).
+  // Đọc 1 lần khi mount, cập nhật local sau khi create/reissue.
+  const [commands, setCommands] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setCommands(loadCommands());
+  }, []);
+  const refreshCommands = useCallback(() => {
+    setCommands(loadCommands());
+  }, []);
 
   const togglePurposeTag = (key: string, setter: React.Dispatch<React.SetStateAction<string[]>>) => {
     setter((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -213,6 +231,10 @@ export default function TokensPage() {
       .catch(() => setTags([]));
   }, [loadTokens, loadLinks, offset]);
 
+  // Flatten cây tổ chức 1 lần khi `orgs` đổi — trước đây gọi `flattenOrgTree(orgs)`
+  // 3 lần trong render (form tạo, chế độ B, bulk import) → mỗi keystroke render lại.
+  const flatOrgs = useMemo(() => flattenOrgTree(orgs), [orgs]);
+
   const createLink = async () => {
     setCreatingLink(true);
     setLinkError(null);
@@ -273,8 +295,11 @@ export default function TokensPage() {
       .filter((x): x is BulkTokenItem => x !== null);
   };
 
+  /** Parse CSV chỉ chạy khi `csvText` đổi — trước đây chạy mỗi render + cả trong JSX. */
+  const parsedCsv = useMemo(() => parseCsv(csvText), [csvText]);
+
   const importCsv = async () => {
-    const items = parseCsv(csvText);
+    const items = parsedCsv;
     if ((items?.length ?? 0) === 0) {
       setBulkError("Không có dòng dữ liệu hợp lệ (cần ít nhất 1 dòng: Họ tên,Phòng ban,…)");
       return;
@@ -324,7 +349,11 @@ export default function TokensPage() {
       // Gắn lệnh cài cho token vừa tạo (server chỉ trả token 1 lần) — khớp qua expires_at
       const list = await loadTokens(true, 0);
       const match = (list ?? []).find((t) => t.expires_at === res.expires_at);
-      if (match) saveCommand(match.id, res.install_command);
+      if (match) {
+        saveCommand(match.id, res.install_command);
+        // Đồng bộ state `commands` để nút Copy hiển thị ngay (không phải đợi reload).
+        refreshCommands();
+      }
     } catch (err) {
       setFormError(err instanceof ApiError ? err.detail : "Không sinh được token");
     } finally {
@@ -351,21 +380,25 @@ export default function TokensPage() {
     setFormError(null);
     try {
       const res = await api.post<TokenCreateResponse>(`/tokens/${t.id}/reissue`);
-      // Lưu lệnh mới vào sessionStorage để nút Copy hoạt động cho row mới.
-      if (res.install_command) saveCommand(res.expires_at, res.install_command);
       setCreated(res);
       setCreatedOs("windows");
       setOffset(0);
-      // Reload để cập nhật trạng thái superseded (note có "[superseded by ...]").
-      await loadTokens(true, 0);
+      // Reload để cập nhật trạng thái superseded (note có "[superseded by ...]")
+      // và lấy UUID của token mới để lưu đúng key cho nút Copy.
+      const list = await loadTokens(true, 0);
+      if (res.install_command) {
+        const match = (list ?? []).find((token) => token.expires_at === res.expires_at);
+        if (match) {
+          saveCommand(match.id, res.install_command);
+          refreshCommands();
+        }
+      }
     } catch (err) {
       setFormError(err instanceof ApiError ? err.detail : "Không tái sinh được token");
     } finally {
       setReissuingId(null);
     }
   };
-
-  const commands = loadCommands();
 
   return (
     <div>
@@ -551,7 +584,7 @@ export default function TokensPage() {
             {(orgs?.length ?? 0) > 0 && (
               <Field label="Tổ chức" className="min-w-48 flex-1">
                 <Select value={linkOrgId} onChange={(e) => setLinkOrgId(e.target.value)}>
-                  {flattenOrgTree(orgs).map(({ org, depth }) => {
+                  {flatOrgs.map(({ org, depth }) => {
                     const meta = ORG_TYPE_META[org.type];
                     return (
                       <option key={org.id} value={org.id}>
@@ -624,7 +657,7 @@ export default function TokensPage() {
             {(orgs?.length ?? 0) > 0 && (
               <Field label="Tổ chức">
                 <Select value={csvOrgId} onChange={(e) => setCsvOrgId(e.target.value)}>
-                  {flattenOrgTree(orgs).map(({ org, depth }) => {
+                  {flatOrgs.map(({ org, depth }) => {
                     const meta = ORG_TYPE_META[org.type];
                     return (
                       <option key={org.id} value={org.id}>
@@ -709,7 +742,7 @@ export default function TokensPage() {
           {bulkError && <p className="mt-2 text-sm text-rose-600">{bulkError}</p>}
           <div className="mt-3 flex items-center justify-between">
             <p className="text-xs text-slate-400">
-              {parseCsv(csvText).length} dòng hợp lệ sẽ tạo token
+              {parsedCsv.length} dòng hợp lệ sẽ tạo token
             </p>
             <Button onClick={() => void importCsv()} loading={bulkBusy} disabled={!csvText.trim()}>
               <Upload className="size-4" /> Tạo hàng loạt
@@ -919,7 +952,7 @@ export default function TokensPage() {
           {(orgs?.length ?? 0) > 0 && (
             <Field label="Tổ chức (UBND cấp xã / Sở ban ngành)" required hint="Token kế thừa tổ chức — máy enroll sẽ thuộc tổ chức này">
               <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>
-                {flattenOrgTree(orgs).map(({ org, depth }) => {
+                {flatOrgs.map(({ org, depth }) => {
                   const meta = ORG_TYPE_META[org.type];
                   return (
                     <option key={org.id} value={org.id}>
