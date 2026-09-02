@@ -50,3 +50,6 @@ portal-dev.log
 # ── Local git worktrees ──
 .worktrees/
 /logs/
+
+# ── Agent scratch notes (không phải tài liệu dự án) ──
+docs/superpowers/handoffs/
