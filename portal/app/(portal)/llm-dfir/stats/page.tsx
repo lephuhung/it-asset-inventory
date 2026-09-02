@@ -6,97 +6,187 @@ import {
   Activity,
   AlertOctagon,
   Brain,
+  ChevronLeft,
+  ChevronRight,
   Clock,
+  ExternalLink,
+  Filter,
   ListTree,
   Loader2,
   RefreshCw,
+  Search,
   ShieldAlert,
+  StopCircle,
+  Trash2,
   TrendingUp,
+  X,
+  XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { Button, Card, ErrorBanner, KpiCard, Select, Spinner } from "@/components/ui";
-import type { DfirInvestigationStats } from "@/lib/types";
+import {
+  Badge,
+  Button,
+  Card,
+  ConfirmDialog,
+  EmptyState,
+  ErrorBanner,
+  Field,
+  Input,
+  KpiCard,
+  Select,
+  Spinner,
+} from "@/components/ui";
+import {
+  DfirInvestigation,
+  DfirInvestigationListOut,
+  DfirInvestigationStats,
+  InvestigationSeverity,
+  InvestigationStatus,
+} from "@/lib/types";
+import { formatDateTime } from "@/lib/format";
 
 /* Pill tinted + fill + màu biểu đồ theo Design.md — màu remap trong globals.css */
-const STATUS_STYLES: Record<string, { label: string; chip: string; fill: string }> = {
-  pending: { label: "Chờ", chip: "bg-slate-100 text-slate-700 ring-slate-600/20", fill: "bg-slate-400" },
-  running: { label: "Đang khởi động", chip: "bg-blue-100 text-blue-700 ring-blue-600/20", fill: "bg-blue-500" },
-  collecting: { label: "Đang thu thập", chip: "bg-sky-50 text-sky-700 ring-sky-600/20", fill: "bg-sky-600" },
-  analyzing: { label: "Đang phân tích", chip: "bg-violet-100 text-violet-700 ring-violet-600/20", fill: "bg-violet-600" },
-  completed: { label: "Hoàn thành", chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500" },
-  failed: { label: "Lỗi", chip: "bg-rose-100 text-rose-700 ring-rose-600/20", fill: "bg-rose-500" },
+const STATUS_STYLES: Record<InvestigationStatus, { label: string; chip: string; fill: string; icon: React.ElementType }> = {
+  pending:    { label: "Chờ",          chip: "bg-slate-100 text-slate-700 ring-slate-600/20", fill: "bg-slate-400",    icon: Clock },
+  running:    { label: "Khởi động",   chip: "bg-blue-100 text-blue-700 ring-blue-600/20",  fill: "bg-blue-500",    icon: Loader2 },
+  collecting: { label: "Thu thập",     chip: "bg-sky-50 text-sky-700 ring-sky-600/20",    fill: "bg-sky-600",     icon: RefreshCw },
+  analyzing:  { label: "Phân tích",    chip: "bg-violet-100 text-violet-700 ring-violet-600/20", fill: "bg-violet-600", icon: Brain },
+  completed:  { label: "Hoàn thành",  chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500", icon: Activity },
+  failed:     { label: "Lỗi",         chip: "bg-rose-100 text-rose-700 ring-rose-600/20", fill: "bg-rose-500",    icon: XCircle },
 };
 
-const SEVERITY_STYLES: Record<string, { chip: string; fill: string }> = {
-  critical: { chip: "bg-rose-100 text-rose-700 ring-rose-600/20", fill: "bg-rose-500" },
-  high: { chip: "bg-amber-100 text-amber-700 ring-amber-600/20", fill: "bg-amber-500" },
-  medium: { chip: "bg-amber-50 text-amber-800 ring-amber-600/20", fill: "bg-amber-400" },
-  low: { chip: "bg-blue-100 text-blue-700 ring-blue-600/20", fill: "bg-blue-500" },
-  info: { chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500" },
+const SEVERITY_STYLES: Record<InvestigationSeverity, { label: string; chip: string; fill: string; icon: React.ElementType }> = {
+  critical: { label: "Critical", chip: "bg-rose-100 text-rose-700 ring-rose-600/20",    fill: "bg-rose-500",    icon: AlertOctagon },
+  high:     { label: "High",     chip: "bg-amber-100 text-amber-700 ring-amber-600/20", fill: "bg-amber-500",   icon: ShieldAlert },
+  medium:   { label: "Medium",   chip: "bg-amber-50 text-amber-800 ring-amber-600/20", fill: "bg-amber-400",   icon: ShieldAlert },
+  low:      { label: "Low",      chip: "bg-blue-100 text-blue-700 ring-blue-600/20",    fill: "bg-blue-500",    icon: Search },
+  info:     { label: "Info",     chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500", icon: Activity },
 };
+
+const STATUS_FALLBACK = STATUS_STYLES.pending;
+const SEVERITY_FALLBACK = SEVERITY_STYLES.info;
+
+const PAGE_SIZE = 20;
 
 // Màu segment cho biểu đồ tròn (dùng CSS var của token, không hardcode hex)
 const STATUS_CHART: Record<string, string> = {
-  pending: "var(--color-slate-400)",
-  running: "var(--color-blue-500)",
+  pending:    "var(--color-slate-400)",
+  running:    "var(--color-blue-500)",
   collecting: "var(--color-sky-600)",
-  analyzing: "var(--color-violet-600)",
-  completed: "var(--color-emerald-500)",
-  failed: "var(--color-rose-500)",
+  analyzing:  "var(--color-violet-600)",
+  completed:  "var(--color-emerald-500)",
+  failed:     "var(--color-rose-500)",
 };
 const SEVERITY_CHART: Record<string, string> = {
   critical: "var(--color-rose-500)",
-  high: "var(--color-amber-500)",
-  medium: "var(--color-amber-400)",
-  low: "var(--color-blue-500)",
-  info: "var(--color-emerald-500)",
+  high:     "var(--color-amber-500)",
+  medium:   "var(--color-amber-400)",
+  low:      "var(--color-blue-500)",
+  info:     "var(--color-emerald-500)",
 };
 
 export default function StatsPage() {
   const router = useRouter();
+
+  // Stats state
   const [stats, setStats] = useState<DfirInvestigationStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
 
-  const load = useCallback(async () => {
+  // List state
+  const [listData, setListData] = useState<DfirInvestigationListOut | null>(null);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [severityFilter, setSeverityFilter] = useState<string>("");
+  const [machineFilter, setMachineFilter] = useState<string>("");
+
+  // Action state
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const loadStats = useCallback(async () => {
     try {
-      setLoading(true);
+      setStatsLoading(true);
       const s = await api.get<DfirInvestigationStats>(
         `/admin/llm-dfir/stats?days=${days}`,
       );
       setStats(s);
-      setError(null);
+      setStatsError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Không tải được thống kê");
+      setStatsError(e instanceof Error ? e.message : "Không tải được thống kê");
     } finally {
-      setLoading(false);
+      setStatsLoading(false);
     }
   }, [days]);
 
+  const loadList = useCallback(async () => {
+    try {
+      setListLoading(true);
+      const params: Record<string, string> = {
+        page: String(page),
+        limit: String(PAGE_SIZE),
+      };
+      if (machineFilter) params.machine_id = machineFilter;
+      if (statusFilter) params.status = statusFilter;
+      if (severityFilter) params.severity = severityFilter;
+      const d = await api.get<DfirInvestigationListOut>(
+        "/admin/llm-dfir/investigations",
+        params,
+      );
+      setListData(d);
+      setListError(null);
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : "Không tải được danh sách");
+    } finally {
+      setListLoading(false);
+    }
+  }, [page, machineFilter, statusFilter, severityFilter]);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadStats();
+  }, [loadStats]);
 
-  if (loading && !stats) return <Spinner label="Đang tải thống kê..." />;
-  if (error && !stats) return <ErrorBanner message={error} onRetry={load} />;
-  if (!stats) return null;
+  useEffect(() => {
+    void loadList();
+  }, [loadList]);
 
-  const statusData = Object.entries(stats.by_status)
-    .sort((a, b) => b[1] - a[1])
-    .map(([status, count]) => ({
-      label: STATUS_STYLES[status]?.label ?? status,
-      value: count,
-      color: STATUS_CHART[status] ?? "var(--color-slate-400)",
-    }));
+  const handleStop = async () => {
+    if (!confirmStop) return;
+    setStopping(true);
+    try {
+      await api.post(`/admin/llm-dfir/investigations/${confirmStop}/stop`);
+      setConfirmStop(null);
+      void loadList();
+      void loadStats();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Dừng thất bại");
+    } finally {
+      setStopping(false);
+    }
+  };
 
-  const severityData = ["critical", "high", "medium", "low", "info"]
-    .filter((s) => stats.by_severity[s] !== undefined)
-    .map((sev) => ({
-      label: sev,
-      value: stats.by_severity[sev],
-      color: SEVERITY_CHART[sev] ?? "var(--color-slate-400)",
-    }));
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/admin/llm-dfir/investigations/${confirmDelete}`);
+      setConfirmDelete(null);
+      void loadList();
+      void loadStats();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Xoá thất bại");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const hasFilter = machineFilter || statusFilter || severityFilter;
 
   return (
     <div className="max-w-7xl space-y-6">
@@ -108,10 +198,10 @@ export default function StatsPage() {
           </span>
           <div className="min-w-0">
             <h1 className="text-[22px] font-bold tracking-tight text-slate-900">
-              Thống kê điều tra AI
+              Thống kê &amp; Điều tra AI
             </h1>
             <p className="mt-0.5 text-sm leading-snug text-slate-500">
-              Tổng quan về các cuộc điều tra do AI (Velociraptor + LLM)
+              Tổng quan và danh sách các cuộc điều tra do AI (Velociraptor + LLM) thực hiện
             </p>
           </div>
         </div>
@@ -127,138 +217,117 @@ export default function StatsPage() {
             <option value="90">90 ngày</option>
             <option value="365">1 năm</option>
           </Select>
-          <Button variant="outline" size="sm" onClick={() => void load()}>
+          <Button variant="outline" size="md" onClick={() => { void loadStats(); void loadList(); }}>
             <RefreshCw className="size-3.5" /> Tải lại
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => router.push("/llm-dfir/investigations")}>
-            <ListTree className="size-3.5" /> Danh sách
           </Button>
         </div>
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <KpiCard
-          label="Tổng investigation"
-          value={stats.total}
-          icon={<Activity className="size-4" />}
-          accent="bg-blue-100 text-blue-700"
-        />
-        <KpiCard
-          label="24 giờ qua"
-          value={stats.recent_24h}
-          icon={<TrendingUp className="size-4" />}
-          accent="bg-emerald-100 text-emerald-700"
-        />
-        <KpiCard
-          label="7 ngày qua"
-          value={stats.recent_7d}
-          icon={<Clock className="size-4" />}
-          accent="bg-violet-100 text-violet-700"
-        />
-        <KpiCard
-          label="Thời gian xử lý TB"
-          value={stats.avg_duration_seconds ? `${stats.avg_duration_seconds.toFixed(1)}s` : "—"}
-          icon={<Loader2 className="size-4" />}
-          accent="bg-amber-100 text-amber-700"
-        />
-      </div>
-
-      {/* Status + Severity (biểu đồ tròn) + Top machines */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {/* By status — donut */}
-        <Card title="Theo trạng thái">
-          {statusData.length === 0 ? (
-            <p className="text-sm text-slate-500">Chưa có dữ liệu</p>
-          ) : (
-            <div className="flex flex-col items-center">
-              <DonutChart
-                data={statusData}
-                centerLabel={String(stats.total)}
-                centerSub="tổng"
-              />
-              <DonutLegend data={statusData} />
-            </div>
-          )}
-        </Card>
-
-        {/* By severity — donut */}
-        <Card title="Theo mức độ">
-          {severityData.length === 0 ? (
-            <p className="text-sm text-slate-500">Chưa có dữ liệu</p>
-          ) : (
-            <div className="flex flex-col items-center">
-              <DonutChart
-                data={severityData}
-                centerLabel={String(stats.total)}
-                centerSub="tổng"
-              />
-              <DonutLegend data={severityData} />
-            </div>
-          )}
-        </Card>
-
-        {/* Top machines */}
-        <Card title="Top máy có nhiều điều tra">
-          {stats.by_machine.length === 0 ? (
-            <p className="text-sm text-slate-500">Chưa có dữ liệu</p>
-          ) : (
-            <div className="space-y-1">
-              {stats.by_machine.map((m) => (
-                <button
-                  key={m.machine_id}
-                  onClick={() => router.push(`/machines/${m.machine_id}`)}
-                  className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 motion-reduce:transition-none hover:bg-slate-50/70"
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    {m.critical > 0 ? (
-                      <AlertOctagon className="size-4 shrink-0 text-rose-600" />
-                    ) : (
-                      <ShieldAlert className="size-4 shrink-0 text-amber-500" />
-                    )}
-                    <span className="truncate text-sm text-slate-700">
-                      {m.hostname || m.machine_id.slice(0, 8)}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-xs">
-                    {m.critical > 0 && (
-                      <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
-                        {m.critical} crit
-                      </span>
-                    )}
-                    <span className="font-mono tabular-nums text-slate-500">{m.count}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      {/* Daily trend — line/area chart */}
-      <Card
-        title={`Investigation theo ngày (${stats.daily_counts.length} ngày có dữ liệu)`}
-      >
-        {stats.daily_counts.length === 0 ? (
-          <p className="py-8 text-center text-sm text-slate-500">Chưa có dữ liệu</p>
-        ) : (
-          <DailyLineChart points={stats.daily_counts} />
-        )}
-        <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-0.5 w-4 rounded-full bg-brand-600" />
-            Investigation
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed border-rose-500" />
-            Critical
-          </span>
+      {statsLoading && !stats ? (
+        <Spinner label="Đang tải thống kê..." />
+      ) : statsError && !stats ? (
+        <ErrorBanner message={statsError} onRetry={loadStats} />
+      ) : stats ? (
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <KpiCard
+            label="Tổng investigation"
+            value={stats.total}
+            icon={<Activity className="size-4 text-blue-600" />}
+            accent="bg-blue-50"
+          />
+          <KpiCard
+            label="24 giờ qua"
+            value={stats.recent_24h}
+            icon={<TrendingUp className="size-4 text-emerald-600" />}
+            accent="bg-emerald-50"
+          />
+          <KpiCard
+            label="7 ngày qua"
+            value={stats.recent_7d}
+            icon={<Clock className="size-4 text-violet-600" />}
+            accent="bg-violet-50"
+          />
+          <KpiCard
+            label="Thời gian xử lý TB"
+            value={stats.avg_duration_seconds ? `${stats.avg_duration_seconds.toFixed(1)}s` : "—"}
+            icon={<Loader2 className="size-4 text-amber-600" />}
+            accent="bg-amber-50"
+          />
         </div>
-      </Card>
+      ) : null}
 
-      {/* Top findings (MITRE ATT&CK) */}
-      {stats.top_findings.length > 0 && (
-        <Card title="Top MITRE ATT&CK techniques phát hiện">
+      {/* Charts row */}
+      {stats && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {/* By status — donut */}
+          <Card title="Theo trạng thái">
+            {renderStatusDonut(stats)}
+          </Card>
+
+          {/* By severity — donut */}
+          <Card title="Theo mức độ">
+            {renderSeverityDonut(stats)}
+          </Card>
+
+          {/* Top machines */}
+          <Card title="Top máy có nhiều điều tra">
+            {stats.by_machine.length === 0 ? (
+              <p className="text-sm text-slate-500">Chưa có dữ liệu</p>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {stats.by_machine.map((m) => (
+                  <button
+                    key={m.machine_id}
+                    onClick={() => router.push(`/machines/${m.machine_id}`)}
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-2 text-left transition-colors duration-150 motion-reduce:transition-none hover:bg-slate-50/70"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      {m.critical > 0 ? (
+                        <AlertOctagon className="size-4 shrink-0 text-rose-600" />
+                      ) : (
+                        <ShieldAlert className="size-4 shrink-0 text-amber-500" />
+                      )}
+                      <span className="truncate text-sm text-slate-700">
+                        {m.hostname || m.machine_id.slice(0, 8)}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2 text-xs">
+                      {m.critical > 0 && (
+                        <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-600/20">
+                          {m.critical} crit
+                        </span>
+                      )}
+                      <span className="font-mono tabular-nums text-slate-500">{m.count}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Daily trend */}
+      {stats && stats.daily_counts.length > 0 && (
+        <Card title={`Investigation theo ngày (${stats.daily_counts.length} ngày có dữ liệu)`}>
+          <DailyLineChart points={stats.daily_counts} />
+          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full bg-brand-600" />
+              Investigation
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed border-rose-500" />
+              Critical
+            </span>
+          </div>
+        </Card>
+      )}
+
+      {/* Top MITRE findings */}
+      {stats && stats.top_findings.length > 0 && (
+        <Card title="Top MITRE ATT&amp;CK techniques phát hiện">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -287,11 +356,342 @@ export default function StatsPage() {
           </div>
         </Card>
       )}
+
+      {/* Investigation list */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <h2 className="text-lg font-bold tracking-tight text-slate-900">Danh sách điều tra</h2>
+            {listData && (
+              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-500">
+                {listData.total}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Filter bar */}
+        <Card>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="mb-0.5 flex items-center gap-2 text-sm font-medium text-slate-600">
+              <Filter className="size-4 text-slate-400" />
+              Lọc:
+            </div>
+            <Field label="Máy (UUID)">
+              <Input
+                type="text"
+                value={machineFilter}
+                onChange={(e) => {
+                  setMachineFilter(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="vd: 3f436e4d-3ff9-..."
+                className="w-64 font-mono"
+              />
+            </Field>
+            <Field label="Trạng thái">
+              <Select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="w-44"
+              >
+                <option value="">Tất cả</option>
+                {Object.entries(STATUS_STYLES).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Mức độ">
+              <Select
+                value={severityFilter}
+                onChange={(e) => {
+                  setSeverityFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="w-36"
+              >
+                <option value="">Tất cả</option>
+                {(["critical", "high", "medium", "low", "info"] as InvestigationSeverity[]).map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </Select>
+            </Field>
+            {hasFilter && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mb-0.5"
+                onClick={() => {
+                  setMachineFilter("");
+                  setStatusFilter("");
+                  setSeverityFilter("");
+                  setPage(1);
+                }}
+              >
+                <X className="size-3.5" /> Xoá lọc
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        {/* List */}
+        {listLoading && !listData ? (
+          <Spinner label="Đang tải danh sách..." />
+        ) : listError && !listData ? (
+          <ErrorBanner message={listError} onRetry={loadList} />
+        ) : !listData || listData.items.length === 0 ? (
+          <EmptyState
+            icon={<Search className="size-8" />}
+            title="Chưa có investigation nào"
+            description={
+              hasFilter
+                ? "Thử bỏ bộ lọc hoặc tạo investigation mới."
+                : "Vào trang chi tiết máy và bấm 'Điều tra AI' để bắt đầu."
+            }
+          />
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {listData.items.map((inv) => (
+                <InvestigationCard
+                  key={inv.id}
+                  inv={inv}
+                  onOpen={() => router.push(`/llm-dfir/investigations/${inv.id}`)}
+                  onStop={(id) => setConfirmStop(id)}
+                  onDelete={(id) => setConfirmDelete(id)}
+                  stoppingId={stoppingId}
+                />
+              ))}
+            </div>
+
+            {/* Pagination */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-sm text-slate-500">
+              <span>
+                Hiển thị <b className="font-semibold text-slate-900">
+                  {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, listData.total)}
+                </b> / <b className="font-semibold text-slate-900">{listData.total}</b>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  aria-label="Trang trước"
+                >
+                  <ChevronLeft className="size-3.5" />
+                </Button>
+                <span className="px-2">
+                  Trang <b className="font-semibold text-slate-900">{page}</b> / {Math.max(1, Math.ceil(listData.total / PAGE_SIZE))}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={!listData.has_more}
+                  aria-label="Trang sau"
+                >
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Stop confirm */}
+      <ConfirmDialog
+        open={!!confirmStop}
+        onClose={() => setConfirmStop(null)}
+        title="Dừng cuộc điều tra?"
+        message="Investigation sẽ được đánh dấu là thất bại. Không thể hoàn tác."
+        confirmLabel="Dừng lại"
+        danger
+        loading={stopping}
+        onConfirm={handleStop}
+      />
+
+      {/* Delete confirm */}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        onClose={() => setConfirmDelete(null)}
+        title="Xoá cuộc điều tra?"
+        message="Báo cáo và toàn bộ lịch sử chat sẽ bị xoá vĩnh viễn. Không thể hoàn tác."
+        confirmLabel="Xoá"
+        danger
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }
 
-/* ── Biểu đồ tròn (donut) — SVG thuần, màu theo design token ── */
+/* ── Investigation card (2-col grid) ─────────────────────────── */
+function InvestigationCard({
+  inv,
+  onOpen,
+  onStop,
+  onDelete,
+  stoppingId,
+}: {
+  inv: DfirInvestigation;
+  onOpen: () => void;
+  onStop: (id: string) => void;
+  onDelete: (id: string) => void;
+  stoppingId: string | null;
+}) {
+  const statusStyle = STATUS_STYLES[inv.status] ?? STATUS_FALLBACK;
+  const StatusIcon = statusStyle.icon;
+  const isActive = ["pending", "running", "collecting", "analyzing"].includes(inv.status);
+  const sevStyle = inv.severity ? SEVERITY_STYLES[inv.severity] ?? SEVERITY_FALLBACK : null;
+  const SevIcon = sevStyle?.icon;
+  const isStopping = stoppingId === inv.id;
+
+  return (
+    <Card className="group relative cursor-pointer transition-colors duration-150 motion-reduce:transition-none hover:border-slate-300 hover:bg-slate-50/40">
+      {/* Action buttons — top right, outside the clickable area */}
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
+        {isActive ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-10 w-10 p-0 text-amber-600 hover:bg-amber-50 hover:text-amber-700"
+            disabled={isStopping || stoppingId !== null}
+            title="Dừng investigation"
+          >
+            {isStopping ? <Loader2 className="size-4 animate-spin" /> : <StopCircle className="size-4" />}
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-10 w-10 p-0 text-rose-400 hover:bg-rose-50 hover:text-rose-600"
+            onClick={(e) => { e.stopPropagation(); onDelete(inv.id); }}
+            title="Xoá investigation"
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        )}
+      </div>
+
+      {/* Clickable card body */}
+      <button onClick={onOpen} className="w-full text-left pr-16">
+        {/* Hostname */}
+        <div className="mb-2 pr-4">
+          <p className="truncate text-[15px] font-bold tracking-tight text-slate-900">
+            {inv.machine_hostname || inv.machine_id.slice(0, 8)}
+          </p>
+          <p className="truncate font-mono text-xs text-slate-400">{inv.machine_id.slice(0, 18)}…</p>
+        </div>
+
+        {/* Badges row */}
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <Badge className={statusStyle.chip}>
+            <StatusIcon className={`size-3 ${isActive ? "animate-spin" : ""}`} />
+            {statusStyle.label}
+          </Badge>
+          {sevStyle && SevIcon && (
+            <Badge className={sevStyle.chip}>
+              <SevIcon className="size-3" />
+              {sevStyle.label}
+            </Badge>
+          )}
+          {inv.external_orchestrator && (
+            <Badge className="bg-violet-100 text-violet-700 ring-violet-600/20">
+              ext:{inv.external_orchestrator}
+            </Badge>
+          )}
+        </div>
+
+        {/* Metadata grid */}
+        <div className="mb-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[13px] text-slate-500">
+          <div className="flex items-center gap-1.5">
+            <Clock className="size-3.5 shrink-0 text-slate-400" />
+            <span className="truncate">{timeAgo(inv.created_at)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Activity className="size-3.5 shrink-0 text-slate-400" />
+            <span className="truncate">{inv.artifacts.length} artifact{inv.artifacts.length !== 1 ? "s" : ""}</span>
+          </div>
+          {inv.findings_count != null && (
+            <div className="flex items-center gap-1.5">
+              <ShieldAlert className="size-3.5 shrink-0 text-slate-400" />
+              <span className="truncate">{inv.findings_count} phát hiện</span>
+            </div>
+          )}
+          {inv.llm_model && (
+            <div className="flex items-center gap-1.5">
+              <Brain className="size-3.5 shrink-0 text-slate-400" />
+              <span className="truncate">{inv.llm_model.split(":")[0]}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Tokens + cost row */}
+        {(inv.input_tokens != null || (inv.estimated_cost_usd != null && inv.estimated_cost_usd > 0)) && (
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-slate-500">
+            {inv.input_tokens != null && (
+              <span>{inv.input_tokens}→{inv.output_tokens ?? 0} tok</span>
+            )}
+            {inv.estimated_cost_usd != null && inv.estimated_cost_usd > 0 && (
+              <span>${inv.estimated_cost_usd.toFixed(4)}</span>
+            )}
+          </div>
+        )}
+
+        {/* Error */}
+        {inv.error && (
+          <div className="mt-2 flex items-start gap-1.5 rounded-md border-l-2 border-rose-500 bg-rose-50 px-2.5 py-1.5 text-xs leading-relaxed text-rose-700">
+            <XCircle className="mt-0.5 size-3.5 shrink-0 text-rose-500" />
+            <span className="min-w-0">{inv.error}</span>
+          </div>
+        )}
+      </button>
+    </Card>
+  );
+}
+
+/* ── Donut helpers (reused from original stats page) ── */
+function renderStatusDonut(stats: DfirInvestigationStats) {
+  const statusData = Object.entries(stats.by_status)
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => ({
+      label: STATUS_STYLES[status as InvestigationStatus]?.label ?? status,
+      value: count,
+      color: STATUS_CHART[status] ?? "var(--color-slate-400)",
+    }));
+
+  if (statusData.length === 0) return <p className="text-sm text-slate-500">Chưa có dữ liệu</p>;
+  return (
+    <div className="flex flex-col items-center">
+      <DonutChart data={statusData} centerLabel={String(stats.total)} centerSub="tổng" />
+      <DonutLegend data={statusData} />
+    </div>
+  );
+}
+
+function renderSeverityDonut(stats: DfirInvestigationStats) {
+  const severityData = (["critical", "high", "medium", "low", "info"] as InvestigationSeverity[])
+    .filter((s) => stats.by_severity[s] !== undefined)
+    .map((sev) => ({
+      label: sev,
+      value: stats.by_severity[sev],
+      color: SEVERITY_CHART[sev] ?? "var(--color-slate-400)",
+    }));
+
+  if (severityData.length === 0) return <p className="text-sm text-slate-500">Chưa có dữ liệu</p>;
+  return (
+    <div className="flex flex-col items-center">
+      <DonutChart data={severityData} centerLabel={String(stats.total)} centerSub="tổng" />
+      <DonutLegend data={severityData} />
+    </div>
+  );
+}
+
+/* ── Donut chart (SVG thuần, màu theo design token) ── */
 function DonutChart({
   data,
   size = 150,
@@ -339,25 +739,12 @@ function DonutChart({
         return el;
       })}
       {centerLabel != null && (
-        <text
-          x={cx}
-          y={cy}
-          textAnchor="middle"
-          dominantBaseline="central"
-          className="fill-slate-900"
-          style={{ fontSize: 26, fontWeight: 700 }}
-        >
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" className="fill-slate-900" style={{ fontSize: 26, fontWeight: 700 }}>
           {centerLabel}
         </text>
       )}
       {centerSub != null && (
-        <text
-          x={cx}
-          y={cy + 18}
-          textAnchor="middle"
-          className="fill-slate-400"
-          style={{ fontSize: 11 }}
-        >
+        <text x={cx} y={cy + 18} textAnchor="middle" className="fill-slate-400" style={{ fontSize: 11 }}>
           {centerSub}
         </text>
       )}
@@ -406,22 +793,8 @@ function DailyLineChart({ points }: { points: { date: string; total: number; cri
     <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Biểu đồ đường theo ngày">
       {gridVals.map((v) => (
         <g key={v}>
-          <line
-            x1={pad.l}
-            y1={y(v)}
-            x2={W - pad.r}
-            y2={y(v)}
-            className="stroke-slate-100"
-            strokeWidth={1}
-          />
-          <text
-            x={pad.l - 8}
-            y={y(v)}
-            textAnchor="end"
-            dominantBaseline="central"
-            className="fill-slate-400"
-            style={{ fontSize: 10 }}
-          >
+          <line x1={pad.l} y1={y(v)} x2={W - pad.r} y2={y(v)} className="stroke-slate-100" strokeWidth={1} />
+          <text x={pad.l - 8} y={y(v)} textAnchor="end" dominantBaseline="central" className="fill-slate-400" style={{ fontSize: 10 }}>
             {v}
           </text>
         </g>
@@ -436,18 +809,24 @@ function DailyLineChart({ points }: { points: { date: string; total: number; cri
       ))}
       {points.map((p, i) =>
         i % step === 0 || i === n - 1 ? (
-          <text
-            key={i}
-            x={x(i)}
-            y={H - pad.b + 16}
-            textAnchor="middle"
-            className="fill-slate-400"
-            style={{ fontSize: 10 }}
-          >
+          <text key={i} x={x(i)} y={H - pad.b + 16} textAnchor="middle" className="fill-slate-400" style={{ fontSize: 10 }}>
             {p.date.slice(5)}
           </text>
         ) : null,
       )}
     </svg>
   );
+}
+
+/* ── Utility ── */
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s trước`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}ph trước`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}giờ trước`;
+  const d = Math.floor(h / 24);
+  return `${d}ngày trước`;
 }

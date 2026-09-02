@@ -91,8 +91,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     items: [
       { href: "/reports", label: "Xuất báo cáo", icon: FileSpreadsheet },
       { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
-      { href: "/llm-dfir/stats", label: "Thống kê điều tra AI", icon: Brain, roles: ADMIN_ROLES },
-      { href: "/llm-dfir/investigations", label: "Danh sách điều tra AI", icon: ListTree, roles: ADMIN_ROLES },
+      { href: "/llm-dfir/stats", label: "Điều tra AI", icon: Brain, roles: ADMIN_ROLES },
       { href: "/eol", label: "Windows hết hỗ trợ", icon: CalendarClock },
       {
         href: "/offline-import",

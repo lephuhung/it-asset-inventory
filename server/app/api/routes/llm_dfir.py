@@ -706,6 +706,28 @@ async def chat_investigation(
         "model": result["model"],
     }
 
+@router.post("/investigations/{inv_id}/stop")
+async def stop_investigation(
+    inv_id: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_super_admin()),
+):
+    inv = (
+        await db.execute(select(DfirInvestigation).where(DfirInvestigation.id == _parse_inv_id_or_404(inv_id)))
+    ).scalar_one_or_none()
+    if inv is None:
+        raise HTTPException(404, "Investigation không tồn tại")
+    if inv.status not in ("pending", "running", "collecting", "analyzing"):
+        raise HTTPException(409, f"Investigation không ở trạng thái dừng được (status={inv.status})")
+    inv.status = "failed"
+    inv.error = "Dừng bởi người dùng"
+    inv.completed_at = datetime.now(UTC)
+    await append_audit(
+        db, action="llm.investigate.stop", actor=str(admin.id), target=str(inv_id),
+    )
+    await db.commit()
+
+
 @router.delete("/investigations/{inv_id}", status_code=204)
 async def delete_investigation(
     inv_id: str,
