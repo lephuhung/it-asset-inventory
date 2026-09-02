@@ -48,6 +48,15 @@ class InvestigationRunner:
                     progress_percent=0,
                     message="DeepAgent bắt đầu điều tra read-only",
                 )
+                # Emit collecting phase before triage/detail phases.
+                # Step counts are safe; never include raw event IDs, filters, or prompts.
+                await self._status(
+                    request,
+                    external_job_id=external_job_id,
+                    phase="collecting",
+                    progress_percent=30,
+                    message="Đang thu thập dữ liệu từ endpoint...",
+                )
                 state = await self.graph.ainvoke(
                     {"request": request},
                     {"recursion_limit": self.settings.max_steps + 8},

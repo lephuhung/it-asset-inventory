@@ -36,7 +36,7 @@ import { InvestigationChatPanel } from "@/components/investigation-chat-panel";
 
 /* Badge pill tinted theo Design.md — màu đã remap trong globals.css */
 const STATUS_META: Record<InvestigationStatus, { label: string; badge: string; icon: any }> = {
-  pending: { label: "Chờ", badge: "bg-slate-100 text-slate-700 ring-slate-600/20", icon: Clock },
+  pending: { label: "Chờ FIFO", badge: "bg-slate-100 text-slate-700 ring-slate-600/20", icon: Clock },
   running: { label: "Đang khởi động", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Loader2 },
   collecting: { label: "Đang thu thập dữ liệu", badge: "bg-sky-50 text-sky-700 ring-sky-600/20", icon: RefreshCcw },
   analyzing: { label: "AI đang phân tích", badge: "bg-violet-100 text-violet-700 ring-violet-600/20", icon: Brain },
@@ -303,7 +303,7 @@ export default function InvestigationDetailPage({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card title="Báo cáo" bodyClass="flex flex-col min-h-0" className="min-h-[400px] max-h-[600px] flex flex-col">
           {inv.status === "pending" && (
-            <p className="text-sm text-slate-500">⏳ Đang chờ worker xử lý…</p>
+            <p className="text-sm text-slate-500">⏳ Đang chờ trong hàng đợi FIFO…</p>
           )}
           {inv.status === "running" && (
             <p className="text-sm text-blue-700">🔄 Đang gọi Velociraptor thu thập dữ liệu…</p>

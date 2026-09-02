@@ -47,7 +47,7 @@ const STATUS_STYLES: Record<
   { label: string; badge: string; icon: any; ring: string; tint: string }
 > = {
   pending: {
-    label: "Chờ",
+    label: "Chờ FIFO",
     badge: "bg-slate-100 text-slate-700 ring-slate-600/20",
     icon: Clock,
     ring: "ring-slate-300",

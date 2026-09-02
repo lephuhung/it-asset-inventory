@@ -163,7 +163,76 @@ mới trong DB (lưu lịch sử), cập nhật bảng `machine_current` (mới 
 - Mỗi release: build agent mới → ký OV cert + timestamp → WDSI → cập nhật hash whitelist AV → release theo đợt.
 - Mỗi quý: test restore backup 1 lần, review audit log hash chain, cập nhật runbook.
 
-## 8. TÍCH HỢP VELOCIRAPTOR (DFIR)
+## 8. DEEPAGENT QUEUE VÀ PROGRESS
+
+### 8.1. Dung lượng đồng thời
+
+| Biến môi trường | Phạm vi | Mặc định | Mô tả |
+|---|---|---|---|
+| `DEEPAGENT_MAX_CONCURRENT_JOBS` | 1–3 | 2 | Số investigation chạy đồng thời |
+
+Investigation vượt dung lượng được xếp FIFO (`created_at ASC`) và giữ trạng thái `queued` cho đến khi có slot trống.
+
+### 8.2. Thay đổi dung lượng
+
+```bash
+# Chỉnh sửa trong .env hoặc docker-compose.yml
+DEEPAGENT_MAX_CONCURRENT_JOBS=3
+
+# Rebuild và recreate DeepAgent service
+docker compose -p asset-inventory -f server/deploy/docker-compose.yml up -d --build deepagent
+```
+
+### 8.3. Giới hạn vận hành DeepAgent
+
+| Giới hạn | Giá trị | Mô tả |
+|---|---|---|
+| Bước triage tối đa | 6 | Plan ban đầu |
+| Bước detail tối đa | 2 | Expansion sau triage |
+| Metadata event log | 100 dòng | Kết quả triage đầu tiên |
+| Dòng detail/event log | 50 dòng | Mỗi trang expansion |
+| Thời gian cửa sổ detail | 60 phút | Giới hạn expansion |
+| Ngân sách bằng chứng | 120.000 ký tự | Tổng evidence JSON |
+| Timeout tool | 180 giây | MCP bridge deadline |
+
+### 8.4. Progress callback an toàn
+
+DeepAgent gửi callback progress với các trường an toàn:
+
+- `phase`: `running` → `collecting` → `finalizing` → hoàn thành
+- `progress_percent`: 0–100
+- `current_step` / `total_steps`: số bước (không có event ID thực)
+- `message`: mô tả tiến trình (không raw logs/filters/prompts)
+
+**Portal hiển thị**:
+- Trạng thái `queued`: "Đang chờ trong hàng đợi FIFO"
+- Trạng thái `running`: "Đang khởi động"
+- Trạng thái `collecting`: "Thu thập"
+- Trạng thái `finalizing`: "Phân tích"
+
+### 8.5. Kiểm tra operational logs an toàn
+
+Logs vận hành của DeepAgent được ghi có kiểm soát:
+
+```bash
+# Xem logs DeepAgent container
+docker compose -p asset-inventory -f server/deploy/docker-compose.yml logs deepagent
+
+# Xem logs với filter theo job
+docker compose -p asset-inventory -f server/deploy/docker-compose.yml logs deepagent --since 1h | grep "job_id="
+```
+
+**Lưu ý**: Logs không chứa:
+- Raw event IDs, filter criteria, hoặc event log content
+- API keys, secrets, hoặc credentials
+- LLM prompts hoặc model responses
+- Sensitive investigation data (suspicious_activity, etc.)
+
+### 8.6. Timeout interpretation
+
+`DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS` (mặc định 180 giây) là deadline cho MCP bridge gọi tool. Timeout không đảm bảo flow-level guarantee từ Velociraptor. Đây là caller-side deadline — chỉ chứng minh MCP call không trả về trước deadline.
+
+## 9. TÍCH HỢP VELOCIRAPTOR (DFIR)
 
 ### 8.0. Triển khai nhanh bằng Docker (khuyến nghị)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -200,6 +201,70 @@ def test_mcp_test_does_not_return_yaml_from_a_bridge_error(monkeypatch):
         "RuntimeError: [REDACTED] External error message withheld to protect sensitive investigation data."
     )
     assert yaml_secret not in response.text
+
+
+@pytest.mark.asyncio
+async def test_job_stays_queued_until_semaphore_starts(monkeypatch):
+    """Job status must remain 'queued' until semaphore allows execution."""
+    settings = Settings(service_token="test-deepagent-token", max_concurrent_jobs=2)
+    
+    execute_started = asyncio.Event()
+    execute_continue = asyncio.Event()
+    
+    async def slow_execute(request, job_id, _settings):
+        # Signal that execute has started
+        execute_started.set()
+        # Wait until told to continue (simulates semaphore-held work)
+        await execute_continue.wait()
+    
+    # Clear any existing state
+    api._jobs.clear()
+    monkeypatch.setattr(api, "_execute", slow_execute)
+    api.app.dependency_overrides[get_settings] = lambda: settings
+    
+    try:
+        with TestClient(api.app) as client:
+            # Create first job - should be queued
+            response1 = client.post(
+                "/v1/investigations",
+                headers={"Authorization": "Bearer test-deepagent-token"},
+                json={
+                    "investigation_id": "11111111-1111-1111-1111-111111111111",
+                    "client_id": "C.test-client",
+                    "hostname": "TEST-HOST",
+                    "time_range": {
+                        "from": "2026-01-01T00:00:00Z",
+                        "to": "2026-01-01T01:00:00Z"},
+                    "suspicious_activity": "Kiểm tra read-only",
+                    "llm_runtime": {
+                        "base_url": "http://llm.example/v1",
+                        "api_key": "test-key",
+                        "model": "test-model",
+                    },
+                    "velociraptor_api_client_yaml": (
+                        "ca_certificate: test-ca\nclient_cert: test-cert\n"
+                        "client_private_key: test-private-key\n"
+                    ),
+                },
+            )
+        
+        assert response1.status_code == 202
+        # Immediately after creation, job should be queued
+        assert response1.json()["status"] == "queued"
+        
+        # Wait for execute to start
+        await asyncio.wait_for(execute_started.wait(), timeout=2.0)
+        
+        # Now complete the job
+        execute_continue.set()
+        
+        # Give time for cleanup
+        await asyncio.sleep(0.1)
+        
+    finally:
+        api.app.dependency_overrides.clear()
+        api._jobs.clear()
+        execute_continue.set()  # Ensure any waiting tasks can continue
 
 
 def test_mcp_test_uses_request_yaml_and_removes_temporary_file(monkeypatch):
