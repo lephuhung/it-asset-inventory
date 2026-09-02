@@ -51,6 +51,65 @@ class ExternalCallbackConflict(LlmError):
     """Callback không thuộc job hiện tại hoặc bị lặp với idempotency key khác."""
 
 
+# ── DeepAgent capacity queue ─────────────────────────────────────
+
+
+async def claim_deepagent_dispatches(
+    db: AsyncSession, capacity: int
+) -> list[DfirInvestigation]:
+    """Chọn và lock các DeepAgent rows pending tối đa bằng capacity còn trống.
+
+    FIFO: rows có created_at nhỏ nhất (ASC) được ưu tiên.
+    Chỉ chọn rows có external_orchestrator='deepagent' và status='pending'.
+    Active slots = rows đang analyzing (chiếm capacity).
+
+    Args:
+        db: AsyncSession hiện tại
+        capacity: Tổng số slot có thể chiếm (1..3)
+
+    Returns:
+        Danh sách DfirInvestigation đã được claim (external_job_id đã set)
+    """
+    if capacity <= 0:
+        return []
+
+    # Đếm active DeepAgent slots (đang analyzing)
+    active_count_result = await db.execute(
+        select(DfirInvestigation.id)
+        .where(
+            DfirInvestigation.external_orchestrator == "deepagent",
+            DfirInvestigation.status == "analyzing",
+        )
+    )
+    active_ids = list(active_count_result.scalars().all())
+    active_count = len(active_ids)
+
+    # Tính số slot còn trống
+    available = max(capacity - active_count, 0)
+    if available == 0:
+        return []
+
+    # Lock và chọn N pending rows cũ nhất (FIFO)
+    stmt = (
+        select(DfirInvestigation)
+        .where(
+            DfirInvestigation.external_orchestrator == "deepagent",
+            DfirInvestigation.status == "pending",
+        )
+        .order_by(DfirInvestigation.created_at.asc())
+        .limit(available)
+        .with_for_update(skip_locked=True)
+    )
+    rows = list((await db.execute(stmt)).scalars().all())
+
+    # Reserve mỗi row bằng deterministic job ID
+    for row in rows:
+        row.external_job_id = f"deepagent-{row.id}"
+
+    await db.commit()
+    return rows
+
+
 # ── Alert notification (alert engine) ─────────────────────────────
 
 
