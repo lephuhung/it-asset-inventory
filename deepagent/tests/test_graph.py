@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -99,7 +100,7 @@ def test_sanitize_plan_drops_disallowed_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_graph_binds_target_and_emits_evidence_backed_markdown() -> None:
+async def test_graph_binds_target_and_emits_evidence_backed_markdown(capsys) -> None:
     settings = Settings(max_steps=8)
     mcp = FakeMCP()
     graph = build_investigation_graph(mcp=mcp, model=FakeModel(), settings=settings)
@@ -114,3 +115,10 @@ async def test_graph_binds_target_and_emits_evidence_backed_markdown() -> None:
     assert len(result["assessment"].findings) == 1
     assert "F-001" in result["report_markdown"]
     assert "F-002" not in result["report_markdown"]
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    by_phase = {event["phase"]: event for event in events}
+    assert by_phase["target_verification"]["outcome"] == "succeeded"
+    assert by_phase["target_verification"]["duration_ms"] >= 0
+    assert by_phase["report_rendering"]["outcome"] == "succeeded"
+    assert by_phase["report_rendering"]["report_chars"] == len(result["report_markdown"])

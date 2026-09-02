@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -13,6 +14,7 @@ from deepagent.analysis_model import (
 from deepagent.config import Settings
 from deepagent.mcp_client import VelociraptorMCP
 from deepagent.models import Assessment, EvidenceItem, InvestigationPlan, InvestigationRequest
+from deepagent.observability import log_event
 from deepagent.report import build_markdown_report
 
 
@@ -31,9 +33,25 @@ def build_investigation_graph(
 ):
     async def verify_target(state: InvestigationState) -> dict:
         request = state["request"]
-        metadata = await mcp.verify_target(
-            client_id=request.client_id,
-            org_id=request.org_id or settings.velociraptor_org_id,
+        started_at = perf_counter()
+        try:
+            metadata = await mcp.verify_target(
+                client_id=request.client_id,
+                org_id=request.org_id or settings.velociraptor_org_id,
+            )
+        except Exception as exc:
+            log_event(
+                phase="target_verification",
+                outcome="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        log_event(
+            phase="target_verification",
+            outcome="succeeded",
+            duration_ms=(perf_counter() - started_at) * 1000,
+            metadata_field_count=len(metadata),
         )
         return {"target_metadata": metadata, "evidence": [], "step_index": 0}
 
@@ -83,11 +101,26 @@ def build_investigation_graph(
         }
 
     def render_report(state: InvestigationState) -> dict:
-        return {
-            "report_markdown": build_markdown_report(
+        started_at = perf_counter()
+        try:
+            report_markdown = build_markdown_report(
                 state["request"], state["assessment"], state["evidence"]
             )
-        }
+        except Exception as exc:
+            log_event(
+                phase="report_rendering",
+                outcome="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                error=exc,
+            )
+            raise
+        log_event(
+            phase="report_rendering",
+            outcome="succeeded",
+            duration_ms=(perf_counter() - started_at) * 1000,
+            report_chars=len(report_markdown),
+        )
+        return {"report_markdown": report_markdown}
 
     builder = StateGraph(InvestigationState)
     builder.add_node("verify_target", verify_target)

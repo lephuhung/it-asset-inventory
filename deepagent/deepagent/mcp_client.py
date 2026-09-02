@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from deepagent.catalog import WINDOWS_TOOL_POLICIES
 from deepagent.config import Settings
+from deepagent.observability import log_event
 
 
 class MCPPolicyError(RuntimeError):
@@ -69,19 +71,86 @@ class VelociraptorMCP:
 
     async def _load_tools(self) -> dict[str, Any]:
         if self._tools is None:
-            tools = await self._client.get_tools()
-            self._tools = {tool.name: tool for tool in tools}
+            started_at = perf_counter()
+            try:
+                tools = await self._client.get_tools()
+                self._tools = {tool.name: tool for tool in tools}
+            except Exception as exc:
+                log_event(
+                    phase="mcp_initialization",
+                    outcome="failed",
+                    duration_ms=(perf_counter() - started_at) * 1000,
+                    error=exc,
+                )
+                raise
+            log_event(
+                phase="mcp_initialization",
+                outcome="succeeded",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                tool_count=len(self._tools),
+            )
         return self._tools
+
+    async def _invoke_tool(
+        self, *, tool: Any, tool_name: str, arguments: dict[str, Any]
+    ) -> tuple[dict[str, Any], float]:
+        started_at = perf_counter()
+        try:
+            raw = await tool.ainvoke(arguments)
+            payload = _decode_envelope(raw)
+        except Exception as exc:
+            log_event(
+                phase="mcp_tool_call",
+                outcome="failed",
+                duration_ms=(perf_counter() - started_at) * 1000,
+                tool_name=tool_name,
+                error=exc,
+            )
+            raise
+        return payload, (perf_counter() - started_at) * 1000
+
+    @staticmethod
+    def _result_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+        data = payload.get("data")
+        serialized = json.dumps(data, ensure_ascii=False, default=str)
+        truncated = isinstance(data, dict) and data.get("truncated") is True
+        original_chars = data.get("original_chars") if truncated else len(serialized)
+        return {
+            "result_chars": original_chars,
+            "result_truncated": truncated,
+            "truncated_preview_chars": len(data.get("preview", "")) if truncated else None,
+        }
+
+    def _log_tool_result(
+        self, *, tool_name: str, payload: dict[str, Any], duration_ms: float
+    ) -> None:
+        metadata = self._result_metadata(payload)
+        if not payload.get("ok"):
+            metadata.update(
+                error_type="MCPToolFailure",
+                error_message="MCP tool returned a failed envelope.",
+            )
+        log_event(
+            phase="mcp_tool_call",
+            outcome="succeeded" if payload.get("ok") else "failed",
+            duration_ms=duration_ms,
+            tool_name=tool_name,
+            **metadata,
+        )
 
     async def verify_target(self, *, client_id: str, org_id: str | None) -> dict[str, Any]:
         tools = await self._load_tools()
         tool = tools.get("list_clients")
         if tool is None:
             raise MCPPolicyError("MCP không cung cấp tool list_clients")
-        raw = await tool.ainvoke(
-            {"search": f"^{client_id}$", "limit": 5, "org_id": org_id or ""}
+        payload, duration_ms = await self._invoke_tool(
+            tool=tool,
+            tool_name="list_clients",
+            arguments={"search": f"^{client_id}$", "limit": 5, "org_id": org_id or ""},
         )
-        payload = _decode_envelope(raw)
+        self._log_tool_result(
+            tool_name="list_clients", payload=payload, duration_ms=duration_ms
+        )
         if not payload.get("ok"):
             raise MCPPolicyError(str(payload.get("error") or "Không xác minh được client"))
         rows = payload.get("data")
@@ -103,10 +172,14 @@ class VelociraptorMCP:
         list_clients = tools.get("list_clients")
         if list_clients is None:
             raise MCPPolicyError("MCP không cung cấp tool list_clients")
-        raw = await list_clients.ainvoke(
-            {"search": "", "limit": 1, "org_id": self.settings.velociraptor_org_id}
+        payload, duration_ms = await self._invoke_tool(
+            tool=list_clients,
+            tool_name="list_clients",
+            arguments={"search": "", "limit": 1, "org_id": self.settings.velociraptor_org_id},
         )
-        payload = _decode_envelope(raw)
+        self._log_tool_result(
+            tool_name="list_clients", payload=payload, duration_ms=duration_ms
+        )
         if not payload.get("ok"):
             raise MCPPolicyError(str(payload.get("error") or "MCP list_clients thất bại"))
         data = payload.get("data")
@@ -142,8 +215,9 @@ class VelociraptorMCP:
             arguments["DateAfter"] = _iso_z(time_from)
             arguments["DateBefore"] = _iso_z(time_to)
 
-        raw = await tool.ainvoke(arguments)
-        payload = _decode_envelope(raw)
+        payload, duration_ms = await self._invoke_tool(
+            tool=tool, tool_name=tool_name, arguments=arguments
+        )
         data = payload.get("data")
         serialized = json.dumps(data, ensure_ascii=False, default=str)
         if len(serialized) > self.settings.max_tool_result_chars:
@@ -152,4 +226,7 @@ class VelociraptorMCP:
                 "original_chars": len(serialized),
                 "preview": serialized[: self.settings.max_tool_result_chars],
             }
+        self._log_tool_result(
+            tool_name=tool_name, payload=payload, duration_ms=duration_ms
+        )
         return payload

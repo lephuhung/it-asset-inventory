@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from deepagent.config import Settings
@@ -14,6 +16,23 @@ class FakeTool:
     async def ainvoke(self, arguments):
         self.calls.append(arguments)
         return self.response
+
+
+def test_failed_mcp_envelope_logs_safe_failure_metadata(capsys) -> None:
+    client = VelociraptorMCP.__new__(VelociraptorMCP)
+    raw_evidence = "raw-evidence-should-never-appear"
+
+    client._log_tool_result(
+        tool_name="windows_pslist",
+        payload={"ok": False, "error": f"bridge error: {raw_evidence}"},
+        duration_ms=12.5,
+    )
+
+    event = json.loads(capsys.readouterr().out)
+    assert event["outcome"] == "failed"
+    assert event["error_type"] == "MCPToolFailure"
+    assert event["error_message"] == "MCP tool returned a failed envelope."
+    assert raw_evidence not in json.dumps(event)
 
 
 @pytest.mark.asyncio
