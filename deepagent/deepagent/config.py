@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     mcp_env_json: str = "{}"
     velociraptor_org_id: str = ""
 
-    max_steps: int = 8
+    max_steps: int = 6  # Ordinary plan sanitization; graph may add max 2 detail calls after triage
     max_evidence_chars: int = 120_000
     max_tool_result_chars: int = 30_000
 

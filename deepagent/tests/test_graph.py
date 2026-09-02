@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from deepagent.analysis_model import sanitize_plan
+from deepagent.models import validate_event_log_expansions, fit_evidence_budget
 from deepagent.config import Settings
 from deepagent.graph import build_investigation_graph
 from deepagent.mcp_client import MCPToolTimeout
@@ -252,3 +253,299 @@ async def test_graph_swallows_external_collection_exception_with_safe_error() ->
     assert failed.timeout is False
     assert failed.error == "MCP collection failed: RuntimeError."
     assert "raw-evidence-should-never-appear" not in failed.error
+
+
+# -------------------------------------------------------------------------
+# Task 3: Event log expansion and evidence budget tests
+# -------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_graph_event_log_triggers_triage_and_detail_expansion() -> None:
+    """windows_event_logs in plan should trigger two-stage collection."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    triage_call_count = 0
+    detail_call_count = 0
+
+    class EventLogMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def verify_target(self, *, client_id, org_id):
+            return {"client_id": client_id, "os_info": {"OS": "windows"}}
+
+        async def collect_event_log_triage(self, **kwargs):
+            nonlocal triage_call_count
+            triage_call_count += 1
+            self.calls.append({"type": "triage", **kwargs})
+            # Simulate triage response with sampled Event IDs
+            return {
+                "rows": 50,
+                "original_rows": 50,
+                "returned_rows": 50,
+                "truncated": False,
+            }
+
+        async def collect_event_log_detail(self, **kwargs):
+            nonlocal detail_call_count
+            detail_call_count += 1
+            self.calls.append({"type": "detail", **kwargs})
+            return {
+                "rows": 25,
+                "original_rows": 25,
+                "returned_rows": 25,
+                "truncated": False,
+            }
+
+        async def collect(self, **kwargs):
+            # Generic collect - should NOT be called for windows_event_logs
+            self.calls.append({"type": "generic", **kwargs})
+            return {"ok": True, "data": []}
+
+    class EventLogModel:
+        model_name = "test-model"
+
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Investigate Windows event logs",
+                steps=[
+                    InvestigationStep(
+                        tool="windows_event_logs",
+                        rationale="Collect event logs for analysis",
+                    ),
+                    InvestigationStep(
+                        tool="windows_pslist",
+                        rationale="Collect process list",
+                    ),
+                ],
+            )
+
+        async def plan_event_log_expansion(
+            self, request, sampled_event_ids, triage_result
+        ) -> list[dict]:
+            """Return two expansions for valid Event IDs within 60 min window."""
+            # Use request time range to avoid validation issues
+            date_before = request.time_range.to
+            date_after = date_before - timedelta(minutes=30)
+            return [
+                {
+                    "date_after": date_after.isoformat(),
+                    "date_before": date_before.isoformat(),
+                    "event_ids": ["4688", "4672"],
+                    "rationale": "account activity",
+                },
+                {
+                    "date_after": date_after.isoformat(),
+                    "date_before": date_before.isoformat(),
+                    "event_ids": ["4624", "4625"],
+                    "rationale": "logon events",
+                },
+            ]
+
+        async def assess(
+            self, _request: InvestigationRequest, evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="medium",
+                confidence="medium",
+                executive_summary="Event log analysis complete.",
+                conclusion="Found relevant events.",
+            )
+
+    mcp = EventLogMCP()
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(
+        mcp=mcp, model=EventLogModel(), settings=settings
+    )
+
+    result = await graph.ainvoke({"request": request()})
+
+    # Verify two-stage collection happened
+    assert triage_call_count == 1, "Triage should be called exactly once"
+    assert detail_call_count == 2, "Two detail calls should be made"
+    # No generic collect for windows_event_logs
+    generic_calls = [c for c in mcp.calls if c["type"] == "generic"]
+    event_log_generic = [c for c in generic_calls if c.get("tool_name") == "windows_event_logs"]
+    assert len(event_log_generic) == 0, "windows_event_logs should use two-stage collection"
+    # Assessment and report should complete
+    assert result["assessment"] is not None
+    assert result["report_markdown"] is not None
+
+
+@pytest.mark.asyncio
+async def test_graph_detail_timeout_continues_to_assessment() -> None:
+    """Detail call timeout should not block assessment and report."""
+    from deepagent.mcp_client import MCPToolTimeout
+
+    detail_call_count = 0
+
+    class TimeoutDetailMCP:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        async def verify_target(self, *, client_id, org_id):
+            return {"client_id": client_id, "os_info": {"OS": "windows"}}
+
+        async def collect_event_log_triage(self, **kwargs):
+            self.calls.append({"type": "triage", **kwargs})
+            return {
+                "rows": 30,
+                "original_rows": 30,
+                "returned_rows": 30,
+                "truncated": False,
+            }
+
+        async def collect_event_log_detail(self, **kwargs):
+            nonlocal detail_call_count
+            detail_call_count += 1
+            self.calls.append({"type": "detail", **kwargs})
+            if detail_call_count == 1:
+                # First detail call times out
+                raise MCPToolTimeout("windows_event_logs_detail")
+            # Second detail call succeeds
+            return {
+                "rows": 25,
+                "original_rows": 25,
+                "returned_rows": 25,
+                "truncated": False,
+            }
+
+        async def collect(self, **kwargs):
+            self.calls.append({"type": "generic", **kwargs})
+            return {"ok": True, "data": []}
+
+    class TimeoutDetailModel:
+        model_name = "test-model"
+
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Investigate event logs",
+                steps=[
+                    InvestigationStep(
+                        tool="windows_event_logs",
+                        rationale="Collect event logs",
+                    ),
+                ],
+            )
+
+        async def plan_event_log_expansion(
+            self, request, sampled_event_ids, triage_result
+        ) -> list[dict]:
+            # Use request time range to avoid validation issues
+            date_before = request.time_range.to
+            date_after = date_before - timedelta(minutes=30)
+            return [
+                {
+                    "date_after": date_after.isoformat(),
+                    "date_before": date_before.isoformat(),
+                    "event_ids": ["4688"],
+                    "rationale": "first",
+                },
+                {
+                    "date_after": date_after.isoformat(),
+                    "date_before": date_before.isoformat(),
+                    "event_ids": ["4672"],
+                    "rationale": "second",
+                },
+            ]
+
+        async def assess(
+            self, _request: InvestigationRequest, evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="medium",
+                confidence="medium",
+                executive_summary="Analysis completed despite timeout.",
+                conclusion="Investigation continued.",
+            )
+
+    mcp = TimeoutDetailMCP()
+    settings = Settings(max_steps=8)
+    graph = build_investigation_graph(
+        mcp=mcp, model=TimeoutDetailModel(), settings=settings
+    )
+
+    result = await graph.ainvoke({"request": request()})
+
+    # Graph should continue despite timeout
+    assert result["assessment"] is not None
+    assert result["report_markdown"] is not None
+    # Verify both detail calls were attempted
+    assert detail_call_count == 2
+    # Evidence should contain both success and timeout
+    evidence_ids = {item.evidence_id for item in result["evidence"]}
+    assert len(evidence_ids) >= 2  # At least triage + detail attempts
+
+
+def test_validate_event_log_expansions_max_two() -> None:
+    """Validation should keep at most 2 expansions."""
+    from datetime import timedelta
+    from deepagent.models import TimeRange
+
+    now = datetime.now(UTC)
+    # Use different event IDs to avoid deduplication
+    event_ids = ["4688", "4672", "4624", "4625", "4634"]
+    expansions = [
+        {
+            "date_after": (now - timedelta(minutes=20)).isoformat(),
+            "date_before": now.isoformat(),
+            "event_ids": [eid],
+            "rationale": f"expand {eid}",
+        }
+        for eid in event_ids
+    ]
+    result = validate_event_log_expansions(
+        expansions,
+        TimeRange(**{"from": now - timedelta(hours=1), "to": now}),
+        set(event_ids),  # All event IDs are in sampled set
+    )
+    assert len(result) == 2
+
+
+def test_validate_event_log_expansions_rejects_over_60_min() -> None:
+    """Validation rejects expansions over 60 minutes."""
+    from datetime import timedelta
+    from deepagent.models import TimeRange
+
+    now = datetime.now(UTC)
+    expansions = [
+        {
+            "date_after": (now - timedelta(minutes=61)).isoformat(),
+            "date_before": now.isoformat(),
+            "event_ids": ["4688"],
+            "rationale": "too long",
+        }
+    ]
+    result = validate_event_log_expansions(
+        expansions,
+        TimeRange(**{"from": now - timedelta(hours=1), "to": now}),
+        {"4688"},
+    )
+    assert len(result) == 0
+
+
+def test_fit_evidence_budget_respects_limit() -> None:
+    """fit_evidence_budget should respect max_chars limit."""
+    import json
+
+    now = datetime.now(UTC)
+    evidence = [
+        EvidenceItem(
+            evidence_id=f"E-{i:03d}",
+            tool="windows_event_logs",
+            collected_at=now,
+            ok=True,
+            data={"rows": [{"id": j, "data": "x" * 1000} for j in range(20)]},
+        )
+        for i in range(3)
+    ]
+    max_chars = 5000
+    bounded = fit_evidence_budget(evidence, max_chars=max_chars)
+    serialized = json.dumps(
+        [item.model_dump(mode="json") for item in bounded],
+        ensure_ascii=False,
+        default=str,
+    )
+    assert len(serialized) <= max_chars
