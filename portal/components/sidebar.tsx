@@ -147,7 +147,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: SUPER_ADMIN_ROLES,
       },
       {
-        href: "/me/notification-prefs",
+        href: "/admin/notification-prefs",
         label: "Cài đặt nhận thông báo",
         icon: BellOff,
         roles: ADMIN_ROLES,

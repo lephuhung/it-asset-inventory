@@ -395,7 +395,7 @@ ls dist/rpm/RPMS/x86_64/*.rpm
 
 ### 11.4 Org Admin tắt nhận
 
-- Vào `/me/notification-prefs` — UI render theo `opt_out_controls` của từng template:
+- Vào `/admin/notification-prefs` — UI render theo `opt_out_controls` của từng template:
   - Template có `template` → checkbox "Tắt nhận template này".
   - Template có `severity` → dropdown "Chỉ nhận từ mức X".
 - Super Admin không thể tắt — luôn nhận mọi alert.
