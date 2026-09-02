@@ -1,40 +1,88 @@
 diff --git a/mcp_velociraptor_bridge.py b/mcp_velociraptor_bridge.py
-index 2865fc5..7336e91 100644
+index 2865fc5..1939dbe 100644
 --- a/mcp_velociraptor_bridge.py
 +++ b/mcp_velociraptor_bridge.py
-@@ -2145,3 +2145,340 @@ async def list_macos_artifacts(
+@@ -406,7 +406,7 @@ async def linux_groups(
+ ) -> str:
+     """
+     List groups on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -431,7 +431,7 @@ async def linux_mounts(
+ ) -> str:
+     """
+     List mounts on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -463,7 +463,7 @@ async def linux_netstat_enriched(
+ ) -> str:
+     """
+     List network connections (netstat) with process metadata on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -504,7 +504,7 @@ async def linux_users(
+ ) -> str:
+     """
+     List users on a Linux host.
+-    
++
+     Args:
+         client_id: The Velociraptor client ID.
+         org_id: Optional Velociraptor org ID for multi-tenant deployments.
+@@ -970,7 +970,7 @@ async def windows_netstat_enriched(
+     return _run_collection_tool(client_id, artifact, parameters, Fields, result_scope, org_id)
  
- if __name__ == "__main__":
-     mcp.run(show_banner=False)
+ ##
+-## Persistence 
++## Persistence
+ @mcp.tool()
+ async def windows_scheduled_tasks(
+     client_id: str,
+@@ -1020,7 +1020,7 @@ async def windows_services(
+ 
+ 
+ ##
+-## User Activity 
++## User Activity
+ 
+ @mcp.tool()
+ async def windows_recentdocs(
+@@ -1389,7 +1389,7 @@ async def windows_execution_shimcache(
+ async def windows_execution_prefetch(
+     client_id: str,
+     org_id: str = "",
+-    Fields: str = "Binary,CreationTime,LastRunTimes,RunCount,Hash" 
++    Fields: str = "Binary,CreationTime,LastRunTimes,RunCount,Hash"
+     #"Executable,LastRunTimes,RunCount,PrefetchFileName,Version,Hash,CreationTime,ModificationTime,Binary"
+ ) -> str:
+     """
+@@ -2142,6 +2142,334 @@ async def list_macos_artifacts(
+         name_regex,
+     )
+ 
 +# This file contains the bounded event-log helpers to be appended to mcp_velociraptor_bridge.py
-+# B-1 fix: correct 8-space indentation throughout
-+# M-2 fix: pass numeric_limit to realtime_collection (not appended to result_scope)
-+# M-1 fix: use raw row count for original_rows, propagate truncated correctly
++# F-1 fix: bounded helpers defined BEFORE mcp.run() so decorators execute
++# F-2 fix: no try/except ImportError stub; use distinct _bounded_run_collection_tool
++# F-3 fix: numeric_limit = max_rows + 1 to probe truncation at source
 +
 +import json
 +from typing import Any
 +
-+# Re-export from velociraptor_api for use in this module
-+try:
-+    from velociraptor_api import (
-+        ArtifactParameters,
-+        realtime_collection,
-+    )
-+except ImportError:
-+    ArtifactParameters = dict[str, Any]  # type: ignore
-+    def realtime_collection(  # type: ignore
-+        client_id: str,
-+        artifact: str,
-+        parameters: Any = None,
-+        fields: str = "*",
-+        result_scope: str = "",
-+        org_id: str | None = None,
-+        numeric_limit: int | None = None,
-+    ) -> list[dict]:
-+        raise RuntimeError("velociraptor_api not available")
++# Note: ArtifactParameters is defined at bridge line 23 (from ParameterValue).
++# Note: realtime_collection is available from bridge line 9 (from velociraptor_api import *).
++# We use a distinct helper name to avoid shadowing upstream _run_collection_tool.
 +
 +
-+def _run_collection_tool(
++def _bounded_run_collection_tool(
 +    client_id: str,
 +    artifact: str,
 +    parameters: ArtifactParameters | None,
@@ -43,7 +91,11 @@ index 2865fc5..7336e91 100644
 +    org_id: str = "",
 +    numeric_limit: int | None = None,
 +) -> str:
-+    """Run a realtime collection and return JSON result."""
++    """Run a realtime collection and return JSON result.
++
++    F-2 fix: uses the already-imported realtime_collection from velociraptor_api;
++    no ImportError fallback needed.
++    """
 +    try:
 +        # M-2 fix: pass numeric_limit as separate parameter, not concatenated to result_scope
 +        rows = realtime_collection(
@@ -61,7 +113,7 @@ index 2865fc5..7336e91 100644
 +
 +
 +# ---------------------------------------------------------------------------
-+# Task 2: Bounded event-log helpers (deepagent-queue-bounded-log-triage)
++# Bounded event-log helpers (deepagent-queue-bounded-log-triage)
 +# ---------------------------------------------------------------------------
 +# Validated event-log profiles (code-owned, no arbitrary field/vql/regex).
 +# Each profile maps to an EvtxHunter (channel, id) tuple pre-quoted at
@@ -111,23 +163,27 @@ index 2865fc5..7336e91 100644
 +    org_id: str = "",
 +    max_rows: int | None = None,
 +) -> tuple[str, int, int]:
-+    """Wrap _run_collection_tool with an optional LIMIT on source results.
++    """Wrap _bounded_run_collection_tool with an optional LIMIT on source results.
 +
-+    The LIMIT is pushed into the VQL SELECT via numeric_limit so Velociraptor
-+    applies the cap at the source (reducing result transfer). A Python-side
-+    safety cap remains in place as defense-in-depth.
++    F-3 fix: numeric_limit = max_rows + 1 probes the source for truncation.
++    The VQL LIMIT is set to max_rows + 1 so we can detect when more rows
++    exist than the cap. This allows:
++    - original_row_count = observed probe count
++    - was_truncated = len(rows) > max_rows (real detection)
++    - data["data"] = rows[:max_rows] (defense-in-depth)
 +
 +    Returns (result_json, original_row_count, was_truncated) so callers can
-+    compute accurate metadata before any truncation.
-+    - original_row_count: raw row count from source BEFORE Python truncation
-+    - was_truncated: True only if raw rows > max_rows
++    compute accurate metadata.
 +    """
-+    # M-2 fix: numeric_limit is passed separately to realtime_collection,
-+    # which appends LIMIT to the VQL SELECT, NOT to result_scope.
-+    # result_scope remains available for artifact scoping (e.g., named queries).
-+    numeric_limit = max_rows if max_rows is not None and max_rows > 0 else None
++    # F-3 fix: numeric_limit = max_rows + 1 to probe truncation at source.
++    # We request one more row than the cap so we can detect if there are
++    # more rows available (and report truncated=true).
++    if max_rows is not None and max_rows > 0:
++        numeric_limit = max_rows + 1
++    else:
++        numeric_limit = None
 +
-+    result = _run_collection_tool(
++    result = _bounded_run_collection_tool(
 +        client_id, artifact, parameters, fields, result_scope, org_id, numeric_limit
 +    )
 +
@@ -139,16 +195,14 @@ index 2865fc5..7336e91 100644
 +    if not isinstance(rows, list):
 +        return result, 0, False
 +
-+    # M-1 fix: original_row_count is the raw row count BEFORE any truncation.
-+    # This is the ground truth from the VQL query (or Python fallback if no VQL LIMIT).
++    # F-3 fix: original_row_count is the raw row count from the probe query.
 +    original_row_count = len(rows)
 +
-+    # M-1 fix: was_truncated = raw rows > returned rows
-+    # This is computed before Python-side truncation for accurate reporting.
++    # F-3 fix: was_truncated = observed rows > max_rows
++    # This is real truncation detection (not dead code like numeric_limit = max_rows).
 +    was_truncated = max_rows is not None and original_row_count > max_rows
 +
-+    # M-1 fix: cap Python-side as defense-in-depth when max_rows is set.
-+    # Only truncate if we actually received more rows than the limit.
++    # Cap Python-side as defense-in-depth.
 +    if was_truncated:
 +        data["data"] = rows[:max_rows]
 +
@@ -241,7 +295,7 @@ index 2865fc5..7336e91 100644
 +    if data.get("ok"):
 +        rows = data.get("data", [])
 +        rows_in_payload = len(rows)
-+        # M-1 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
++        # F-3 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
 +        # sampled_event_ids are extracted from the raw (pre-truncation) rows for
 +        # expansion guidance.
 +        sampled_event_ids = _extract_unique_event_ids(rows[:enforced_max])
@@ -333,7 +387,7 @@ index 2865fc5..7336e91 100644
 +    if data.get("ok"):
 +        rows = data.get("data", [])
 +        rows_in_payload = len(rows)
-+        # M-1 fix: original_rows is raw row count before VQL/Python truncation.
++        # F-3 fix: original_rows is raw row count before VQL/Python truncation.
 +        # was_truncated reflects whether truncation actually occurred.
 +        data["data"] = {
 +            "rows": rows_in_payload,
@@ -343,10 +397,22 @@ index 2865fc5..7336e91 100644
 +        }
 +        return json.dumps(data)
 +    return result
+ 
+ if __name__ == "__main__":
+     mcp.run(show_banner=False)
 diff --git a/velociraptor_api.py b/velociraptor_api.py
-index ef10f3e..7df830a 100644
+index ef10f3e..dce8f89 100644
 --- a/velociraptor_api.py
 +++ b/velociraptor_api.py
+@@ -310,7 +310,7 @@ def run_vql_query(vql: str, org_id: str | None = None):
+     results = []
+     if DEBUG_VQL:
+         logger.debug("VQL request: %s", request)
+-    
++
+     for resp in stub.Query(request):
+         if hasattr(resp, "error") and resp.error:
+             raise RuntimeError(f"Velociraptor API error: {resp.error}")
 @@ -548,17 +548,21 @@ def realtime_collection(
      fields: str = "*",
      result_scope: str = "",
@@ -357,7 +423,7 @@ index ef10f3e..7df830a 100644
      normalized_result_artifact = normalize_artifact_name(f"{artifact}{result_scope}")
      normalized_fields = normalize_fields(fields)
      normalized_parameters = normalize_env_dict(parameters)
-+    # M-2 fix: numeric_limit appends LIMIT to the final SELECT VQL expression,
++    # F-3 fix: numeric_limit appends LIMIT to the final SELECT VQL expression,
 +    # not to result_scope (which is concatenated to the artifact name).
 +    limit_clause = f" LIMIT {int(numeric_limit)}" if numeric_limit is not None and numeric_limit > 0 else ""
      vql = (

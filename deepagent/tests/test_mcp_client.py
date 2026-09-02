@@ -260,3 +260,23 @@ async def test_event_log_detail_returns_source_result_metadata() -> None:
     assert result["original_rows"] == 100
     assert result["returned_rows"] == 50
     assert result["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_collect_blocks_windows_event_logs() -> None:
+    """F-4 fix: generic collect() must raise MCPPolicyError for windows_event_logs.
+
+    The only allowed access is through the typed triage/detail helpers
+    (collect_event_log_triage / collect_event_log_detail). This blocks
+    the unbounded generic tool path.
+    """
+    client = configured_client_with_tools(windows_pslist=FakeTool('{"ok": true, "data": []}'))
+
+    with pytest.raises(MCPPolicyError, match="windows_event_logs"):
+        await client.collect(
+            tool_name="windows_event_logs",
+            client_id="C.1",
+            org_id="",
+            time_from=FROM,
+            time_to=TO,
+        )

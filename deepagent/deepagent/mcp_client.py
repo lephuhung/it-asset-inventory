@@ -257,6 +257,13 @@ class VelociraptorMCP:
         policy = WINDOWS_TOOL_POLICIES.get(tool_name)
         if policy is None:
             raise MCPPolicyError(f"Tool bị chặn bởi allowlist: {tool_name}")
+        # F-4 fix: structurally reject windows_event_logs in generic collect.
+        # The only allowed access is through the typed triage/detail helpers.
+        if tool_name == "windows_event_logs":
+            raise MCPPolicyError(
+                "windows_event_logs must be accessed through typed helpers: "
+                "collect_event_log_triage or collect_event_log_detail."
+            )
         tools = await self._load_tools()
         tool = tools.get(tool_name)
         if tool is None:
