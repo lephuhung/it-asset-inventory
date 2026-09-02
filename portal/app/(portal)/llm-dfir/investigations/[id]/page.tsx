@@ -300,10 +300,8 @@ export default function InvestigationDetailPage({
           )}
         </div>
       </Card>
-
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Report panel — render markdown qua component memoized */}
-        <Card title="Báo cáo">
+        <Card title="Báo cáo" bodyClass="flex flex-col min-h-0" className="min-h-[400px] max-h-[600px] flex flex-col">
           {inv.status === "pending" && (
             <p className="text-sm text-slate-500">⏳ Đang chờ worker xử lý…</p>
           )}
@@ -330,8 +328,7 @@ export default function InvestigationDetailPage({
             </div>
           )}
           {inv.status === "completed" && inv.report_markdown && (
-            // Memoized — không re-render khi user gõ vào chat input.
-            <div className="max-w-none">
+            <div className="flex-1 overflow-y-auto rounded-md border border-slate-200 p-3">
               <InvestigationMarkdown content={inv.report_markdown} />
             </div>
           )}

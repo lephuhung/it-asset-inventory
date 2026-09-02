@@ -54,8 +54,8 @@ function InvestigationChatPanelInner({
   };
 
   return (
-    <Card title="Hỏi tiếp AI" className="flex flex-col" bodyClass="flex flex-1 flex-col min-h-0">
-      <div className="min-h-[400px] max-h-[600px] flex-1 space-y-3 overflow-y-auto pr-2">
+    <Card title="Hỏi tiếp AI" className="flex flex-col min-h-[400px] max-h-[600px]" bodyClass="flex flex-col min-h-0">
+      <div className="flex-1 space-y-3 overflow-y-auto pr-2">
         {messages.length === 0 && status === "completed" && (
           <p className="text-sm text-slate-500">
             Đặt câu hỏi tiếp về cuộc điều tra này. AI sẽ trả lời dựa trên dữ liệu đã thu thập.
@@ -94,7 +94,7 @@ function InvestigationChatPanelInner({
           ))}
         <div ref={chatEndRef} />
       </div>
-      <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+      <div className="mt-3 shrink-0 space-y-2 border-t border-slate-100 pt-3">
         <Textarea
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
