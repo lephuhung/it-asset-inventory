@@ -11,7 +11,8 @@ RUN git clone https://github.com/lephuhung/mcp-velociraptor.git /opt/mcp-velocir
     && /opt/mcp-venv/bin/pip install --no-cache-dir -r /opt/mcp-velociraptor/requirements.txt
 # Apply bounded event-log bridge patch
 COPY patches/mcp-velociraptor-bounded-event-log.patch /tmp/
-RUN git -C /opt/mcp-velociraptor apply --recount /tmp/mcp-velociraptor-bounded-event-log.patch
+RUN git -C /opt/mcp-velociraptor apply --recount /tmp/mcp-velociraptor-bounded-event-log.patch \
+    && python3 -m py_compile /opt/mcp-velociraptor/mcp_velociraptor_bridge.py
 COPY pyproject.toml ./
 COPY deepagent ./deepagent
 RUN pip install --no-cache-dir .

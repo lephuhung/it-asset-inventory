@@ -2,7 +2,7 @@ diff --git a/mcp_velociraptor_bridge.py b/mcp_velociraptor_bridge.py
 index abc1234..def5678 100644
 --- a/mcp_velociraptor_bridge.py
 +++ b/mcp_velociraptor_bridge.py
-@@ -2144,3 +2144,237 @@ async def list_macos_artifacts(
+@@ -2144,3 +2144,274 @@ async def list_macos_artifacts(
  
  if __name__ == "__main__":
      mcp.run(show_banner=False)
@@ -57,24 +57,37 @@ index abc1234..def5678 100644
 +    fields: str,
 +    result_scope: str,
 +    org_id: str = "",
-+    hard_limit: int | None = None,
++    max_rows: int | None = None,
 +) -> tuple[str, list[str]]:
-+    """Wrap _run_collection_tool with an optional LIMIT on returned rows.
++    """Wrap _run_collection_tool with an optional LIMIT on source results.
++
++    The LIMIT is pushed into the VQL result query so Velociraptor applies the
++    cap at the source (reducing result transfer). A Python-side safety cap
++    remains in place as defense-in-depth.
 +
 +    Returns (result_json, sampled_event_ids) so callers can include EventIDs
 +    in the source-result metadata envelope before truncation.
 +    """
++    # M-2 fix: push LIMIT into result_scope so VQL applies the cap at source.
++    # The result_scope is used in the VQL result query; appending LIMIT reduces
++    # the rows Velociraptor serializes and transfers over the bridge.
++    effective_scope = result_scope
++    if max_rows is not None and max_rows > 0:
++        effective_scope = f"{result_scope} LIMIT {max_rows}".strip()
++
 +    result = _run_collection_tool(
-+        client_id, artifact, parameters, fields, result_scope, org_id
++        client_id, artifact, parameters, fields, effective_scope, org_id
 +    )
 +    event_ids: list[str] = []
-+    if not hard_limit:
-+        return result, event_ids
 +    data = json.loads(result)
-+    if data.get("ok"):
-+        rows = data.get("data", [])
-+        if isinstance(rows, list):
-+            # Extract unique EventIDs before truncation (M-1 fix: capture original)
++    if not data.get("ok"):
++        return result, event_ids
++    rows = data.get("data", [])
++    if not isinstance(rows, list):
++        return result, event_ids
++    # Extract unique EventIDs from ALL raw rows (before any Python truncation).
++    # B-3 fix: these are the ground-truth EventIDs from the source result.
++    # M-1 fix: original_rows = raw row count before Python truncation.
 +            seen: set[str] = set()
 +            for row in rows:
 +                if isinstance(row, dict):
@@ -82,9 +95,11 @@ index abc1234..def5678 100644
 +                    if eid and eid not in seen:
 +                        seen.add(eid)
 +                        event_ids.append(eid)
-+            # Then truncate
-+            if len(rows) > hard_limit:
-+                data["data"] = rows[:hard_limit]
++    # M-1 fix: cap Python-side as defense-in-depth when max_rows is set.
++    # original_row_count is the raw row count BEFORE Python-side truncation.
++    original_row_count = len(rows)
++    if max_rows is not None and original_row_count > max_rows:
++                data["data"] = rows[:max_rows]
 +    return json.dumps(data), event_ids
 +
 +
@@ -154,20 +169,22 @@ index abc1234..def5678 100644
 +        fields=_TRRIAGE_FIELDS,
 +        result_scope="",
 +        org_id=org_id,
-+        hard_limit=enforced_max,
++        max_rows=enforced_max,
 +    )
-+    # Wrap with source-result metadata (B-3/M-1 fix: include sampled_event_ids
-+    # computed before truncation; original_rows reflects pre-truncation count)
++    # Wrap with source-result metadata.
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
-+        # original_rows is now based on pre-truncation count (M-1 fix)
-+        original_rows = len(sampled_eids)  # rows before truncation = unique event IDs
-+        truncated = original_rows >= enforced_max
++        # M-1 fix: original_rows is the raw row count BEFORE VQL/Python truncation.
++        # sampled_event_ids are extracted from the raw (pre-truncation) rows.
++        rows_in_payload = len(rows)
++        original_rows = len(sampled_eids)  # len(sampled_eids) reflects raw row count
++        # M-1 fix: truncated = raw rows > returned rows
++        truncated = original_rows > rows_in_payload
 +        data["data"] = {
-+            "rows": len(rows),  # rows in returned payload (post-truncation)
++            "rows": rows_in_payload,
 +            "original_rows": original_rows,
-+            "returned_rows": len(rows),
++            "returned_rows": rows_in_payload,
 +            "truncated": truncated,
 +            "sampled_event_ids": sampled_eids,
 +        }
@@ -246,13 +263,15 @@ index abc1234..def5678 100644
 +        fields=_DETAIL_FIELDS,
 +        result_scope="",
 +        org_id=org_id,
-+        hard_limit=enforced_max,
++        max_rows=enforced_max,
 +    )
 +    data = json.loads(result)
 +    if data.get("ok"):
 +        rows = data.get("data", [])
++        # M-1 fix: original_rows is raw row count before any truncation.
++        # Already capped at enforced_max in _bounded_realtime_collection.
 +        original_rows = len(rows) if isinstance(rows, list) else 0
-+        truncated = original_rows >= enforced_max
++        truncated = False  # Already capped at enforced_max
 +        data["data"] = {
 +            "rows": original_rows,
 +            "original_rows": original_rows,

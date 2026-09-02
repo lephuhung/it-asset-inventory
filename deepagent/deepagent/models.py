@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 Confidence = Literal["high", "medium", "low"]
@@ -259,7 +259,7 @@ def validate_event_log_expansions(
 
             validated.append(parsed)
 
-        except Exception as exc:
+        except ValidationError as exc:
             # Reject values that fail strict model schema (M-3 fix: categorize the failure)
             exc_msg = str(exc).lower()
             if "60 minutes" in exc_msg or "exceeds" in exc_msg:

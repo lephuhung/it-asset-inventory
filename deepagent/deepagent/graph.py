@@ -289,7 +289,7 @@ async def _collect_event_log_with_expansion(
                 validated_expansion_count=len(expansion_items),
                 rejected_expansion_count=len(validation_rejections),
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Expansion planning failure doesn't block graph
             log_event(
                 phase="event_log_expansion_validation",
@@ -298,10 +298,8 @@ async def _collect_event_log_with_expansion(
             )
 
     # Stage 3: Execute at most 2 detail calls
-    detail_index = 0
-    for expansion in expansion_items[:MAX_DETAIL_CALLS]:
-        detail_index += 1
-        detail_evidence_id = f"E-{index + 1 + detail_index:03d}"
+    for detail_idx, expansion in enumerate(expansion_items[:MAX_DETAIL_CALLS], start=1):
+        detail_evidence_id = f"E-{index + 1 + detail_idx:03d}"
         detail_timed_out = False
 
         try:

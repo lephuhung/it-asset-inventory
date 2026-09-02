@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from deepagent.config import Settings
 from deepagent.mcp_client import MCPPolicyError, MCPToolTimeout, VelociraptorMCP
 
-FROM = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-TO = datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+FROM = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+TO = datetime(2024, 1, 2, 0, 0, 0, tzinfo=UTC)
 
 
 def configured_client_with_tools(**tools: FakeTool) -> VelociraptorMCP:
