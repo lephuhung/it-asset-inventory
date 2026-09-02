@@ -285,3 +285,142 @@ class VelociraptorMCP:
             tool_name=tool_name, payload=payload, duration_ms=duration_ms
         )
         return payload
+
+    # -------------------------------------------------------------------------
+    # Bounded event-log helpers (Task 2)
+    # -------------------------------------------------------------------------
+
+    async def collect_event_log_triage(
+        self,
+        *,
+        client_id: str,
+        org_id: str | None,
+        time_from: datetime,
+        time_to: datetime,
+        profile_id: str = "security_core",
+    ) -> dict[str, Any]:
+        """Collect Windows event logs using a bounded triage profile.
+
+        The bridge enforces a hard cap of 100 rows and fixed triage metadata fields.
+        Only pre-defined, code-owned profile IDs are accepted.
+
+        Returns source-result metadata: {rows, original_rows, returned_rows, truncated}.
+        Raises MCPPolicyError if the bridge returns a failed envelope.
+        """
+        tools = await self._load_tools()
+        tool = tools.get("windows_event_logs_triage")
+        if tool is None:
+            raise MCPPolicyError("MCP không cung cấp tool windows_event_logs_triage")
+
+        arguments: dict[str, Any] = {
+            "client_id": client_id,
+            "org_id": org_id or self.settings.velociraptor_org_id,
+            "DateAfter": _iso_z(time_from),
+            "DateBefore": _iso_z(time_to),
+            "profile_id": profile_id,
+            "max_rows": 100,  # hard cap – bridge will cap at 100
+            "fields": "EventTime,Computer,Channel,Provider,EventID",
+        }
+
+        payload, duration_ms = await self._invoke_tool(
+            tool=tool,
+            tool_name="windows_event_logs_triage",
+            arguments=arguments,
+        )
+        self._log_tool_result(
+            tool_name="windows_event_logs_triage",
+            payload=payload,
+            duration_ms=duration_ms,
+        )
+
+        if not payload.get("ok"):
+            raise MCPPolicyError(str(payload.get("error") or "windows_event_logs_triage thất bại"))
+
+        data = payload.get("data")
+        # Source-result metadata envelope from bridge
+        if isinstance(data, dict):
+            return {
+                "rows": data.get("rows", 0),
+                "original_rows": data.get("original_rows", 0),
+                "returned_rows": data.get("returned_rows", 0),
+                "truncated": bool(data.get("truncated")),
+            }
+        return {
+            "rows": 0,
+            "original_rows": 0,
+            "returned_rows": 0,
+            "truncated": False,
+        }
+
+    async def collect_event_log_detail(
+        self,
+        *,
+        client_id: str,
+        org_id: str | None,
+        time_from: datetime,
+        time_to: datetime,
+        event_ids: list[str] | None = None,
+        profile_id: str = "",
+        max_rows: int = 50,
+    ) -> dict[str, Any]:
+        """Collect Windows event log details with validated EventID list.
+
+        Accepts either a validated profile_id OR an explicit event_ids list,
+        but not both. Enforces a hard cap of 50 rows. Returns source-result
+        metadata: {rows, original_rows, returned_rows, truncated}.
+        Raises MCPPolicyError on policy violation (>50 rows, unknown profile).
+        """
+        if max_rows > 50:
+            raise MCPPolicyError(
+                "collect_event_log_detail enforces a hard cap of 50 rows; "
+                f"caller requested {max_rows}."
+            )
+
+        if profile_id and event_ids:
+            raise MCPPolicyError("Provide either profile_id or event_ids, not both.")
+
+        tools = await self._load_tools()
+        tool = tools.get("windows_event_logs_detail")
+        if tool is None:
+            raise MCPPolicyError("MCP không cung cấp tool windows_event_logs_detail")
+
+        arguments: dict[str, Any] = {
+            "client_id": client_id,
+            "org_id": org_id or self.settings.velociraptor_org_id,
+            "DateAfter": _iso_z(time_from),
+            "DateBefore": _iso_z(time_to),
+            "max_rows": max_rows,
+        }
+        if profile_id:
+            arguments["profile_id"] = profile_id
+        if event_ids:
+            arguments["event_ids"] = ",".join(str(eid) for eid in event_ids)
+
+        payload, duration_ms = await self._invoke_tool(
+            tool=tool,
+            tool_name="windows_event_logs_detail",
+            arguments=arguments,
+        )
+        self._log_tool_result(
+            tool_name="windows_event_logs_detail",
+            payload=payload,
+            duration_ms=duration_ms,
+        )
+
+        if not payload.get("ok"):
+            raise MCPPolicyError(str(payload.get("error") or "windows_event_logs_detail thất bại"))
+
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return {
+                "rows": data.get("rows", 0),
+                "original_rows": data.get("original_rows", 0),
+                "returned_rows": data.get("returned_rows", 0),
+                "truncated": bool(data.get("truncated")),
+            }
+        return {
+            "rows": 0,
+            "original_rows": 0,
+            "returned_rows": 0,
+            "truncated": False,
+        }

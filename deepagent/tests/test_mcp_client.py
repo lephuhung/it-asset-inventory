@@ -2,12 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
 
 from deepagent.config import Settings
 from deepagent.mcp_client import MCPPolicyError, MCPToolTimeout, VelociraptorMCP
+
+FROM = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+TO = datetime(2024, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def configured_client_with_tools(**tools: FakeTool) -> VelociraptorMCP:
+    """Build a VelociraptorMCP with fake tools and no real MCP connection."""
+    client = VelociraptorMCP.__new__(VelociraptorMCP)
+    client.settings = Settings()
+    client._tools = dict(tools)  # type: ignore[attr-defined]
+    return client
 
 
 class FakeTool:
@@ -137,3 +149,114 @@ async def test_mcp_tool_timeout_does_not_swallow_normal_results(capsys) -> None:
     assert payload == {"ok": True, "data": [{"client_id": "C.1"}]}
     assert duration_ms >= 0
     assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------=
+# Task 2: Bounded event-log retrieval tests
+# ---------------------------------------------------------------------------=
+
+
+@pytest.mark.asyncio
+async def test_event_log_triage_passes_fixed_metadata_fields_and_100_row_cap() -> None:
+    """collect_event_log_triage must pass exactly max_rows=100 and fixed triage fields."""
+    tool = FakeTool('{"ok": true, "data": []}')
+    client = configured_client_with_tools(windows_event_logs_triage=tool)
+    await client.collect_event_log_triage(
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+    )
+    assert len(tool.calls) == 1
+    assert tool.calls[0]["max_rows"] == 100
+    assert tool.calls[0]["fields"] == "EventTime,Computer,Channel,Provider,EventID"
+
+
+@pytest.mark.asyncio
+async def test_event_log_triage_returns_source_result_metadata() -> None:
+    """Response envelope must include rows, original_rows, returned_rows, truncated."""
+    tool = FakeTool(
+        '{"ok": true, "data": {"rows": 200, "original_rows": 200, "returned_rows": 100, "truncated": true}}'
+    )
+    client = configured_client_with_tools(windows_event_logs_triage=tool)
+    result = await client.collect_event_log_triage(
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+    )
+    assert result["rows"] == 200
+    assert result["original_rows"] == 200
+    assert result["returned_rows"] == 100
+    assert result["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_event_log_detail_rejects_unknown_profile_and_more_than_50_rows() -> None:
+    """collect_event_log_detail must reject >50 max_rows and unknown profile IDs."""
+    client = configured_client_with_tools()
+
+    with pytest.raises(MCPPolicyError):
+        await client.collect_event_log_detail(
+            client_id="C.1",
+            org_id="",
+            time_from=FROM,
+            time_to=TO,
+            event_ids=["9999"],
+            max_rows=51,
+        )
+
+
+@pytest.mark.asyncio
+async def test_event_log_detail_passes_validated_event_ids_and_50_row_cap() -> None:
+    """collect_event_log_detail must pass validated EventID list and max_rows=50."""
+    tool = FakeTool('{"ok": true, "data": []}')
+    client = configured_client_with_tools(windows_event_logs_detail=tool)
+    await client.collect_event_log_detail(
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+        event_ids=["4624", "4625"],
+        max_rows=50,
+    )
+    assert len(tool.calls) == 1
+    assert tool.calls[0]["max_rows"] == 50
+    assert tool.calls[0]["event_ids"] == "4624,4625"
+
+
+@pytest.mark.asyncio
+async def test_event_log_detail_unknown_profile_raises_policy_error() -> None:
+    """Unknown profile_id must raise MCPPolicyError."""
+    client = configured_client_with_tools(windows_event_logs_detail=FakeTool('{}'))
+    with pytest.raises(MCPPolicyError, match="profile"):
+        await client.collect_event_log_detail(
+            client_id="C.1",
+            org_id="",
+            time_from=FROM,
+            time_to=TO,
+            profile_id="invalid_profile",
+            event_ids=["4624"],
+            max_rows=50,
+        )
+
+
+@pytest.mark.asyncio
+async def test_event_log_detail_returns_source_result_metadata() -> None:
+    """Response envelope must include rows, original_rows, returned_rows, truncated."""
+    tool = FakeTool(
+        '{"ok": true, "data": {"rows": 50, "original_rows": 100, "returned_rows": 50, "truncated": false}}'
+    )
+    client = configured_client_with_tools(windows_event_logs_detail=tool)
+    result = await client.collect_event_log_detail(
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+        event_ids=["4624"],
+        max_rows=50,
+    )
+    assert result["rows"] == 50
+    assert result["original_rows"] == 100
+    assert result["returned_rows"] == 50
+    assert result["truncated"] is False
