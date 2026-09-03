@@ -155,7 +155,7 @@ export default function ApiKeysPage() {
                     <th scope="col" className={TH}>Phạm vi</th>
                     <th scope="col" className={TH}>Lần dùng cuối</th>
                     <th scope="col" className={TH}>Trạng thái</th>
-                    <th scope="col" className={`${TH} text-right`}>Thao tác</th>
+                    <th scope="col" className={`${TH} text-right whitespace-nowrap`}>Thao tác</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -167,19 +167,24 @@ export default function ApiKeysPage() {
                       <td className={`${TD} text-xs`} title={k.last_used_at ? formatDateTime(k.last_used_at) : ""}>
                         {k.last_used_at ? timeAgo(k.last_used_at) : "Chưa dùng"}
                       </td>
-                      <td className={TD}>
+                      <td className={`${TD} whitespace-nowrap`}>
                         <Badge className={k.enabled ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-slate-100 text-slate-500 ring-slate-500/20"}>
                           {k.enabled ? "Đang mở" : "Đã vô hiệu"}
                         </Badge>
                       </td>
-                      <td className={`${TD} text-right`}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button variant="secondary" size="sm" onClick={() => void toggle(k)}>
+                      <td className={`${TD} text-right whitespace-nowrap`}>
+                        <div className="flex items-center justify-end gap-1.5 shrink-0">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="min-w-[4.5rem] whitespace-nowrap"
+                            onClick={() => void toggle(k)}
+                          >
                             {k.enabled ? "Vô hiệu" : "Bật"}
                           </Button>
                           <button
                             onClick={() => setRemoving(k)}
-                            className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                            className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 shrink-0"
                             title="Xóa key"
                             aria-label={`Xóa API key ${k.name}`}
                           >

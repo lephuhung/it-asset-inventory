@@ -50,7 +50,7 @@ class BulkTagRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str = Field(..., min_length=1, max_length=255)  # Hỗ trợ cả email và username
     password: str
     totp_code: str | None = Field(default=None, max_length=6)
 

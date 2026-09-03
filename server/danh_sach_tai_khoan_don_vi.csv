@@ -1,0 +1,83 @@
+﻿stt,org_name,org_type_label,username,email,default_password,role
+1,UBND xã Thạch Lạc,UBND cấp xã,thachlac,thachlac@hatinh.gov.vn,Hatinh@123,org_admin
+2,UBND xã Đồng Tiến,UBND cấp xã,dongtien,dongtien@hatinh.gov.vn,Hatinh@123,org_admin
+3,UBND xã Thạch Khê,UBND cấp xã,thachkhe,thachkhe@hatinh.gov.vn,Hatinh@123,org_admin
+4,UBND xã Cẩm Bình,UBND cấp xã,cambinh,cambinh@hatinh.gov.vn,Hatinh@123,org_admin
+5,UBND xã Kỳ Xuân,UBND cấp xã,kyxuan,kyxuan@hatinh.gov.vn,Hatinh@123,org_admin
+6,UBND xã Kỳ Anh,UBND cấp xã,kyanh,kyanh@hatinh.gov.vn,Hatinh@123,org_admin
+7,UBND xã Kỳ Hoa,UBND cấp xã,kyhoa,kyhoa@hatinh.gov.vn,Hatinh@123,org_admin
+8,UBND xã Kỳ Văn,UBND cấp xã,kyvan,kyvan@hatinh.gov.vn,Hatinh@123,org_admin
+9,UBND xã Kỳ Khang,UBND cấp xã,kykhang,kykhang@hatinh.gov.vn,Hatinh@123,org_admin
+10,UBND xã Kỳ Lạc,UBND cấp xã,kylac,kylac@hatinh.gov.vn,Hatinh@123,org_admin
+11,UBND xã Kỳ Thượng,UBND cấp xã,kythuong,kythuong@hatinh.gov.vn,Hatinh@123,org_admin
+12,UBND xã Cẩm Xuyên,UBND cấp xã,camxuyen,camxuyen@hatinh.gov.vn,Hatinh@123,org_admin
+13,UBND xã Thiên Cầm,UBND cấp xã,thiencam,thiencam@hatinh.gov.vn,Hatinh@123,org_admin
+14,UBND xã Cẩm Duệ,UBND cấp xã,camdue,camdue@hatinh.gov.vn,Hatinh@123,org_admin
+15,UBND xã Cẩm Hưng,UBND cấp xã,camhung,camhung@hatinh.gov.vn,Hatinh@123,org_admin
+16,UBND xã Cẩm Lạc,UBND cấp xã,camlac,camlac@hatinh.gov.vn,Hatinh@123,org_admin
+17,UBND xã Cẩm Trung,UBND cấp xã,camtrung,camtrung@hatinh.gov.vn,Hatinh@123,org_admin
+18,UBND xã Yên Hòa,UBND cấp xã,yenhoa,yenhoa@hatinh.gov.vn,Hatinh@123,org_admin
+19,UBND xã Thạch Hà,UBND cấp xã,thachha,thachha@hatinh.gov.vn,Hatinh@123,org_admin
+20,UBND xã Toàn Lưu,UBND cấp xã,toanluu,toanluu@hatinh.gov.vn,Hatinh@123,org_admin
+21,UBND xã Việt Xuyên,UBND cấp xã,vietxuyen,vietxuyen@hatinh.gov.vn,Hatinh@123,org_admin
+22,UBND xã Đông Kinh,UBND cấp xã,dongkinh,dongkinh@hatinh.gov.vn,Hatinh@123,org_admin
+23,UBND xã Thạch Xuân,UBND cấp xã,thachxuan,thachxuan@hatinh.gov.vn,Hatinh@123,org_admin
+24,UBND xã Lộc Hà,UBND cấp xã,locha,locha@hatinh.gov.vn,Hatinh@123,org_admin
+25,UBND xã Hồng Lộc,UBND cấp xã,hongloc,hongloc@hatinh.gov.vn,Hatinh@123,org_admin
+26,UBND xã Mai Phụ,UBND cấp xã,maiphu,maiphu@hatinh.gov.vn,Hatinh@123,org_admin
+27,UBND xã Can Lộc,UBND cấp xã,canloc,canloc@hatinh.gov.vn,Hatinh@123,org_admin
+28,UBND xã Tùng Lộc,UBND cấp xã,tungloc,tungloc@hatinh.gov.vn,Hatinh@123,org_admin
+29,UBND xã Gia Hanh,UBND cấp xã,giahanh,giahanh@hatinh.gov.vn,Hatinh@123,org_admin
+30,UBND xã Trường Lưu,UBND cấp xã,truongluu,truongluu@hatinh.gov.vn,Hatinh@123,org_admin
+31,UBND xã Xuân Lộc,UBND cấp xã,xuanloc,xuanloc@hatinh.gov.vn,Hatinh@123,org_admin
+32,UBND xã Đồng Lộc,UBND cấp xã,dongloc,dongloc@hatinh.gov.vn,Hatinh@123,org_admin
+33,UBND xã Tiên Điền,UBND cấp xã,tiendien,tiendien@hatinh.gov.vn,Hatinh@123,org_admin
+34,UBND xã Nghi Xuân,UBND cấp xã,nghixuan,nghixuan@hatinh.gov.vn,Hatinh@123,org_admin
+35,UBND xã Cổ Đạm,UBND cấp xã,codam,codam@hatinh.gov.vn,Hatinh@123,org_admin
+36,UBND xã Đan Hải,UBND cấp xã,danhai,danhai@hatinh.gov.vn,Hatinh@123,org_admin
+37,UBND xã Đức Thọ,UBND cấp xã,ductho,ductho@hatinh.gov.vn,Hatinh@123,org_admin
+38,UBND xã Đức Đồng,UBND cấp xã,ducdong,ducdong@hatinh.gov.vn,Hatinh@123,org_admin
+39,UBND xã Đức Quang,UBND cấp xã,ducquang,ducquang@hatinh.gov.vn,Hatinh@123,org_admin
+40,UBND xã Đức Thịnh,UBND cấp xã,ducthinh,ducthinh@hatinh.gov.vn,Hatinh@123,org_admin
+41,UBND xã Đức Minh,UBND cấp xã,ducminh,ducminh@hatinh.gov.vn,Hatinh@123,org_admin
+42,UBND xã Hương Sơn,UBND cấp xã,huongson,huongson@hatinh.gov.vn,Hatinh@123,org_admin
+43,UBND xã Sơn Tây,UBND cấp xã,sontay,sontay@hatinh.gov.vn,Hatinh@123,org_admin
+44,UBND xã Tứ Mỹ,UBND cấp xã,tumy,tumy@hatinh.gov.vn,Hatinh@123,org_admin
+45,UBND xã Sơn Giang,UBND cấp xã,songiang,songiang@hatinh.gov.vn,Hatinh@123,org_admin
+46,UBND xã Sơn Tiến,UBND cấp xã,sontien,sontien@hatinh.gov.vn,Hatinh@123,org_admin
+47,UBND xã Sơn Hồng,UBND cấp xã,sonhong,sonhong@hatinh.gov.vn,Hatinh@123,org_admin
+48,UBND xã Kim Hoa,UBND cấp xã,kimhoa,kimhoa@hatinh.gov.vn,Hatinh@123,org_admin
+49,UBND xã Vũ Quang,UBND cấp xã,vuquang,vuquang@hatinh.gov.vn,Hatinh@123,org_admin
+50,UBND xã Mai Hoa,UBND cấp xã,maihoa,maihoa@hatinh.gov.vn,Hatinh@123,org_admin
+51,UBND xã Thượng Đức,UBND cấp xã,thuongduc,thuongduc@hatinh.gov.vn,Hatinh@123,org_admin
+52,UBND xã Hương Khê,UBND cấp xã,huongkhe,huongkhe@hatinh.gov.vn,Hatinh@123,org_admin
+53,UBND xã Hương Phố,UBND cấp xã,huongpho,huongpho@hatinh.gov.vn,Hatinh@123,org_admin
+54,UBND xã Hương Đô,UBND cấp xã,huongdo,huongdo@hatinh.gov.vn,Hatinh@123,org_admin
+55,UBND xã Hà Linh,UBND cấp xã,halinh,halinh@hatinh.gov.vn,Hatinh@123,org_admin
+56,UBND xã Hương Bình,UBND cấp xã,huongbinh,huongbinh@hatinh.gov.vn,Hatinh@123,org_admin
+57,UBND xã Phúc Trạch,UBND cấp xã,phuctrach,phuctrach@hatinh.gov.vn,Hatinh@123,org_admin
+58,UBND xã Hương Xuân,UBND cấp xã,huongxuan,huongxuan@hatinh.gov.vn,Hatinh@123,org_admin
+59,Phường Thành Sen,UBND cấp xã,phuongthanhsen,phuongthanhsen@hatinh.gov.vn,Hatinh@123,org_admin
+60,Phường Trần Phú,UBND cấp xã,phuongtranphu,phuongtranphu@hatinh.gov.vn,Hatinh@123,org_admin
+61,Phường Hà Huy Tập,UBND cấp xã,phuonghahuytap,phuonghahuytap@hatinh.gov.vn,Hatinh@123,org_admin
+62,Phường Vũng Áng,UBND cấp xã,phuongvungang,phuongvungang@hatinh.gov.vn,Hatinh@123,org_admin
+63,Phường Sông Trí,UBND cấp xã,phuongsongtri,phuongsongtri@hatinh.gov.vn,Hatinh@123,org_admin
+64,Phường Hoành Sơn,UBND cấp xã,phuonghoanhson,phuonghoanhson@hatinh.gov.vn,Hatinh@123,org_admin
+65,Phường Hải Ninh,UBND cấp xã,phuonghaininh,phuonghaininh@hatinh.gov.vn,Hatinh@123,org_admin
+66,Phường Bắc Hồng Lĩnh,UBND cấp xã,phuongbachonglinh,phuongbachonglinh@hatinh.gov.vn,Hatinh@123,org_admin
+67,Phường Nam Hồng Lĩnh,UBND cấp xã,phuongnamhonglinh,phuongnamhonglinh@hatinh.gov.vn,Hatinh@123,org_admin
+68,UBND xã Sơn Kim 1,UBND cấp xã,sonkim1,sonkim1@hatinh.gov.vn,Hatinh@123,org_admin
+69,UBND xã Sơn Kim 2,UBND cấp xã,sonkim2,sonkim2@hatinh.gov.vn,Hatinh@123,org_admin
+70,Sở Khoa học và Công nghệ,Sở ban ngành,skhcn,skhcn@hatinh.gov.vn,Hatinh@123,org_admin
+71,Sở Nội vụ,Sở ban ngành,snv,snv@hatinh.gov.vn,Hatinh@123,org_admin
+72,Thanh tra tỉnh,Sở ban ngành,thanhtratinh,thanhtratinh@hatinh.gov.vn,Hatinh@123,org_admin
+73,Sở Tài chính,Sở ban ngành,stc,stc@hatinh.gov.vn,Hatinh@123,org_admin
+74,Sở Xây dựng,Sở ban ngành,sxd,sxd@hatinh.gov.vn,Hatinh@123,org_admin
+75,Sở Nông nghiệp và Môi trường,Sở ban ngành,snnmt,snnmt@hatinh.gov.vn,Hatinh@123,org_admin
+76,Sở Tư pháp,Sở ban ngành,stp,stp@hatinh.gov.vn,Hatinh@123,org_admin
+77,Sở Ngoại vụ,Sở ban ngành,sngv,sngv@hatinh.gov.vn,Hatinh@123,org_admin
+78,Sở Giáo dục và Đào tạo,Sở ban ngành,sgddt,sgddt@hatinh.gov.vn,Hatinh@123,org_admin
+79,Sở Công thương,Sở ban ngành,sct,sct@hatinh.gov.vn,Hatinh@123,org_admin
+80,"Sở Văn hóa, Thể Thao và Du Lịch",Sở ban ngành,svhttdl,svhttdl@hatinh.gov.vn,Hatinh@123,org_admin
+81,Sở Y tế,Sở ban ngành,syt,syt@hatinh.gov.vn,Hatinh@123,org_admin
+82,Văn phòng UBND tỉnh,Sở ban ngành,vpubnd,vpubnd@hatinh.gov.vn,Hatinh@123,org_admin

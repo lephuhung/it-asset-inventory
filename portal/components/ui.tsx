@@ -244,7 +244,7 @@ export function Button({
         : "h-9.5 min-h-9.5 px-3.5 text-sm";
   return (
     <button
-      className={`inline-flex cursor-pointer select-none items-center justify-center gap-1.5 font-medium transition-all duration-150 motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:active:scale-100 ${sizeClass} ${BUTTON_STYLES[variant]} ${className}`}
+      className={`inline-flex cursor-pointer select-none items-center justify-center gap-1.5 font-medium whitespace-nowrap transition-all duration-150 motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:active:scale-100 ${sizeClass} ${BUTTON_STYLES[variant]} ${className}`}
       disabled={disabled || loading}
       {...rest}
     >

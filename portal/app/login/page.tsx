@@ -115,13 +115,13 @@ function LoginForm() {
             </>
           ) : (
             <form onSubmit={submit}>
-              <Field label="Email" required>
+              <Field label="Tên đăng nhập hoặc Email" required>
                 <Input
-                  type="email"
+                  type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
-                  placeholder="admin@example.gov.vn"
+                  placeholder="admin@hatinh.gov.vn hoặc tên đơn vị (vd: thachlac, skhcn)"
                   required
                 />
               </Field>

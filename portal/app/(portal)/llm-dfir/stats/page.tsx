@@ -414,15 +414,21 @@ export default function StatsPage() {
           </div>
         </div>
 
-        {/* Filter bar */}
+        {/* Filter bar: nhãn ngang hàng với ô nhập / chọn (inline horizontal) */}
         <Card>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex h-9.5 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500 shrink-0">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500 shrink-0">
               <Filter className="size-3.5 text-slate-400" />
               <span>Lọc:</span>
             </div>
-            <Field label="Máy (UUID)">
+
+            {/* Máy (UUID) */}
+            <div className="flex items-center gap-2">
+              <label htmlFor="filter-machine" className="shrink-0 text-[13px] font-medium text-slate-700">
+                Máy (UUID):
+              </label>
               <Input
+                id="filter-machine"
                 type="text"
                 value={machineFilter}
                 onChange={(e) => {
@@ -430,26 +436,38 @@ export default function StatsPage() {
                   setPage(1);
                 }}
                 placeholder="vd: 3f436e4d-3ff9-..."
-                className="w-64 font-mono text-sm"
+                className="w-56 font-mono text-sm"
               />
-            </Field>
-            <Field label="Trạng thái">
+            </div>
+
+            {/* Trạng thái */}
+            <div className="flex items-center gap-2">
+              <label htmlFor="filter-status" className="shrink-0 text-[13px] font-medium text-slate-700">
+                Trạng thái:
+              </label>
               <Select
+                id="filter-status"
                 value={statusFilter}
                 onChange={(e) => {
                   setStatusFilter(e.target.value);
                   setPage(1);
                 }}
-                className="w-44 text-sm"
+                className="w-40 text-sm"
               >
                 <option value="">Tất cả</option>
                 {Object.entries(STATUS_STYLES).map(([k, v]) => (
                   <option key={k} value={k}>{v.label}</option>
                 ))}
               </Select>
-            </Field>
-            <Field label="Mức độ">
+            </div>
+
+            {/* Mức độ */}
+            <div className="flex items-center gap-2">
+              <label htmlFor="filter-severity" className="shrink-0 text-[13px] font-medium text-slate-700">
+                Mức độ:
+              </label>
               <Select
+                id="filter-severity"
                 value={severityFilter}
                 onChange={(e) => {
                   setSeverityFilter(e.target.value);
@@ -462,7 +480,9 @@ export default function StatsPage() {
                   <option key={s} value={s}>{s}</option>
                 ))}
               </Select>
-            </Field>
+            </div>
+
+            {/* Xoá lọc */}
             {hasFilter && (
               <Button
                 variant="ghost"

@@ -25,64 +25,64 @@ ROOT_ORG_NAME = "UBND tỉnh Hà Tĩnh"
 
 # Danh sách UBND cấp xã — theo thứ tự yêu cầu khởi tạo
 UBND_XA_NAMES: list[str] = [
-    "Thạch Lạc",
-    "Đồng Tiến",
-    "Thạch Khê",
-    "Cẩm Bình",
-    "Kỳ Xuân",
-    "Kỳ Anh",
-    "Kỳ Hoa",
-    "Kỳ Văn",
-    "Kỳ Khang",
-    "Kỳ Lạc",
-    "Kỳ Thượng",
-    "Cẩm Xuyên",
-    "Thiên Cầm",
-    "Cẩm Duệ",
-    "Cẩm Hưng",
-    "Cẩm Lạc",
-    "Cẩm Trung",
-    "Yên Hòa",
-    "Thạch Hà",
-    "Toàn Lưu",
-    "Việt Xuyên",
-    "Đông Kinh",
-    "Thạch Xuân",
-    "Lộc Hà",
-    "Hồng Lộc",
-    "Mai Phụ",
-    "Can Lộc",
-    "Tùng Lộc",
-    "Gia Hanh",
-    "Trường Lưu",
-    "Xuân Lộc",
-    "Đồng Lộc",
-    "Tiên Điền",
-    "Nghi Xuân",
-    "Cổ Đạm",
-    "Đan Hải",
-    "Đức Thọ",
-    "Đức Đồng",
-    "Đức Quang",
-    "Đức Thịnh",
-    "Đức Minh",
-    "Hương Sơn",
-    "Sơn Tây",
-    "Tứ Mỹ",
-    "Sơn Giang",
-    "Sơn Tiến",
-    "Sơn Hồng",
-    "Kim Hoa",
-    "Vũ Quang",
-    "Mai Hoa",
-    "Thượng Đức",
-    "Hương Khê",
-    "Hương Phố",
-    "Hương Đô",
-    "Hà Linh",
-    "Hương Bình",
-    "Phúc Trạch",
-    "Hương Xuân",
+    "UBND xã Thạch Lạc",
+    "UBND xã Đồng Tiến",
+    "UBND xã Thạch Khê",
+    "UBND xã Cẩm Bình",
+    "UBND xã Kỳ Xuân",
+    "UBND xã Kỳ Anh",
+    "UBND xã Kỳ Hoa",
+    "UBND xã Kỳ Văn",
+    "UBND xã Kỳ Khang",
+    "UBND xã Kỳ Lạc",
+    "UBND xã Kỳ Thượng",
+    "UBND xã Cẩm Xuyên",
+    "UBND xã Thiên Cầm",
+    "UBND xã Cẩm Duệ",
+    "UBND xã Cẩm Hưng",
+    "UBND xã Cẩm Lạc",
+    "UBND xã Cẩm Trung",
+    "UBND xã Yên Hòa",
+    "UBND xã Thạch Hà",
+    "UBND xã Toàn Lưu",
+    "UBND xã Việt Xuyên",
+    "UBND xã Đông Kinh",
+    "UBND xã Thạch Xuân",
+    "UBND xã Lộc Hà",
+    "UBND xã Hồng Lộc",
+    "UBND xã Mai Phụ",
+    "UBND xã Can Lộc",
+    "UBND xã Tùng Lộc",
+    "UBND xã Gia Hanh",
+    "UBND xã Trường Lưu",
+    "UBND xã Xuân Lộc",
+    "UBND xã Đồng Lộc",
+    "UBND xã Tiên Điền",
+    "UBND xã Nghi Xuân",
+    "UBND xã Cổ Đạm",
+    "UBND xã Đan Hải",
+    "UBND xã Đức Thọ",
+    "UBND xã Đức Đồng",
+    "UBND xã Đức Quang",
+    "UBND xã Đức Thịnh",
+    "UBND xã Đức Minh",
+    "UBND xã Hương Sơn",
+    "UBND xã Sơn Tây",
+    "UBND xã Tứ Mỹ",
+    "UBND xã Sơn Giang",
+    "UBND xã Sơn Tiến",
+    "UBND xã Sơn Hồng",
+    "UBND xã Kim Hoa",
+    "UBND xã Vũ Quang",
+    "UBND xã Mai Hoa",
+    "UBND xã Thượng Đức",
+    "UBND xã Hương Khê",
+    "UBND xã Hương Phố",
+    "UBND xã Hương Đô",
+    "UBND xã Hà Linh",
+    "UBND xã Hương Bình",
+    "UBND xã Phúc Trạch",
+    "UBND xã Hương Xuân",
     "Phường Thành Sen",
     "Phường Trần Phú",
     "Phường Hà Huy Tập",
@@ -92,24 +92,24 @@ UBND_XA_NAMES: list[str] = [
     "Phường Hải Ninh",
     "Phường Bắc Hồng Lĩnh",
     "Phường Nam Hồng Lĩnh",
-    "Sơn Kim 1",
-    "Sơn Kim 2",
+    "UBND xã Sơn Kim 1",
+    "UBND xã Sơn Kim 2",
 ]
 
 # Danh sách Sở ban ngành / Văn phòng UBND tỉnh — theo thứ tự yêu cầu khởi tạo
 SO_BAN_NGANH_NAMES: list[str] = [
-    "Khoa học và Công nghệ",
-    "Nội vụ",
+    "Sở Khoa học và Công nghệ",
+    "Sở Nội vụ",
     "Thanh tra tỉnh",
-    "Tài chính",
-    "Xây dựng",
-    "Nông nghiệp và Môi trường",
-    "Tư pháp",
-    "Ngoại vụ",
-    "Giáo dục và Đào tạo",
-    "Công thương",
-    "Văn hóa, Thể Thao và Du Lịch",
-    "Y tế",
+    "Sở Tài chính",
+    "Sở Xây dựng",
+    "Sở Nông nghiệp và Môi trường",
+    "Sở Tư pháp",
+    "Sở Ngoại vụ",
+    "Sở Giáo dục và Đào tạo",
+    "Sở Công thương",
+    "Sở Văn hóa, Thể Thao và Du Lịch",
+    "Sở Y tế",
     "Văn phòng UBND tỉnh",
 ]
 
@@ -151,17 +151,28 @@ async def _seed_orgs(
     # Đảm bảo org gốc "UBND tỉnh Hà Tĩnh" (type=root)
     root = await get_or_create_root(db)
 
-    existing = {
-        o.name
-        for o in (
-            await db.execute(
-                select(Organization).where(
-                    Organization.type == org_type,
-                    Organization.parent_id == root.id,
-                )
+    org_rows = (
+        await db.execute(
+            select(Organization).where(
+                Organization.type == org_type,
+                Organization.parent_id == root.id,
             )
-        ).scalars()
-    }
+        )
+    ).scalars().all()
+
+    # Đổi tên các đơn vị cũ chưa có tiền tố chuẩn nếu có
+    if org_type == OrgType.SO_BAN_NGANH.value:
+        for o in org_rows:
+            for n in names:
+                if n.startswith("Sở ") and o.name == n[3:]:
+                    o.name = n
+    elif org_type == OrgType.UBND_XA.value:
+        for o in org_rows:
+            for n in names:
+                if n.startswith("UBND xã ") and o.name == n[8:]:
+                    o.name = n
+
+    existing = {o.name for o in org_rows}
 
     created = 0
     skipped = 0

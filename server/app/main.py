@@ -89,6 +89,7 @@ async def lifespan(app: FastAPI):
     # Seed admin + danh sách tổ chức cấp tỉnh (UBND xã, Sở ban ngành) khi khởi động (dev/khởi tạo)
     if settings.app_env in ("dev", "test"):
         from app.db.seed_orgs import seed_all
+        from app.db.seed_org_admins import seed_org_admins
         from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db, db.begin():
@@ -97,6 +98,7 @@ async def lifespan(app: FastAPI):
             await db.execute(text("SELECT pg_advisory_xact_lock(84620931)"))
             await auth.seed_admin(db, commit=False)
             await seed_all(db, commit=False)
+            await seed_org_admins(db, commit=False)
             # 3 tag phân loại máy (cá nhân / công vụ / BMNN) — tự seed nếu thiếu
             from app.services.tags import ensure_system_tags
 

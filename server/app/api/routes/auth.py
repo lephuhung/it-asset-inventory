@@ -51,7 +51,18 @@ def _issue_tokens(user: User) -> LoginResponse:
 @router.post("/login", response_model=LoginResponse)
 @limiter.limit(settings.rate_limit_login)
 async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    user = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    from app.db.seed_org_admins import resolve_login_username
+
+    login_id = body.email.strip().lower()
+    resolved_u = resolve_login_username(login_id)
+    candidates = {
+        login_id,
+        f"{login_id}@hatinh.gov.vn",
+        f"{login_id}@example.gov.vn",
+        f"{resolved_u}@hatinh.gov.vn",
+        f"{resolved_u}@example.gov.vn",
+    }
+    user = (await db.execute(select(User).where(User.email.in_(candidates)))).scalars().first()
     if user is None or not user.password_hash or not verify_password(body.password, user.password_hash):
         await append_audit(db, action="auth.login_failed", actor=str(user.id) if user else None,
                            ip=get_client_ip(request))
