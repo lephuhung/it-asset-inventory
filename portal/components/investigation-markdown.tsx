@@ -19,6 +19,7 @@ function renderMarkdown(md: string): React.ReactElement {
   let inCode = false;
   let codeBuf: string[] = [];
   let codeKey = 0;
+  let prevBlank = false; // gộp nhiều dòng trắng liên tiếp → chỉ 1 dòng trắng
   lines.forEach((line, idx) => {
     if (line.startsWith("```")) {
       if (inCode) {
@@ -32,12 +33,20 @@ function renderMarkdown(md: string): React.ReactElement {
       } else {
         inCode = true;
       }
+      prevBlank = false;
       return;
     }
     if (inCode) {
       codeBuf.push(line);
       return;
     }
+    if (line.trim() === "") {
+      // Nhiều dòng trắng liên tiếp → chỉ render 1 <br> (1 dòng trắng)
+      if (!prevBlank) out.push(<br key={idx} />);
+      prevBlank = true;
+      return;
+    }
+    prevBlank = false;
     if (line.startsWith("# ")) {
       out.push(<h1 key={idx} className="mb-2 mt-4 text-lg font-bold tracking-tight text-slate-900">{line.slice(2)}</h1>);
     } else if (line.startsWith("## ")) {
@@ -48,8 +57,6 @@ function renderMarkdown(md: string): React.ReactElement {
       out.push(<li key={idx} className="ml-4 list-disc text-sm leading-relaxed text-slate-600">{formatInline(line.slice(2))}</li>);
     } else if (/^\d+\.\s/.test(line)) {
       out.push(<li key={idx} className="ml-4 list-decimal text-sm leading-relaxed text-slate-600">{formatInline(line.replace(/^\d+\.\s/, ""))}</li>);
-    } else if (line.trim() === "") {
-      out.push(<br key={idx} />);
     } else {
       out.push(<p key={idx} className="my-1 text-sm leading-relaxed text-slate-600">{formatInline(line)}</p>);
     }

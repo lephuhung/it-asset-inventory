@@ -45,11 +45,11 @@ import { formatDateTime } from "@/lib/format";
  *
  * Layout (sau khi chỉnh):
  *  1. Status strip — Trạng thái / Kết nối / Tokens (1 hàng full-width)
- *  2. Backend — full-width card
+ *  2. Cấu hình LLM — 1 card full-width gộp 2 sub-section: Backend + Tham số
+ *     (input Backend thu gọn bề rộng: Provider/Base URL/API Key mỗi ô 1/3)
  *  3. Kết quả test — full-width card, CHỈ hiển thị khi đã test (không có quick guide)
- *  4. Tham số — full-width card
- *  5. System Prompt — full-width card với textarea lớn (rows=20, auto-grow)
- *  6. Sticky action bar
+ *  4. System Prompt — full-width card với textarea lớn (rows=20, auto-grow)
+ *  5. Sticky action bar
  */
 export default function LlmSettingsPage() {
   const [data, setData] = useState<LlmConfig | null>(null);
@@ -315,105 +315,209 @@ export default function LlmSettingsPage() {
         </div>
       </section>
 
-      {/* ── Backend (full-width) ─────────────────────────────── */}
+      {/* ── Cấu hình LLM — gộp Backend + Tham số ─────────────── */}
       <Card
         title={
           <span className="inline-flex items-center gap-2">
             <Database className="size-4 text-slate-400" />
-            Backend
+            Cấu hình LLM
           </span>
         }
-        subtitle="Chọn nhà cung cấp LLM và thông tin kết nối"
+        subtitle="Nhà cung cấp, thông tin kết nối và giới hạn gọi LLM cho phân tích log Velociraptor"
       >
-        <div className="space-y-5">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <Field label="Provider">
-              <Select
-                value={provider}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setProvider(v);
-                  if (!modelTouched) {
-                    if (v === "ollama") setModel("qwen2.5:14b-instruct-q4_K_M");
-                    else if (v === "openai") setModel("gpt-4o-mini");
-                    else if (v === "qwen") setModel("qwen-plus");
-                    else if (v === "deepseek") setModel("deepseek-chat");
-                  }
-                }}
-              >
-                <option value="ollama">Ollama (local, privacy-first)</option>
-                <option value="localai">LocalAI</option>
-                <option value="vllm">vLLM (high-perf server)</option>
-                <option value="openai">OpenAI</option>
-                <option value="qwen">Qwen / DashScope</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="custom">Custom OpenAI-compatible</option>
-              </Select>
-            </Field>
-            <Field label="Base URL" className="md:col-span-2">
-              <Input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="http://127.0.0.1:11434/v1"
-              />
-            </Field>
+        <div className="space-y-6">
+          {/* Backend — các input thu gọn, bớt dài */}
+          <div>
+            <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-800">
+              <Database className="size-4 text-slate-400" />
+              Backend
+            </h3>
+            <div className="space-y-5">
+              {/* Provider + Base URL + API Key — mỗi ô 1/3 bề rộng, bớt dài */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Field label="Provider">
+                  <Select
+                    value={provider}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setProvider(v);
+                      if (!modelTouched) {
+                        if (v === "ollama") setModel("qwen2.5:14b-instruct-q4_K_M");
+                        else if (v === "openai") setModel("gpt-4o-mini");
+                        else if (v === "qwen") setModel("qwen-plus");
+                        else if (v === "deepseek") setModel("deepseek-chat");
+                      }
+                    }}
+                  >
+                    <option value="ollama">Ollama (local, privacy-first)</option>
+                    <option value="localai">LocalAI</option>
+                    <option value="vllm">vLLM (high-perf server)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="qwen">Qwen / DashScope</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="custom">Custom OpenAI-compatible</option>
+                  </Select>
+                </Field>
+                <Field label="Base URL">
+                  <Input
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:11434/v1"
+                  />
+                </Field>
+                <Field label="API Key" hint="Để trống nếu muốn giữ nguyên giá trị hiện tại.">
+                  <Input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={data?.api_key_masked ?? "(chưa đặt)"}
+                  />
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
+                    <span>Hiện tại:</span>
+                    <code className="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
+                      {data?.api_key_masked}
+                    </code>
+                  </div>
+                </Field>
+              </div>
+
+              {/* Model chính — nút Tải model đặt DƯỚI input (icon + label nowrap) */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <Field label="Model chính">
+                  <Input
+                    list="llm-models"
+                    value={model}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      setModelTouched(true);
+                    }}
+                    placeholder="qwen2.5:14b-instruct-q4_K_M"
+                  />
+                  <datalist id="llm-models">
+                    {availableModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                  <button
+                    type="button"
+                    onClick={loadModels}
+                    disabled={loadingModels}
+                    title="Nạp model từ cấu hình LLM đã lưu"
+                    className="mt-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 transition-all duration-150 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingModels ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3.5" />
+                    )}
+                    Tải model từ backend
+                  </button>
+                </Field>
+                <Field label="Model dự phòng" hint="Tùy chọn. Dùng khi model chính lỗi.">
+                  <Input
+                    list="llm-models"
+                    value={fallbackModel}
+                    onChange={(e) => setFallbackModel(e.target.value)}
+                    placeholder="qwen2.5:7b-instruct-q4_K_M"
+                  />
+                </Field>
+              </div>
+            </div>
           </div>
 
-          <Field label="API Key" hint="Để trống nếu muốn giữ nguyên giá trị hiện tại.">
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={data?.api_key_masked ?? "(chưa đặt)"}
-            />
-            <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
-              <span>Hiện tại:</span>
-              <code className="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700">
-                {data?.api_key_masked}
-              </code>
-            </div>
-          </Field>
+          <div className="border-t border-slate-100" aria-hidden />
 
-          {/* Model chính — input full-width, nút Tải model đặt DƯỚI input (icon + label nowrap) */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Field label="Model chính">
-              <Input
-                list="llm-models"
-                value={model}
-                onChange={(e) => {
-                  setModel(e.target.value);
-                  setModelTouched(true);
-                }}
-                placeholder="qwen2.5:14b-instruct-q4_K_M"
-              />
-              <datalist id="llm-models">
-                {availableModels.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-              <button
-                type="button"
-                onClick={loadModels}
-                disabled={loadingModels}
-                title="Nạp model từ cấu hình LLM đã lưu"
-                className="mt-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 transition-all duration-150 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+          {/* Tham số */}
+          <div>
+            <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-800">
+              <Sparkles className="size-4 text-slate-400" />
+              Tham số
+            </h3>
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              <Field label="Max Tokens" hint="Độ dài tối đa của câu trả lời (64 – 32 000).">
+                <Input
+                  type="number"
+                  min={64000}
+                  max={128000}
+                  value={maxTokens}
+                  onChange={(e) => setMaxTokens(parseInt(e.target.value) || 64000)}
+                />
+              </Field>
+              <Field label="Temperature" hint="0 = chính xác, 1 = sáng tạo.">
+                <Input
+                  type="number"
+                  step="0.1"
+                  min={0}
+                  max={2}
+                  value={temperature}
+                  onChange={(e) => setTemperature(parseFloat(e.target.value) || 0)}
+                />
+              </Field>
+              <Field label="Timeout" hint="Giây — hết thời gian chờ.">
+                <div className="relative">
+                  <Input
+                    type="number"
+                    min={10}
+                    max={600}
+                    value={requestTimeout}
+                    onChange={(e) => setRequestTimeout(parseInt(e.target.value) || 120)}
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
+                    giây
+                  </span>
+                </div>
+              </Field>
+              <Field label="Daily Token Budget" hint="0 = không giới hạn.">
+                <Input
+                  type="number"
+                  min={0}
+                  value={dailyTokenBudget}
+                  onChange={(e) =>
+                    setDailyTokenBudget(e.target.value === "" ? "" : parseInt(e.target.value))
+                  }
+                  placeholder="Không giới hạn"
+                />
+              </Field>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field
+                label="Max Context (ký tự)"
+                hint="Log Velociraptor được cắt còn tối đa số ký tự này trước khi gửi LLM (tránh OOM local LLM)."
               >
-                {loadingModels ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3.5" />
+                <Input
+                  type="number"
+                  min={1000}
+                  max={1_000_000}
+                  value={maxContextChars}
+                  onChange={(e) => setMaxContextChars(parseInt(e.target.value) || 200000)}
+                />
+              </Field>
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] font-medium text-slate-700">
+                    Cho phép gọi cloud API
+                  </span>
+                  <Toggle
+                    checked={allowCloud}
+                    onChange={setAllowCloud}
+                    label="Cho phép gọi cloud API"
+                  />
+                </div>
+                <span className="mt-1 block text-xs leading-snug text-slate-400">
+                  Cần bật để đặt API key cho endpoint public (OpenAI, Qwen, …).
+                </span>
+                {allowCloud && (
+                  <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                    <span>
+                      Dữ liệu log sẽ được gửi tới nhà cung cấp bên thứ ba. Cân nhắc khi xử lý dữ
+                      liệu nhạy cảm.
+                    </span>
+                  </div>
                 )}
-                Tải model từ backend
-              </button>
-            </Field>
-            <Field label="Model dự phòng" hint="Tùy chọn. Dùng khi model chính lỗi.">
-              <Input
-                list="llm-models"
-                value={fallbackModel}
-                onChange={(e) => setFallbackModel(e.target.value)}
-                placeholder="qwen2.5:7b-instruct-q4_K_M"
-              />
-            </Field>
+              </div>
+            </div>
           </div>
         </div>
       </Card>
@@ -507,108 +611,6 @@ export default function LlmSettingsPage() {
           </div>
         </Card>
       )}
-
-      {/* ── Tham số ─────────────────────────────────────────── */}
-      <Card
-        title={
-          <span className="inline-flex items-center gap-2">
-            <Sparkles className="size-4 text-slate-400" />
-            Tham số
-          </span>
-        }
-        subtitle="Giới hạn & chi phí cho mỗi phiên gọi LLM"
-      >
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <Field
-            label="Max Tokens"
-            hint="Độ dài tối đa của câu trả lời (64 – 32 000)."
-          >
-            <Input
-              type="number"
-              min={64000}
-              max={128000}
-              value={maxTokens}
-              onChange={(e) => setMaxTokens(parseInt(e.target.value) || 64000)}
-            />
-          </Field>
-          <Field label="Temperature" hint="0 = chính xác, 1 = sáng tạo.">
-            <Input
-              type="number"
-              step="0.1"
-              min={0}
-              max={2}
-              value={temperature}
-              onChange={(e) => setTemperature(parseFloat(e.target.value) || 0)}
-            />
-          </Field>
-          <Field label="Timeout" hint="Giây — hết thời gian chờ.">
-            <div className="relative">
-              <Input
-                type="number"
-                min={10}
-                max={600}
-                value={requestTimeout}
-                onChange={(e) => setRequestTimeout(parseInt(e.target.value) || 120)}
-              />
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
-                giây
-              </span>
-            </div>
-          </Field>
-          <Field label="Daily Token Budget" hint="0 = không giới hạn.">
-            <Input
-              type="number"
-              min={0}
-              value={dailyTokenBudget}
-              onChange={(e) =>
-                setDailyTokenBudget(e.target.value === "" ? "" : parseInt(e.target.value))
-              }
-              placeholder="Không giới hạn"
-            />
-          </Field>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Field
-            label="Max Context (ký tự)"
-            hint="Log Velociraptor được cắt còn tối đa số ký tự này trước khi gửi LLM (tránh OOM local LLM)."
-          >
-            <Input
-              type="number"
-              min={1000}
-              max={1_000_000}
-              value={maxContextChars}
-              onChange={(e) => setMaxContextChars(parseInt(e.target.value) || 200000)}
-            />
-          </Field>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold tracking-tight text-slate-900">
-                  Cho phép gọi cloud API
-                </p>
-                <p className="mt-0.5 text-xs leading-snug text-slate-500">
-                  Cần bật để đặt API key cho endpoint public (OpenAI, Qwen, …).
-                </p>
-              </div>
-              <Toggle
-                checked={allowCloud}
-                onChange={setAllowCloud}
-                label="Cho phép gọi cloud API"
-              />
-            </div>
-            {allowCloud && (
-              <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  Dữ liệu log sẽ được gửi tới nhà cung cấp bên thứ ba. Cân nhắc khi xử lý dữ
-                  liệu nhạy cảm.
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </Card>
 
       {/* ── System Prompt — textarea lớn, auto-grow ──────────── */}
       <Card
