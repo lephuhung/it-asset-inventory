@@ -242,110 +242,115 @@ export default function NotificationsAlertsPage() {
       {tab === "templates" && <TemplatesTab templates={templates} onReload={loadTemplates} />}
       {tab === "history" && <HistoryTab />}
 
-      {/* ── Slide-over: lịch sử thông báo ─────────────────────── */}
-      {historyOpen && (
+      {/* ── Slide-over: lịch sử thông báo (trượt ra/vào từ bên phải) ── */}
+      <div
+        className={`fixed inset-0 z-40 flex justify-end transition-opacity duration-300 motion-reduce:transition-none ${
+          historyOpen ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={!historyOpen}
+        aria-labelledby="history-title"
+      >
         <div
-          className="fixed inset-0 z-40 flex justify-end"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="history-title"
+          className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none"
+          onClick={() => setHistoryOpen(false)}
+        />
+        <aside
+          className={`relative z-10 flex h-full w-full max-w-md transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
+            historyOpen ? "translate-x-0" : "pointer-events-none translate-x-full"
+          }`}
         >
-          <div
-            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
-            onClick={() => setHistoryOpen(false)}
-          />
-          <div className="relative z-10 flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
-            <header className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
-              <div className="min-w-0">
-                <h2 id="history-title" className="text-[15px] font-semibold text-slate-800">
-                  Lịch sử thông báo
-                </h2>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Tất cả {historyAll.length} · Đã đọc {historyRead.length} · Chưa đọc {unreadCount}
-                </p>
-              </div>
-              <IconButton
-                label="Đóng"
-                onClick={() => setHistoryOpen(false)}
-                className="hover:bg-slate-100 hover:text-slate-600"
-              >
-                <X className="size-4" />
-              </IconButton>
-            </header>
-
-            {/* Tab strip — cùng pattern underline như tab chính */}
-            <div className="flex items-center gap-1 border-b border-slate-200 px-5" role="tablist" aria-label="Lọc lịch sử thông báo">
-              <button
-                role="tab"
-                aria-selected={historyTab === "all"}
-                onClick={() => setHistoryTab("all")}
-                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
-                  historyTab === "all"
-                    ? "border-brand-600 text-slate-900"
-                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
-                }`}
-              >
-                <Bell className="size-3.5" />
-                Tất cả
-                <span className="text-xs text-slate-400">({historyAll.length})</span>
-              </button>
-              <button
-                role="tab"
-                aria-selected={historyTab === "read"}
-                onClick={() => setHistoryTab("read")}
-                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
-                  historyTab === "read"
-                    ? "border-brand-600 text-slate-900"
-                    : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
-                }`}
-              >
-                <Check className="size-3.5" />
-                Đã xem
-                <span className="text-xs text-slate-400">({historyRead.length})</span>
-              </button>
-
-              {historyTab === "all" && unreadCount > 0 && (
-                <button
-                  onClick={() => void markAllRead()}
-                  className="ml-auto text-xs font-medium text-brand-600 hover:underline"
-                >
-                  Đánh dấu tất cả đã đọc
-                </button>
-              )}
+          <header className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
+            <div className="min-w-0">
+              <h2 id="history-title" className="text-[15px] font-semibold text-slate-800">
+                Lịch sử thông báo
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Tất cả {historyAll.length} · Đã đọc {historyRead.length} · Chưa đọc {unreadCount}
+              </p>
             </div>
+            <IconButton
+              label="Đóng"
+              onClick={() => setHistoryOpen(false)}
+              className="hover:bg-slate-100 hover:text-slate-600"
+            >
+              <X className="size-4" />
+            </IconButton>
+          </header>
 
-            {/* List */}
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-              {visibleHistory.length === 0 ? (
-                <EmptyState
-                  icon={<Bell className="size-8" />}
-                  title={historyTab === "read" ? "Chưa có thông báo đã đọc" : "Chưa có thông báo"}
-                  description={
-                    historyTab === "read"
-                      ? "Các thông báo bạn đã đọc sẽ xuất hiện ở đây."
-                      : "Notification sẽ xuất hiện khi có sự kiện: investigation xong, máy offline, alert security…"
-                  }
-                />
-              ) : (
-                <ul className="space-y-2">
-                  {visibleHistory.map((n) => (
-                    <HistoryRow
-                      key={n.id}
-                      n={n}
-                      onOpen={() => {
-                        if (!n.read_at) void markRead(n.id);
-                        setHistoryOpen(false);
-                        if (n.link) router.push(n.link);
-                      }}
-                      onDelete={() => void deleteOne(n.id)}
-                    />
-                  ))}
-                </ul>
-              )}
-            </div>
+          {/* Tab strip — cùng pattern underline như tab chính */}
+          <div className="flex items-center gap-1 border-b border-slate-200 px-5" role="tablist" aria-label="Lọc lịch sử thông báo">
+            <button
+              role="tab"
+              aria-selected={historyTab === "all"}
+              onClick={() => setHistoryTab("all")}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
+                historyTab === "all"
+                  ? "border-brand-600 text-slate-900"
+                  : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
+              }`}
+            >
+              <Bell className="size-3.5" />
+              Tất cả
+              <span className="text-xs text-slate-400">({historyAll.length})</span>
+            </button>
+            <button
+              role="tab"
+              aria-selected={historyTab === "read"}
+              onClick={() => setHistoryTab("read")}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
+                historyTab === "read"
+                  ? "border-brand-600 text-slate-900"
+                  : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
+              }`}
+            >
+              <Check className="size-3.5" />
+              Đã xem
+              <span className="text-xs text-slate-400">({historyRead.length})</span>
+            </button>
+
+            {historyTab === "all" && unreadCount > 0 && (
+              <button
+                onClick={() => void markAllRead()}
+                className="ml-auto text-xs font-medium text-brand-600 hover:underline"
+              >
+                Đánh dấu tất cả đã đọc
+              </button>
+            )}
           </div>
-        </div>
-      )}
+
+          {/* List */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            {visibleHistory.length === 0 ? (
+              <EmptyState
+                icon={<Bell className="size-8" />}
+                title={historyTab === "read" ? "Chưa có thông báo đã đọc" : "Chưa có thông báo"}
+                description={
+                  historyTab === "read"
+                    ? "Các thông báo bạn đã đọc sẽ xuất hiện ở đây."
+                    : "Notification sẽ xuất hiện khi có sự kiện: investigation xong, máy offline, alert security…"
+                }
+              />
+            ) : (
+              <ul className="space-y-2">
+                {visibleHistory.map((n) => (
+                  <HistoryRow
+                    key={n.id}
+                    n={n}
+                    onOpen={() => {
+                      if (!n.read_at) void markRead(n.id);
+                      setHistoryOpen(false);
+                      if (n.link) router.push(n.link);
+                    }}
+                    onDelete={() => void deleteOne(n.id)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        </aside>
+      </div>
 
       {/* ── Modal: tạo / push notification ── */}
       <Modal

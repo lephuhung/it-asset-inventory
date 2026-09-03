@@ -323,53 +323,82 @@ export default function StatsPage() {
         </div>
       )}
 
-      {/* Daily trend */}
-      {stats && stats.daily_counts.length > 0 && (
-        <Card title={`Investigation theo ngày (${stats.daily_counts.length} ngày có dữ liệu)`}>
-          <DailyLineChart points={stats.daily_counts} />
-          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-0.5 w-4 rounded-full bg-brand-600" />
-              Investigation
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed border-rose-500" />
-              Critical
-            </span>
-          </div>
-        </Card>
-      )}
+      {/* Charts row: Daily trend & Top MITRE findings (cùng 1 hàng, đồng bộ Design.md) */}
+      {stats && (
+        <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-2">
+          {/* Daily trend */}
+          <Card
+            title={`Investigation theo ngày (${stats.daily_counts.length} ngày có dữ liệu)`}
+            className="flex h-full flex-col"
+            bodyClass="flex flex-1 flex-col justify-between"
+          >
+            {stats.daily_counts.length === 0 ? (
+              <p className="py-8 text-center text-sm text-slate-500">Chưa có dữ liệu theo ngày</p>
+            ) : (
+              <>
+                <div className="flex flex-1 flex-col justify-center">
+                  <DailyLineChart points={stats.daily_counts} />
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500">
+                  <div className="flex items-center gap-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-0.5 w-4 rounded-full bg-brand-600" />
+                      Investigation
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="h-0.5 w-4 rounded-full border-t-2 border-dashed border-rose-500" />
+                      Critical
+                    </span>
+                  </div>
+                  {stats.daily_counts.length === 1 && (
+                    <span className="text-[11px] text-slate-400">Dữ liệu tích lũy theo ngày</span>
+                  )}
+                </div>
+              </>
+            )}
+          </Card>
 
-      {/* Top MITRE findings */}
-      {stats && stats.top_findings.length > 0 && (
-        <Card title="Top MITRE ATT&amp;CK techniques phát hiện">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-slate-200 bg-slate-50/70 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-4 py-3 text-left font-semibold">MITRE ID</th>
-                  <th className="px-4 py-3 text-left font-semibold">Tên</th>
-                  <th className="px-4 py-3 text-right font-semibold">Số lần</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {stats.top_findings.map((f, i) => (
-                  <tr key={i} className="transition-colors hover:bg-slate-50/70">
-                    <td className="px-4 py-2.5">
-                      <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
-                        {f.mitre_id}
-                      </code>
-                    </td>
-                    <td className="px-4 py-2.5 text-slate-700">{f.title}</td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-700">
-                      {f.count}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+          {/* Top MITRE findings — edge-to-edge table theo Design.md §ex-data-table-cell */}
+          <Card
+            title="Top MITRE ATT&amp;CK techniques phát hiện"
+            padded={false}
+            className="flex h-full flex-col"
+            bodyClass="flex flex-1 flex-col min-h-0"
+          >
+            {stats.top_findings.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center p-8">
+                <p className="text-center text-sm text-slate-500">Chưa phát hiện kỹ thuật MITRE nào</p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-x-auto overflow-y-auto max-h-[240px]">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 text-[11px] font-semibold uppercase tracking-wider text-slate-500 backdrop-blur-xs">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left font-semibold">MITRE ID</th>
+                      <th className="px-4 py-2.5 text-left font-semibold">Tên kỹ thuật</th>
+                      <th className="px-4 py-2.5 text-right font-semibold">Số lần</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {stats.top_findings.map((f, i) => (
+                      <tr key={i} className="transition-colors hover:bg-slate-50/70">
+                        <td className="px-4 py-2.5">
+                          <code className="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
+                            {f.mitre_id}
+                          </code>
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-700">{f.title}</td>
+                        <td className="px-4 py-2.5 text-right font-mono tabular-nums text-slate-700">
+                          {f.count}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* Investigation list */}
@@ -388,9 +417,9 @@ export default function StatsPage() {
         {/* Filter bar */}
         <Card>
           <div className="flex flex-wrap items-end gap-3">
-            <div className="mb-0.5 flex items-center gap-2 text-sm font-medium text-slate-600">
-              <Filter className="size-4 text-slate-400" />
-              Lọc:
+            <div className="flex h-9.5 items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500 shrink-0">
+              <Filter className="size-3.5 text-slate-400" />
+              <span>Lọc:</span>
             </div>
             <Field label="Máy (UUID)">
               <Input
@@ -401,7 +430,7 @@ export default function StatsPage() {
                   setPage(1);
                 }}
                 placeholder="vd: 3f436e4d-3ff9-..."
-                className="w-64 font-mono"
+                className="w-64 font-mono text-sm"
               />
             </Field>
             <Field label="Trạng thái">
@@ -411,7 +440,7 @@ export default function StatsPage() {
                   setStatusFilter(e.target.value);
                   setPage(1);
                 }}
-                className="w-44"
+                className="w-44 text-sm"
               >
                 <option value="">Tất cả</option>
                 {Object.entries(STATUS_STYLES).map(([k, v]) => (
@@ -426,7 +455,7 @@ export default function StatsPage() {
                   setSeverityFilter(e.target.value);
                   setPage(1);
                 }}
-                className="w-36"
+                className="w-36 text-sm"
               >
                 <option value="">Tất cả</option>
                 {(["critical", "high", "medium", "low", "info"] as InvestigationSeverity[]).map((s) => (
@@ -438,7 +467,7 @@ export default function StatsPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="mb-0.5"
+                className="h-9.5 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800"
                 onClick={() => {
                   setMachineFilter("");
                   setStatusFilter("");
@@ -754,12 +783,26 @@ function DonutChart({
         return el;
       })}
       {centerLabel != null && (
-        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" className="fill-slate-900" style={{ fontSize: 26, fontWeight: 700 }}>
+        <text
+          x={cx}
+          y={centerSub ? cy - 7 : cy}
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-slate-900 font-bold"
+          style={{ fontSize: 24, letterSpacing: "-0.5px" }}
+        >
           {centerLabel}
         </text>
       )}
       {centerSub != null && (
-        <text x={cx} y={cy + 18} textAnchor="middle" className="fill-slate-400" style={{ fontSize: 11 }}>
+        <text
+          x={cx}
+          y={cy + 13}
+          textAnchor="middle"
+          dominantBaseline="central"
+          className="fill-slate-400 font-semibold"
+          style={{ fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase" }}
+        >
           {centerSub}
         </text>
       )}
@@ -774,10 +817,10 @@ function DonutLegend({ data }: { data: { label: string; value: number; color: st
       {data.map((d) => (
         <li key={d.label} className="flex items-center justify-between gap-2 text-xs">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: d.color }} />
+            <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: d.color }} />
             <span className="truncate text-slate-600">{d.label}</span>
           </span>
-          <span className="shrink-0 font-mono tabular-nums text-slate-600">
+          <span className="shrink-0 font-mono tabular-nums text-slate-700">
             {d.value} ({total ? ((d.value / total) * 100).toFixed(1) : 0}%)
           </span>
         </li>
@@ -786,16 +829,120 @@ function DonutLegend({ data }: { data: { label: string; value: number; color: st
   );
 }
 
-/* ── Biểu đồ đường + vùng (line/area) theo ngày ── */
+/* ── Biểu đồ đường + vùng (line/area) hoặc cột (khi 1 ngày) theo ngày ── */
 function DailyLineChart({ points }: { points: { date: string; total: number; critical: number }[] }) {
-  const W = 660;
-  const H = 220;
-  const pad = { l: 36, r: 16, t: 18, b: 30 };
+  const W = 600;
+  const H = 210;
+  const pad = { l: 36, r: 20, t: 28, b: 30 };
   const innerW = W - pad.l - pad.r;
   const innerH = H - pad.t - pad.b;
   const maxV = Math.max(1, ...points.map((p) => p.total));
   const n = points.length;
-  const x = (i: number) => pad.l + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW);
+
+  // Trường hợp 1 ngày có dữ liệu: Hiển thị dạng cột + badge số lượng trực quan
+  if (n === 1) {
+    const p = points[0];
+    const cx = pad.l + innerW / 2;
+    const barW = 56;
+    const barX = cx - barW / 2;
+    const barH = Math.max(12, (p.total / maxV) * innerH);
+    const barY = pad.t + innerH - barH;
+    const gridVals = [0, Math.ceil(maxV / 2), maxV];
+
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Biểu đồ điều tra theo ngày">
+        <defs>
+          <linearGradient id="singleDayBarGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--color-brand-500, #3391e5)" />
+            <stop offset="100%" stopColor="var(--color-brand-600, #0075de)" />
+          </linearGradient>
+        </defs>
+
+        {/* Đường lưới ngang (hairline: #e6e6e6) */}
+        {gridVals.map((v) => {
+          const gy = pad.t + innerH * (1 - v / maxV);
+          return (
+            <g key={v}>
+              <line x1={pad.l} y1={gy} x2={W - pad.r} y2={gy} stroke="var(--color-slate-200, #e6e6e6)" strokeWidth={1} />
+              <text x={pad.l - 8} y={gy} textAnchor="end" dominantBaseline="central" className="fill-slate-400" style={{ fontSize: 10 }}>
+                {v}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Cột mờ nền (canvas-soft / slate-50) */}
+        <rect
+          x={barX}
+          y={pad.t}
+          width={barW}
+          height={innerH}
+          rx={4}
+          className="fill-slate-100/60"
+        />
+
+        {/* Cột chính (Investigation — brand blue) */}
+        <rect
+          x={barX}
+          y={barY}
+          width={barW}
+          height={barH}
+          rx={4}
+          fill="url(#singleDayBarGrad)"
+        />
+
+        {/* Phần critical nếu có (rose-500) */}
+        {p.critical > 0 && (
+          <rect
+            x={barX + 6}
+            y={pad.t + innerH - Math.max(6, (p.critical / maxV) * innerH)}
+            width={barW - 12}
+            height={Math.max(6, (p.critical / maxV) * innerH)}
+            rx={3}
+            className="fill-rose-500"
+          />
+        )}
+
+        {/* Điểm nhấn & Badge-pill số lượng (theo Design.md §badge-pill) */}
+        <circle cx={cx} cy={barY} r={4} className="fill-white stroke-brand-600" strokeWidth={2} />
+        <g transform={`translate(${cx}, ${barY - 14})`}>
+          <rect
+            x={-32}
+            y={-11}
+            width={64}
+            height={22}
+            rx={11}
+            className="fill-white stroke-slate-200"
+            strokeWidth={1}
+          />
+          <text
+            x={0}
+            y={0}
+            textAnchor="middle"
+            dominantBaseline="central"
+            className="fill-brand-600 font-semibold"
+            style={{ fontSize: 11, letterSpacing: "0.01em" }}
+          >
+            {p.total} lượt
+          </text>
+        </g>
+
+        {/* Ngày ở trục hoành */}
+        <text
+          x={cx}
+          y={H - pad.b + 18}
+          textAnchor="middle"
+          className="fill-slate-500 font-medium"
+          style={{ fontSize: 11 }}
+        >
+          {p.date}
+        </text>
+      </svg>
+    );
+  }
+
+  // Trường hợp n > 1: Biểu đồ đường (Line + Area)
+  const x = (i: number) => pad.l + (i / (n - 1)) * innerW;
   const y = (v: number) => pad.t + innerH * (1 - v / maxV);
   const pts = points.map((p, i) => [x(i), y(p.total)] as const);
   const linePath = pts.map(([px, py], i) => `${i ? "L" : "M"}${px} ${py}`).join(" ");
@@ -808,23 +955,23 @@ function DailyLineChart({ points }: { points: { date: string; total: number; cri
     <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Biểu đồ đường theo ngày">
       {gridVals.map((v) => (
         <g key={v}>
-          <line x1={pad.l} y1={y(v)} x2={W - pad.r} y2={y(v)} className="stroke-slate-100" strokeWidth={1} />
+          <line x1={pad.l} y1={y(v)} x2={W - pad.r} y2={y(v)} stroke="var(--color-slate-200, #e6e6e6)" strokeWidth={1} />
           <text x={pad.l - 8} y={y(v)} textAnchor="end" dominantBaseline="central" className="fill-slate-400" style={{ fontSize: 10 }}>
             {v}
           </text>
         </g>
       ))}
-      <path d={areaPath} className="fill-brand-100" />
+      <path d={areaPath} className="fill-brand-50/70" />
       <path d={critPath} className="stroke-rose-500" strokeWidth={1.75} strokeDasharray="4 3" fill="none" />
-      <path d={linePath} className="stroke-brand-600" strokeWidth={2.25} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      <path d={linePath} className="stroke-brand-600" strokeWidth={2} fill="none" strokeLinejoin="round" strokeLinecap="round" />
       {pts.map(([px, py], i) => (
-        <circle key={i} cx={px} cy={py} r={3.5} className="fill-brand-600">
+        <circle key={i} cx={px} cy={py} r={3} className="fill-brand-600">
           <title>{`${points[i].date}: ${points[i].total} investigation`}</title>
         </circle>
       ))}
       {points.map((p, i) =>
         i % step === 0 || i === n - 1 ? (
-          <text key={i} x={x(i)} y={H - pad.b + 16} textAnchor="middle" className="fill-slate-400" style={{ fontSize: 10 }}>
+          <text key={i} x={x(i)} y={H - pad.b + 16} textAnchor="middle" className="fill-slate-500" style={{ fontSize: 10 }}>
             {p.date.slice(5)}
           </text>
         ) : null,

@@ -216,22 +216,25 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
       findings: items.reduce((sum, i) => sum + (i.findings_count ?? 0), 0),
     };
   }, [data]);
-
-  if (!open) return null;
-
   return (
     <>
-      {/* Backdrop — gradient + blur nhẹ cho cảm giác panel "nổi" lên trên */}
+      {/* Backdrop — mờ nhẹ khi mở, ẩn pointer khi đóng */}
       <div
-        className="fixed inset-0 z-40 bg-slate-900/45 transition-opacity duration-300"
+        className={`fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
         onClick={onClose}
-        aria-hidden="true"
+        aria-hidden={!open}
       />
 
-      {/* Panel trượt từ phải — surface trắng + hairline + shadow Level-2.
-          Width tăng từ max-w-md (28rem) → max-w-lg (32rem) để chứa row giàu
-          thông tin (severity border + meta row + ID + duration). */}
-      <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-slate-200 bg-white shadow-2xl">
+      {/* Panel trượt từ phải ra/vào — surface trắng + hairline + shadow Level-2 */}
+      <aside
+        aria-hidden={!open}
+        aria-label="Lịch sử điều tra AI"
+        className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-lg transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
+          open ? "translate-x-0" : "pointer-events-none translate-x-full"
+        }`}
+      >
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="relative flex shrink-0 items-start gap-3 border-b border-slate-100 bg-gradient-to-b from-white to-slate-50/40 px-5 py-4">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-violet-50 text-violet-700 ring-1 ring-inset ring-violet-200">
@@ -428,7 +431,7 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
             onPageChange={(p) => setPage(p)}
           />
         )}
-      </div>
+      </aside>
 
       {/* Modal chi tiết */}
       {selectedId && (
