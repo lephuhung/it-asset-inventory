@@ -523,6 +523,14 @@ class VelociraptorClient:
 
     # ── VQL: gRPC/mTLS remote API ──────────────────────────────
 
+    async def vql(self, vql: str, env: dict[str, str] | None = None) -> list[dict]:
+        """Public wrapper cho `_vql_query` — server-side VQL qua gRPC/mTLS.
+
+        Dành cho các service quản trị (vd velociraptor_artifacts) cần chạy VQL
+        cố định, code-owned. Dữ liệu biến động phải đi qua ``env`` bindings.
+        """
+        return await self._vql_query(vql, env=env)
+
     async def _vql_query(self, vql: str, env: dict[str, str] | None = None) -> list[dict]:
         """Chạy server-side VQL qua gRPC API, không phụ thuộc Docker.
 

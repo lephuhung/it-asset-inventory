@@ -15,7 +15,9 @@ from sqlalchemy import text
 
 from app.api.routes import (
     agent_config,
+    alert_events,
     alert_rules,
+    alert_templates_admin,
     api_keys,
     audit,
     auth,
@@ -40,12 +42,11 @@ from app.api.routes import (
     tags,
     telegram_bot_admin,
     tokens,
+    user_notification_prefs,
     users,
     velociraptor,
+    velociraptor_artifacts,
     ws,
-    alert_templates_admin,
-    alert_events,
-    user_notification_prefs,
 )
 from app.core.config import settings
 
@@ -88,8 +89,8 @@ async def lifespan(app: FastAPI):
 
     # Seed admin + danh sách tổ chức cấp tỉnh (UBND xã, Sở ban ngành) khi khởi động (dev/khởi tạo)
     if settings.app_env in ("dev", "test"):
-        from app.db.seed_orgs import seed_all
         from app.db.seed_org_admins import seed_org_admins
+        from app.db.seed_orgs import seed_all
         from app.db.session import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db, db.begin():
@@ -169,6 +170,7 @@ app.include_router(downloads.router)
 app.include_router(ws.router)
 app.include_router(users.router)
 app.include_router(velociraptor.router)
+app.include_router(velociraptor_artifacts.router)
 app.include_router(dfir_requests.router)
 app.include_router(llm_dfir.router)
 app.include_router(llm_dfir_external.router)

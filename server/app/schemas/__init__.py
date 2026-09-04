@@ -1634,3 +1634,32 @@ class DfirInvestigationStatsOut(BaseModel):
     daily_counts: list[dict]  # [{"date": "2026-08-30", "total": 5, "critical": 1}, ...]
     # Top findings
     top_findings: list[dict]  # [{"mitre_id": "T1059.001", "title": "...", "count": 3}, ...]
+
+
+# ── Velociraptor Custom Artifacts ────────────────────────────────
+
+
+class VelociraptorArtifactUpload(BaseModel):
+    """Nạp artifact definition YAML — Super Admin."""
+
+    definition_yaml: str = Field(min_length=1, max_length=262_144)
+
+
+class VelociraptorArtifactOut(BaseModel):
+    """Trạng thái một artifact Custom.* đã lưu + hiện diện trên server."""
+
+    id: uuid.UUID
+    name: str
+    sha256: str
+    artifact_type: str
+    enabled: bool
+    on_server: bool = False
+    last_push_status: str | None = None
+    last_push_error: str | None = None
+    updated_at: datetime
+
+
+class VelociraptorArtifactDetailOut(VelociraptorArtifactOut):
+    """Chi tiết artifact — kèm YAML gốc để chỉnh sửa lại."""
+
+    definition_yaml: str

@@ -8,6 +8,7 @@ import {
   Bell,
   CheckCircle2,
   ExternalLink,
+  FileUp,
   HardDriveDownload,
   Loader2,
   Pencil,
@@ -35,7 +36,7 @@ import {
   Spinner,
   Textarea,
 } from "@/components/ui";
-import type { DfirHunt, VelociraptorAlert, VelociraptorConfig, VelociraptorLink } from "@/lib/types";
+import type { DfirHunt, VelociraptorAlert, VelociraptorArtifact, VelociraptorConfig, VelociraptorLink } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/format";
 
 /** Dashboard DFIR (Digital Forensics & Incident Response).
@@ -75,25 +76,77 @@ export default function DfirPage() {
   const [huntError, setHuntError] = useState<string | null>(null);
   const [huntSuccess, setHuntSuccess] = useState<string | null>(null);
 
+  // Custom artifacts (chỉ Super Admin — endpoint yêu cầu super_admin)
+  const [artifacts, setArtifacts] = useState<VelociraptorArtifact[]>([]);
+  const [showArtifactModal, setShowArtifactModal] = useState(false);
+  const [artifactYaml, setArtifactYaml] = useState("");
+  const [artifactSubmitting, setArtifactSubmitting] = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const [cfg, lk, hs, al] = await Promise.all([
+      const [cfg, lk, hs, al, ar] = await Promise.all([
         api.get<VelociraptorConfig>("/admin/velociraptor/config"),
         api.get<VelociraptorLink[]>("/admin/velociraptor/links"),
         api.get<DfirHunt[]>("/admin/velociraptor/hunts", { limit: 20 }),
         api.get<VelociraptorAlert[]>("/admin/velociraptor/alerts", { limit: 10 }),
+        // Endpoint artifacts yêu cầu super_admin — non-admin nhận [] để không phá Promise.all
+        isSuperAdmin
+          ? api.get<VelociraptorArtifact[]>("/admin/velociraptor/artifacts")
+          : Promise.resolve([]),
       ]);
       setConfig(cfg);
       setLinks(lk);
       setHunts(hs);
       setAlerts(al);
+      setArtifacts(ar);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Không tải được dữ liệu DFIR");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isSuperAdmin]);
+
+  const submitArtifact = async () => {
+    if (!artifactYaml.trim()) {
+      setHuntError("Dán YAML artifact definition trước khi nạp");
+      return;
+    }
+    setArtifactSubmitting(true);
+    setHuntError(null);
+    setHuntSuccess(null);
+    try {
+      const res = await api.post<VelociraptorArtifact>("/admin/velociraptor/artifacts", {
+        definition_yaml: artifactYaml,
+      });
+      setHuntSuccess(
+        res.on_server
+          ? `Đã nạp ${res.name} lên Velociraptor (sha256 ${res.sha256.slice(0, 12)}…).`
+          : `Đã lưu ${res.name} nhưng chưa xác nhận được trên server — kiểm tra lại.`,
+      );
+      setShowArtifactModal(false);
+      setArtifactYaml("");
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : "Nạp artifact thất bại");
+    } finally {
+      setArtifactSubmitting(false);
+    }
+  };
+
+  const repushArtifact = async (name: string) => {
+    setHuntError(null);
+    setHuntSuccess(null);
+    try {
+      const res = await api.post<VelociraptorArtifact>(
+        `/admin/velociraptor/artifacts/${encodeURIComponent(name)}/push`,
+      );
+      setHuntSuccess(`Đã push lại ${res.name} lên Velociraptor.`);
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : `Push lại ${name} thất bại`);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -395,6 +448,82 @@ export default function DfirPage() {
         </Card>
       </div>
 
+      {/* Custom artifacts — Super Admin nạp artifact mới lên Velociraptor */}
+      {isSuperAdmin && (
+        <Card title="Artifact tuỳ chỉnh (Custom.*)" className="overflow-hidden p-0">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+            <p className="text-xs leading-relaxed text-slate-500">
+              Nạp artifact definition (YAML) lên Velociraptor server để mở rộng nguồn dữ liệu cho hunt/collect.
+              Chỉ chấp nhận namespace <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Custom.*</code>,
+              không hỗ trợ section <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">tools:</code>.
+            </p>
+            <Button size="sm" onClick={() => setShowArtifactModal(true)} disabled={!cfgOk}>
+              <FileUp className="size-3.5" /> Nạp artifact
+            </Button>
+          </div>
+          {artifacts.length === 0 ? (
+            <div className="p-6">
+              <EmptyState
+                icon={<FileUp className="size-8" />}
+                title="Chưa có artifact tuỳ chỉnh"
+                description="Bấm 'Nạp artifact' để đẩy artifact YAML (namespace Custom.*) lên Velociraptor server."
+              />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left">Tên</th>
+                    <th className="px-4 py-2.5 text-left">Type</th>
+                    <th className="px-4 py-2.5 text-left">Trên server</th>
+                    <th className="px-4 py-2.5 text-left">Push gần nhất</th>
+                    <th className="px-4 py-2.5 text-left">Cập nhật</th>
+                    <th className="px-4 py-2.5 text-left"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {artifacts.map((a) => (
+                    <tr key={a.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-mono text-[12px] text-slate-900">{a.name}</td>
+                      <td className="px-4 py-3">
+                        <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">{a.artifact_type}</Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        {a.on_server ? (
+                          <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">Đã nạp</Badge>
+                        ) : (
+                          <Badge className="bg-amber-100 text-amber-700 ring-amber-600/20">Chưa thấy</Badge>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs">
+                        {a.last_push_status === "pushed" ? (
+                          <span className="text-emerald-700">OK</span>
+                        ) : a.last_push_status === "failed" ? (
+                          <span className="text-rose-700" title={a.last_push_error ?? ""}>Lỗi — rê chuột xem chi tiết</span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-[11px] text-slate-500">{timeAgo(a.updated_at)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => void repushArtifact(a.name)}
+                          className="text-xs font-medium text-brand-600 hover:underline"
+                        >
+                          Push lại
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Hunt gần đây */}
       <Card title="DFIR Alerts (chưa xử lý)" className="overflow-hidden p-0">
         {alerts.filter((a) => !a.resolved).length === 0 ? (
@@ -602,6 +731,63 @@ export default function DfirPage() {
               Kết quả lưu trên Velociraptor Server (notebook / collected flows). Portal chỉ deep-link sang GUI — không cache payload.
             </div>
           </div>
+      </Modal>
+
+      {/* Modal nạp artifact */}
+      <Modal
+        open={showArtifactModal}
+        title="Nạp artifact lên Velociraptor"
+        onClose={() => setShowArtifactModal(false)}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setShowArtifactModal(false)} disabled={artifactSubmitting}>
+              Hủy
+            </Button>
+            <Button onClick={() => void submitArtifact()} disabled={artifactSubmitting || !artifactYaml.trim()}>
+              {artifactSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <FileUp className="size-3.5" />}
+              Nạp lên server
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <Field
+            label="Artifact definition (YAML)"
+            hint="Chỉ namespace Custom.*; tối đa 256KB; mọi sources entry phải có query/queries; không chấp nhận section tools:."
+          >
+            <Textarea
+              value={artifactYaml}
+              onChange={(e) => setArtifactYaml(e.target.value)}
+              rows={12}
+              placeholder={"name: Custom.MyOrg.Pslist\ndescription: Danh sách tiến trình tuỳ chỉnh\ntype: CLIENT\nsources:\n  - query: SELECT * FROM pslist()"}
+              className="font-mono text-xs"
+            />
+          </Field>
+          <div className="flex items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-brand-600 hover:underline">
+              <FileUp className="size-3.5" /> Hoặc nạp từ file .yaml
+              <input
+                type="file"
+                accept=".yaml,.yml"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => setArtifactYaml(String(reader.result ?? ""));
+                  reader.readAsText(file);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          {/^\s*type:\s*client_event\s*$/im.test(artifactYaml) && (
+            <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
+              <AlertTriangle className="mr-1 inline size-4 align-text-top" />
+              Artifact loại <strong>CLIENT_EVENT</strong> thay đổi hành vi thu thập trên <em>toàn bộ</em> agent fleet ngay khi nạp. Chỉ dùng khi đã kiểm chứng truy vấn.
+            </div>
+          )}
+        </div>
       </Modal>
 
       <ConfirmDialog

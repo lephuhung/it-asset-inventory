@@ -644,6 +644,29 @@ class VelociraptorConfig(Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
+class VelociraptorArtifact(Base):
+    """Artifact `Custom.*` do Super Admin nạp lên Velociraptor server từ portal.
+
+    DB là source of truth để re-push khi server Velociraptor được dựng lại
+    (datastore mất). `definition_yaml` là nội dung nhạy cảm vận hành — không bao
+    giờ đưa vào log/audit; audit chỉ ghi `name`.
+    """
+
+    __tablename__ = "velociraptor_artifacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    definition_yaml: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String(32), nullable=False, default="CLIENT")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_push_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # pushed | failed
+    last_push_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # safe message only
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC))
+
+
 class VelociraptorLink(Base):
     """Mapping `machine_id ↔ Velociraptor client_id` — được sync mỗi 5 phút từ Velociraptor.
 

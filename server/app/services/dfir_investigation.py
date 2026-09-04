@@ -11,7 +11,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
-
+import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from app.db.models import (
     DfirInvestigationMessage,
     LlmConfig,
     Machine,
+    VelociraptorArtifact,
     VelociraptorConfig,
     VelociraptorLink,
 )
@@ -45,6 +46,38 @@ logger = logging.getLogger("llm.dfir")
 
 class ExternalInvestigationNotFound(LlmError):
     """Investigation external không tồn tại."""
+
+
+async def _load_custom_artifact_refs(db: AsyncSession) -> list[dict]:
+    """Catalog artifact Custom.* (CLIENT, enabled) cho DeepAgent request payload.
+
+    Description parse từ YAML đã lưu, cắt 300 ký tự — đúng hợp đồng
+    CustomArtifactRef của DeepAgent. Tối đa 20 artifact.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(VelociraptorArtifact)
+                .where(VelociraptorArtifact.enabled.is_(True))
+                .where(VelociraptorArtifact.artifact_type == "CLIENT")
+                .order_by(VelociraptorArtifact.name)
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    refs: list[dict] = []
+    for row in rows:
+        description = ""
+        try:
+            doc = yaml.safe_load(row.definition_yaml)
+            if isinstance(doc, dict):
+                description = str(doc.get("description") or "")[:300]
+        except yaml.YAMLError:
+            description = ""
+        refs.append({"name": row.name, "description": description})
+    return refs
 
 
 class ExternalCallbackConflict(LlmError):
@@ -452,6 +485,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
         "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt},
         "velociraptor_api_client_yaml": api_client_yaml,
+        "custom_artifacts": await _load_custom_artifact_refs(db),
     }
     inv.status = "analyzing"
     inv.external_job_id = expected_job_id

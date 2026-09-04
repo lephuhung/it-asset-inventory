@@ -499,6 +499,20 @@ export interface VelociraptorTestResult {
   mcp?: DeepAgentTestResult | null;
 }
 
+/** Artifact Custom.* do Super Admin nạp lên Velociraptor (GET /api/admin/velociraptor/artifacts). */
+export interface VelociraptorArtifact {
+  id: string;
+  name: string;
+  sha256: string;
+  artifact_type: string;
+  enabled: boolean;
+  /** Artifact đã hiện diện trên Velociraptor server (verify qua artifact_definitions). */
+  on_server: boolean;
+  last_push_status: string | null;
+  last_push_error: string | null;
+  updated_at: string;
+}
+
 export interface VelociraptorLink {
   machine_id: string;
   client_id: string;

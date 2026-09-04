@@ -64,6 +64,33 @@ services:
       redis: { condition: service_healthy }
     networks: [inventory-net]
 
+  deepagent:
+    build:
+      context: ./deepagent
+      dockerfile: Dockerfile
+    image: asset-inventory-deepagent:latest
+    env_file: .env
+    environment:
+      # .env dùng DEEPAGENT_API_KEY làm service token phía backend; container
+      # deepagent cần cùng giá trị dưới tên DEEPAGENT_SERVICE_TOKEN.
+      DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_API_KEY:?DEEPAGENT_API_KEY must be set}
+      DEEPAGENT_BACKEND_URL: http://api:8000
+      DEEPAGENT_BACKEND_API_KEY: ${DEEPAGENT_BACKEND_API_KEY:?DEEPAGENT_BACKEND_API_KEY must be set}
+      DEEPAGENT_MAX_CONCURRENT_JOBS: ${DEEPAGENT_MAX_CONCURRENT_JOBS:-2}
+      DEEPAGENT_MCP_COMMAND: /opt/mcp-venv/bin/python
+      DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
+      DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false","VELOCIRAPTOR_DEFAULT_LIMIT":"100","VELOCIRAPTOR_MAX_LIMIT":"1000"}'
+      DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS: ${DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS:-180}
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [inventory-net]
+
   portal:
     build:
       context: ./portal
