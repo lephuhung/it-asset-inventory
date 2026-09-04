@@ -55,19 +55,30 @@ export function clearSessionTokens(res: NextResponse) {
 }
 
 /**
- * Trích xuất headers IP của client từ incoming request, để forward xuống upstream.
+ * Trích xuất headers IP của client từ incoming request để forward xuống upstream,
+ * đúng chuẩn proxy chain (RFC 7239 / X-Forwarded-For):
  *
- * Backend (FastAPI) sẽ kiểm tra peer (request gửi từ đâu) có thuộc trusted_proxy_cidrs không
- * — mặc định portal + backend cùng host (127.0.0.1/10.10.0.241) → trusted → backend dùng IP
- * từ X-Forwarded-For. Nếu peer không trusted, backend BỎ QUA header (chống spoof).
+ * - Nginx (entrypoint) ghi `X-Forwarded-For` bằng $proxy_add_x_forwarded_for,
+ *   tức là nối remote_addr (IP client thật) vào CUỐI chuỗi; đồng thời ghi
+ *   `X-Real-IP: <client>`. Phần tử CUỐI của XFF do nginx nối = IP client mà
+ *   nginx nhìn thấy — không thể bị client giả mạo (client chỉ nhét được phần
+ *   phía trước, phần nginx ghi đè lên sau). Các phần phía trước → bỏ.
+ * - Portal KHÔNG thể tự nối peer IP (Node route handler không expose remote
+ *   address) và không tự sinh IP: nếu không có header nào từ nginx (request đi
+ *   thẳng vào portal, vd dev qua :3003) → trả về rỗng; backend sẽ dùng peer IP
+ *   của kết nối portal→api (an toàn hơn tin header spoof được).
  *
- * Trả về object rỗng nếu không có header nào (backend sẽ dùng peer IP).
+ * Backend (FastAPI) chỉ áp dụng các header này nếu peer (portal server) thuộc
+ * trusted_proxy_cidrs — mặc định private ranges đã OK.
  */
 export function forwardedIpHeaders(request: Request): Record<string, string> {
-  const out: Record<string, string> = {};
-  const xff = request.headers.get("x-forwarded-for");
   const xri = request.headers.get("x-real-ip");
-  if (xff) out["X-Forwarded-For"] = xff;
+  // Phần tử CUỐI chuỗi XFF = IP client thật (do nginx nối vào, không spoof được).
+  const clientIp =
+    request.headers.get("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean).pop() ??
+    xri;
+  const out: Record<string, string> = {};
+  if (clientIp) out["X-Forwarded-For"] = clientIp;
   if (xri) out["X-Real-IP"] = xri;
   return out;
 }
@@ -128,14 +139,12 @@ export async function proxyRequest(
   contentType?: string | null,
 ): Promise<NextResponse> {
   // Forward client IP headers — backend dùng để ghi audit log đúng IP user
-  // (không phải IP loopback của portal BFF). Backend chỉ tin header nếu peer
-  // (chính portal server) thuộc trusted_proxy_cidrs — mặc định đã OK vì
-  // Portal + Backend cùng host (10.10.0.241 / 127.0.0.1).
-  const extraHeaders: Record<string, string> = {};
-  const xff = request.headers.get("x-forwarded-for");
-  const xri = request.headers.get("x-real-ip");
-  if (xff) extraHeaders["X-Forwarded-For"] = xff;
-  if (xri) extraHeaders["X-Real-IP"] = xri;
+  // (không phải IP loopback/gateway của portal BFF). `forwardedIpHeaders` lấy
+  // IP client (phần tử cuối chuỗi XFF do nginx nối) và bỏ phần client tự nhét
+  // phía trước; nếu không có header (request đi thẳng vào portal) → backend tự
+  // dùng peer IP. Backend chỉ tin header nếu peer (portal) thuộc
+  // trusted_proxy_cidrs — mặc định private ranges đã OK.
+  const extraHeaders = forwardedIpHeaders(request);
 
   const { access, refresh } = await getSessionTokens();
   let res = await fetchUpstream(path, method, access, body, contentType, extraHeaders);

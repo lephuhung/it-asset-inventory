@@ -99,6 +99,7 @@ async def list_users(
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     body: UserCreateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
 ):
@@ -123,7 +124,8 @@ async def create_user(
     )
     db.add(user)
     await append_audit(
-        db, action="user.create", actor=str(admin.id), target=str(user.id)
+        db, action="user.create", actor=str(admin.id), target=str(user.id),
+        ip=get_client_ip(request),
     )
     await db.flush()
     user.org = org
@@ -152,6 +154,7 @@ async def get_user(
 async def update_user(
     user_id: uuid.UUID,
     body: UserUpdateRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
 ):
@@ -182,7 +185,7 @@ async def update_user(
     if body.phone is not None:
         u.phone_encrypted = encrypt_phone(body.phone) if body.phone else None
 
-    await append_audit(db, action="user.update", actor=str(admin.id), target=str(u.id))
+    await append_audit(db, action="user.update", actor=str(admin.id), target=str(u.id), ip=get_client_ip(request))
     await db.commit()
     await db.refresh(u)
     return _to_out(u)
@@ -192,6 +195,7 @@ async def update_user(
 async def reset_password(
     user_id: uuid.UUID,
     body: UserResetPasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
 ):
@@ -201,7 +205,7 @@ async def reset_password(
     u.password_hash = hash_password(body.new_password)
     # Mật khẩu mới do admin đặt → buộc user tự đổi lại ở lần đăng nhập tới
     u.must_change_password = True
-    await append_audit(db, action="user.reset_password", actor=str(admin.id), target=str(u.id))
+    await append_audit(db, action="user.reset_password", actor=str(admin.id), target=str(u.id), ip=get_client_ip(request))
     await db.commit()
     return {"ok": True}
 
@@ -209,6 +213,7 @@ async def reset_password(
 @router.post("/{user_id}/reset-2fa")
 async def reset_2fa(
     user_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
 ):
@@ -219,7 +224,7 @@ async def reset_2fa(
     u.is_2fa_enabled = False
     u.totp_secret_encrypted = None
     u.backup_codes = None
-    await append_audit(db, action="user.reset_2fa", actor=str(admin.id), target=str(u.id))
+    await append_audit(db, action="user.reset_2fa", actor=str(admin.id), target=str(u.id), ip=get_client_ip(request))
     await db.commit()
     return {"ok": True}
 

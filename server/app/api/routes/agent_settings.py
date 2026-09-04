@@ -7,11 +7,12 @@ qua `/api/agent/config` + heartbeat.
 from __future__ import annotations
 
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, require_super_admin
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.db.models import AgentConfigOverride, User
 from app.db.session import get_db
@@ -65,6 +66,7 @@ async def get_agent_settings(
 @router.put("", response_model=AgentSettingsOut)
 async def update_agent_settings(
     body: AgentSettingsUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -106,7 +108,7 @@ async def update_agent_settings(
     ov.updated_at = datetime.now(UTC)
     ov.updated_by = admin.id
 
-    await append_audit(db, action="agent_config.update", actor=str(admin.id), target=str(ov.id))
+    await append_audit(db, action="agent_config.update", actor=str(admin.id), target=str(ov.id), ip=get_client_ip(request))
     await db.commit()
 
     cfg = await effective_agent_config(db)

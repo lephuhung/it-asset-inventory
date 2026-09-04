@@ -89,6 +89,7 @@ def _install_command_linux(token: str, portal_url: str, agent_server_url: str) -
 @router.post("/links", response_model=SelfServiceLinkOut)
 async def create_link(
     body: SelfServiceLinkCreate,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -100,7 +101,7 @@ async def create_link(
         code = _make_code()
     link = SelfServiceLink(org_id=body.org_id, code=code, created_by=admin.id)
     db.add(link)
-    await append_audit(db, action="self_service.link_create", actor=str(admin.id), target=str(link.id))
+    await append_audit(db, action="self_service.link_create", actor=str(admin.id), target=str(link.id), ip=get_client_ip(request))
     await db.commit()
     return await _to_out(db, link)
 

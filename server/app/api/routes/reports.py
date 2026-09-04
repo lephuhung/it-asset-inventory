@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, visible_org_ids
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.db.models import EnrollToken, Machine, MachineTag, User
 from app.db.session import get_db
 from app.services.report import build_machines_pdf, build_machines_workbook
@@ -92,6 +93,7 @@ def _show_full(user: User, include_phone_full: bool) -> bool:
 
 @router.post("/export")
 async def export_machines(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     org_id: uuid.UUID | None = None,
@@ -117,6 +119,7 @@ async def export_machines(
         action="report.export",
         actor=str(user.id),
         target=f"machines:{len(machines)}",
+        ip=get_client_ip(request),
     )
     await db.commit()
 
@@ -132,6 +135,7 @@ async def export_machines(
 
 @router.post("/export-pdf")
 async def export_machines_pdf(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     org_id: uuid.UUID | None = None,
@@ -158,6 +162,7 @@ async def export_machines_pdf(
         action="report.export_pdf",
         actor=str(user.id),
         target=f"machines:{len(machines)}",
+        ip=get_client_ip(request),
     )
     await db.commit()
 

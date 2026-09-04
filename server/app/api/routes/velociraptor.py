@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, require_super_admin
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.core.security import decrypt_aes_gcm, encrypt_aes_gcm
 from app.db.models import (
@@ -71,6 +72,7 @@ router = APIRouter(prefix="/api/admin/velociraptor", tags=["velociraptor"])
 
 @router.post("/config/api-client/upload", response_model=VelociraptorConfigOut)
 async def upload_api_client_config(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
@@ -93,7 +95,7 @@ async def upload_api_client_config(
     cfg.updated_at = datetime.now(UTC)
     cfg.updated_by = admin.id
     await db.commit()
-    await append_audit(db, action="velociraptor.api_client.upload", actor=str(admin.id), target="velociraptor_config:1")
+    await append_audit(db, action="velociraptor.api_client.upload", actor=str(admin.id), target="velociraptor_config:1", ip=get_client_ip(request))
     await db.commit()
     return _config_to_out(cfg)
 
@@ -284,6 +286,7 @@ async def get_velociraptor_config(
 @router.put("/config", response_model=VelociraptorConfigOut)
 async def update_velociraptor_config(
     body: VelociraptorConfigUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -367,6 +370,7 @@ async def update_velociraptor_config(
         action="velociraptor.config.update",
         actor=str(admin.id),
         target="1",
+        ip=get_client_ip(request),
     )
     await db.commit()
     logger.info("Velociraptor config updated by %s: %s", admin.email, list(changes.keys()))
@@ -415,6 +419,7 @@ async def test_velociraptor_connection(
 
 @router.post("/sync")
 async def trigger_velociraptor_sync(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -431,6 +436,7 @@ async def trigger_velociraptor_sync(
         action="velociraptor.sync.manual",
         actor=str(admin.id),
         target=str(result)[:200],
+        ip=get_client_ip(request),
     )
     await db.commit()
     return result
@@ -554,6 +560,7 @@ async def velociraptor_status(
 
 @router.post("/alerts/scan")
 async def scan_velociraptor_alerts_now(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -579,6 +586,7 @@ async def scan_velociraptor_alerts_now(
         db,
         action="velociraptor.alerts.scan",
         actor=str(admin.id),
+        ip=get_client_ip(request),
     )
     await db.commit()
     return {
@@ -789,6 +797,7 @@ async def collect_client_top10_events(
 @router.post("/hunt", response_model=DfirHuntOut, status_code=status.HTTP_201_CREATED)
 async def create_velociraptor_hunt(
     body: DfirHuntCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin()),
 ):
@@ -866,6 +875,7 @@ async def create_velociraptor_hunt(
         action="dfir.hunt.create",
         actor=str(admin.id),
         target=body.artifact,
+        ip=get_client_ip(request),
     )
 
     dfir = DfirHunt(
@@ -1100,6 +1110,7 @@ async def list_dfir_schedules(
 @router.post("/schedules", response_model=DfirScheduleOut, status_code=status.HTTP_201_CREATED)
 async def create_dfir_schedule(
     body: DfirScheduleCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -1141,6 +1152,7 @@ async def create_dfir_schedule(
         action="dfir.schedule.create",
         actor=str(admin.id),
         target=body.artifact,
+        ip=get_client_ip(request),
     )
     await db.commit()
     await db.refresh(schedule)
@@ -1155,6 +1167,7 @@ async def create_dfir_schedule(
 async def update_dfir_schedule(
     schedule_id: uuid.UUID,
     body: DfirScheduleUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -1181,6 +1194,7 @@ async def update_dfir_schedule(
         action="dfir.schedule.update",
         actor=str(admin.id),
         target=str(schedule_id),
+        ip=get_client_ip(request),
     )
     await db.commit()
     await db.refresh(schedule)
@@ -1190,6 +1204,7 @@ async def update_dfir_schedule(
 @router.delete("/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dfir_schedule(
     schedule_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -1209,6 +1224,7 @@ async def delete_dfir_schedule(
         action="dfir.schedule.delete",
         actor=str(admin.id),
         target=str(schedule_id),
+        ip=get_client_ip(request),
     )
     await db.commit()
 
@@ -1352,6 +1368,7 @@ async def list_dfir_alerts(
 @router.patch("/alerts/{alert_id}/resolve", response_model=DfirAlertOut)
 async def resolve_dfir_alert(
     alert_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin()),
 ):
@@ -1372,6 +1389,7 @@ async def resolve_dfir_alert(
         action="dfir.alert.resolve",
         actor=str(admin.id),
         target=str(alert_id),
+        ip=get_client_ip(request),
     )
     await db.commit()
     await db.refresh(alert)

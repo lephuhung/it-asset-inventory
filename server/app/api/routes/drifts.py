@@ -8,12 +8,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_admin, visible_org_ids
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.db.models import FingerprintDrift, Machine, User
 from app.db.session import get_db
 from app.schemas import FingerprintDriftOut, MachineDecision, Page
@@ -67,7 +68,10 @@ async def list_drifts(
     )
 
 
-async def _resolve(drift_id: uuid.UUID, decision: str, admin: User, db: AsyncSession) -> FingerprintDriftOut:
+async def _resolve(
+    drift_id: uuid.UUID, decision: str, admin: User, db: AsyncSession,
+    request: Request | None = None,
+) -> FingerprintDriftOut:
     drift = (
         await db.execute(select(FingerprintDrift).where(FingerprintDrift.id == drift_id))
     ).scalar_one_or_none()
@@ -91,7 +95,8 @@ async def _resolve(drift_id: uuid.UUID, decision: str, admin: User, db: AsyncSes
     drift.resolved_at = datetime.now(UTC)
     drift.resolved_by = admin.id
     await append_audit(
-        db, action=f"fingerprint.{decision}", actor=str(admin.id), target=str(machine.id), machine_id=machine.id
+        db, action=f"fingerprint.{decision}", actor=str(admin.id), target=str(machine.id), machine_id=machine.id,
+        ip=get_client_ip(request) if request else None,
     )
     await db.commit()
     return await _to_out(db, drift)
@@ -101,19 +106,21 @@ async def _resolve(drift_id: uuid.UUID, decision: str, admin: User, db: AsyncSes
 async def approve_drift(
     drift_id: uuid.UUID,
     body: MachineDecision,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     """Chấp nhận fingerprint mới (máy đã đổi mainboard / cài lại Win thật sự)."""
-    return await _resolve(drift_id, "approved", admin, db)
+    return await _resolve(drift_id, "approved", admin, db, request=request)
 
 
 @router.post("/{drift_id}/reject", response_model=FingerprintDriftOut)
 async def reject_drift(
     drift_id: uuid.UUID,
     body: MachineDecision,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
     """Từ chối — giữ fingerprint cũ (nghi gian lận định danh)."""
-    return await _resolve(drift_id, "rejected", admin, db)
+    return await _resolve(drift_id, "rejected", admin, db, request=request)

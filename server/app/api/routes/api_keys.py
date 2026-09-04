@@ -12,12 +12,13 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_super_admin, visible_org_ids
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.db.models import ApiKey, Machine, User
 from app.db.session import get_db
 from app.schemas import (
@@ -73,6 +74,7 @@ async def list_keys(
 @router.post("", response_model=ApiKeyCreated)
 async def create_key(
     body: ApiKeyCreate,
+    request: Request,
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -88,7 +90,7 @@ async def create_key(
         org_id=body.org_id, created_by=admin.id,
     )
     db.add(key)
-    await append_audit(db, action="apikey.create", actor=str(admin.id), target=str(key.id))
+    await append_audit(db, action="apikey.create", actor=str(admin.id), target=str(key.id), ip=get_client_ip(request))
     await db.commit()
     return ApiKeyCreated(**_to_out(key).model_dump(), key=plain)
 
@@ -118,6 +120,7 @@ async def update_key(
 @router.delete("/{key_id}")
 async def delete_key(
     key_id: uuid.UUID,
+    request: Request,
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -125,7 +128,7 @@ async def delete_key(
     if key is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Key không tồn tại")
     await db.delete(key)
-    await append_audit(db, action="apikey.delete", actor=str(admin.id), target=str(key_id))
+    await append_audit(db, action="apikey.delete", actor=str(admin.id), target=str(key_id), ip=get_client_ip(request))
     await db.commit()
     return {"ok": True}
 

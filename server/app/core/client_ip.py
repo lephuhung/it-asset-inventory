@@ -69,46 +69,75 @@ def reset_trusted_cache() -> None:
 
 
 def _peer_is_trusted(peer_ip: str) -> bool:
-    """Check xem peer IP có thuộc trusted proxy CIDRs không."""
+    """Check xem peer IP có thuộc trusted proxy CIDRs không.
+
+    Chấp nhận cả dạng IPv4-mapped IPv6 (::ffff:10.0.0.1 ≡ 10.0.0.1).
+    """
     if not peer_ip:
         return False
     try:
         ip = ipaddress.ip_address(peer_ip)
     except ValueError:
         return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
     for net in _parse_trusted():
         if ip in net:
             return True
     return False
 
 
-def _parse_xff(xff: str) -> str | None:
-    """Lấy IP leftmost từ X-Forwarded-For (IP gốc của user, trước các proxy).
+def _parse_xff(xff: str, peer_ip: str | None = None) -> str | None:
+    """Trích IP client từ X-Forwarded-For.
 
-    Skip các giá trị rỗng / không parse được. Nếu chỉ có 1 IP và nó là trusted proxy
-    → chính nó là peer (không có client trước đó).
+    Chuỗi XFF chuẩn: mỗi proxy nối IP nó nhìn thấy vào BÊN PHẢI, nên
+    rightmost = proxy gần backend nhất, leftmost = client gốc.
+
+    Duyệt TỪ PHẢI SANG TRÁI, bỏ qua các hop proxy tin cậy (thuộc trusted CIDRs
+    / loopback / link-local). Phần tử đầu tiên KHÔNG phải proxy tin cậy chính là
+    IP client — đây là giá trị proxy tin cậy gần nhất đã "vouch", nên kẻ tấn
+    công không thể giả mạo bằng cách nhét XFF sai (IP giả chỉ nằm ở bên trái,
+    phía trước IP thật do nginx ghi).
+
+    Nếu mọi phần tử đều là private/loopback (mạng LAN thuần — client nội bộ
+    cũng nằm trong trusted CIDRs) → không skip được phần tử nào → fallback lấy
+    LEFTMOST (đúng chuẩn XFF: client gốc đứng đầu chuỗi).
+
+    Lưu ý: trái với phiên bản cũ (bỏ private rồi lấy phần tử CUỐI), phiên bản
+    này đúng chuẩn và sửa lỗi mạng LAN bị ghi nhầm IP gateway của proxy.
     """
     if not xff:
         return None
     parts = [p.strip() for p in xff.split(",") if p.strip()]
-    for raw in parts:
+    if not parts:
+        return None
+
+    def _is_proxy_hop(raw: str) -> bool:
         try:
             ip = ipaddress.ip_address(raw)
-            # Bỏ qua private/loopback trong chain (proxy hop)
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
-                continue
-            return str(ip)
         except ValueError:
+            return False
+        if ip.is_loopback or ip.is_link_local:
+            return True
+        return _peer_is_trusted(str(ip))
+
+    # Duyệt phải → trái, bỏ qua hop proxy tin cậy; trả về raw nếu không parse
+    # được (không drop — giữ nguyên giá trị để debug được chuỗi header lỗi).
+    for raw in reversed(parts):
+        if _is_proxy_hop(raw):
             continue
-    # Nếu tất cả là private (vd: user trong cùng LAN), lấy cái leftmost
-    try:
-        return str(ipaddress.ip_address(parts[0]))
-    except (ValueError, IndexError):
-        return None
+        return raw
+
+    # Tất cả là private/loopback (client nội bộ + proxy cùng dải) → leftmost
+    return parts[0] if parts else None
 
 
 def _normalize(ip_str: str) -> str:
-    """Chuẩn hoá IP string — bỏ port nếu có, bỏ zone IPv6, parse OK thì trả canonical."""
+    """Chuẩn hoá IP string — bỏ port nếu có, bỏ zone IPv6, parse OK thì trả canonical.
+
+    IPv4-mapped IPv6 (::ffff:10.8.0.8) được rút gọn về dạng IPv4 (10.8.0.8) để
+    nhất quán khi lọc/group trong audit log.
+    """
     if not ip_str:
         return ""
     # IPv6 with zone (fe80::1%eth0) — bỏ zone
@@ -118,9 +147,12 @@ def _normalize(ip_str: str) -> str:
     if ":" in ip_str and ip_str.count(":") == 1:
         ip_str = ip_str.split(":")[0]
     try:
-        return str(ipaddress.ip_address(ip_str))
+        ip = ipaddress.ip_address(ip_str)
     except ValueError:
         return ip_str  # trả raw nếu không parse được
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return str(ip.ipv4_mapped)
+    return str(ip)
 
 
 def get_client_ip(
@@ -151,7 +183,7 @@ def get_client_ip(
         # Ưu tiên X-Forwarded-For
         xff = request.headers.get("x-forwarded-for")
         if xff:
-            real_ip = _parse_xff(xff)
+            real_ip = _parse_xff(xff, peer_normalized)
             if real_ip:
                 return _normalize(real_ip)
         # Fallback X-Real-IP

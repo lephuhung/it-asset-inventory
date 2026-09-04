@@ -497,6 +497,7 @@ async def list_machine_investigations(
 async def update_lifecycle(
     machine_id: uuid.UUID,
     body: MachineLifecycleUpdate,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -509,7 +510,7 @@ async def update_lifecycle(
         machine.note = body.note
     if body.lifecycle == "decommissioned":
         machine.status = "decommissioned"
-    await append_audit(db, action="machine.lifecycle", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
+    await append_audit(db, action="machine.lifecycle", actor=str(admin.id), target=str(machine.id), machine_id=machine.id, ip=get_client_ip(request))
     await db.commit()
     return {"ok": True, "lifecycle": machine.lifecycle, "status": machine.status}
 
@@ -518,6 +519,7 @@ async def update_lifecycle(
 async def approve_machine(
     machine_id: uuid.UUID,
     body: MachineDecision,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -536,7 +538,7 @@ async def approve_machine(
     machine.lifecycle = "in_use"
     if body.note:
         machine.note = body.note
-    await append_audit(db, action="machine.approve", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
+    await append_audit(db, action="machine.approve", actor=str(admin.id), target=str(machine.id), machine_id=machine.id, ip=get_client_ip(request))
     await db.commit()
     return {"ok": True, "status": machine.status}
 
@@ -545,6 +547,7 @@ async def approve_machine(
 async def reject_machine(
     machine_id: uuid.UUID,
     body: MachineDecision,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -553,7 +556,7 @@ async def reject_machine(
     machine.status = "decommissioned"
     machine.lifecycle = "decommissioned"
     machine.note = f"Từ chối duyệt: {body.note or 'không rõ lý do'}" + (f"\n{machine.note or ''}" if machine.note else "")
-    await append_audit(db, action="machine.reject", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
+    await append_audit(db, action="machine.reject", actor=str(admin.id), target=str(machine.id), machine_id=machine.id, ip=get_client_ip(request))
     await db.commit()
     return {"ok": True, "status": machine.status}
 
@@ -761,6 +764,7 @@ async def unassign_user(
 @router.post("/{machine_id}/rescan", response_model=dict)
 async def request_rescan(
     machine_id: uuid.UUID,
+    request: Request,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -776,7 +780,7 @@ async def request_rescan(
         await r.aclose()
     except Exception:  # noqa: BLE001 — Redis down: fallback ghi flag trong DB để heartbeat đọc
         machine._rescan_pending = True
-    await append_audit(db, action="machine.rescan_requested", actor=str(admin.id), target=str(machine.id), machine_id=machine.id)
+    await append_audit(db, action="machine.rescan_requested", actor=str(admin.id), target=str(machine.id), machine_id=machine.id, ip=get_client_ip(request))
     await db.commit()
     return {"ok": True, "message": "Đã yêu cầu agent thu thập lại cấu hình (khi máy online)"}
 

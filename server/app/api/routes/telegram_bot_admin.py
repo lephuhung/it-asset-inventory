@@ -23,7 +23,7 @@ import logging
 from datetime import UTC, datetime
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -367,6 +367,7 @@ async def list_linked_users(
 @router.delete("/linked-users/{user_id}", status_code=204)
 async def force_unlink_user(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -396,11 +397,13 @@ async def force_unlink_user(
     await db.commit()
 
     from app.core.audit import append_audit
+    from app.core.client_ip import get_client_ip
     await append_audit(
         db,
         actor=admin.email,
         action="telegram.force_unlink",
         target=f"user:{target.id}",
+        ip=get_client_ip(request),
     )
     logger.info(
         "Super Admin %s force-unlinked Telegram on %s", admin.email, target.email,

@@ -9,13 +9,14 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_machine_id
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.db.models import Machine
 from app.db.session import get_db
@@ -38,6 +39,7 @@ class RenewResponse(BaseModel):
 @router.post("", response_model=RenewResponse)
 async def renew_certificate(
     body: RenewRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     machine_cn: str = Depends(get_client_machine_id),
     x_ssl_client_serial: str | None = Header(default=None, alias="X-SSL-Client-Serial"),
@@ -74,7 +76,7 @@ async def renew_certificate(
         action="cert.renew",
         actor=f"agent:{machine.id}",
         target=str(machine.id),
-        ip=None,
+        ip=get_client_ip(request),
         machine_id=machine.id,
     )
     await db.commit()

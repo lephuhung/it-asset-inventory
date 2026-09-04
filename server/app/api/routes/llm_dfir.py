@@ -11,12 +11,13 @@ from datetime import UTC, datetime
 
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, require_super_admin
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.core.config import settings
 from app.core.security import decrypt_aes_gcm, encrypt_aes_gcm
 from app.db.models import (
@@ -179,6 +180,7 @@ async def list_llm_models(
 @router.put("/config", response_model=LlmConfigOut)
 async def update_llm_config(
     body: LlmConfigUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -276,6 +278,7 @@ async def update_llm_config(
         target = f"llm_config:1:{_json.dumps(changes, ensure_ascii=False)[:200]}"
         await append_audit(
             db, action="llm.config.update", actor=str(admin.id), target=target,
+            ip=get_client_ip(request),
         )
         await db.commit()
     return _config_to_out(cfg)
@@ -580,6 +583,7 @@ async def get_investigation_stats(
 @router.post("/investigations", response_model=DfirInvestigationOut, status_code=201)
 async def create_investigation(
     body: DfirInvestigationCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -627,6 +631,7 @@ async def create_investigation(
     await append_audit(
         db, action="llm.investigate.start", actor=str(admin.id),
         target=f"{inv_id}#{body.machine_id}",
+        ip=get_client_ip(request),
     )
     await db.commit()
     # Trả về DfirInvestigationOut từ DB
@@ -682,6 +687,7 @@ async def get_investigation_messages(
 async def chat_investigation(
     inv_id: str,
     body: DfirInvestigationChatIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -697,6 +703,7 @@ async def chat_investigation(
     await append_audit(
         db, action="llm.investigate.chat", actor=str(admin.id),
         target=f"{inv_id}#{result['input_tokens']}",
+        ip=get_client_ip(request),
     )
     await db.commit()
     return {
@@ -709,6 +716,7 @@ async def chat_investigation(
 @router.post("/investigations/{inv_id}/stop")
 async def stop_investigation(
     inv_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -724,6 +732,7 @@ async def stop_investigation(
     inv.completed_at = datetime.now(UTC)
     await append_audit(
         db, action="llm.investigate.stop", actor=str(admin.id), target=str(inv_id),
+        ip=get_client_ip(request),
     )
     await db.commit()
 
@@ -731,6 +740,7 @@ async def stop_investigation(
 @router.delete("/investigations/{inv_id}", status_code=204)
 async def delete_investigation(
     inv_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_super_admin()),
 ):
@@ -744,6 +754,7 @@ async def delete_investigation(
     await db.delete(inv)
     await append_audit(
         db, action="llm.investigate.delete", actor=str(admin.id), target=str(inv_id),
+        ip=get_client_ip(request),
     )
     await db.commit()
 

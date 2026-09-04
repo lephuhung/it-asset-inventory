@@ -1,105 +1,23 @@
-# Docker Compose — môi trường dev/staging cho server
-# Chạy: docker compose up --build
+# Docker Compose — tầng edge cho portal (dev/staging trên host đã có stack nền).
+#
+# Stack nền "asset-inventory" (xem .worktrees/docker-dev-stack/docker-compose.yml)
+# đang chạy: postgres, redis, api, deepagent trên mạng `asset-inventory_inventory-net`.
+# File NÀY chỉ thêm phần giao diện người dùng lên cùng mạng đó:
+#   - portal  : Next.js BFF (publish 3003, dev)
+#   - certs   : sinh self-signed cert cho nginx (chạy 1 lần)
+#   - nginx   : reverse proxy HTTPS duy nhất → portal/api.
+#               Đây là entrypoint bắt buộc để ghi X-Forwarded-For/X-Real-IP
+#               (IP client thật) cho audit log — KHÔNG truy cập thẳng :3003/:8000.
+#
+# Chạy: docker compose up -d nginx        (chỉ portal + certs + nginx)
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: inventory
-      POSTGRES_PASSWORD: inventory
-      POSTGRES_DB: inventory
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inventory"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6381:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  ca:
-    image: smallstep/step-ca:latest
-    # Cần khởi tạo CA trước (xem docs step-ca init) — dev mặc định dùng CA local trong app
-    profiles: ["full"]
-    environment:
-      DOCKER_STEPCA_INIT_NAME: "Asset Inventory Internal CA"
-
-  api:
-    build:
-      context: ..
-      dockerfile: Dockerfile.dev
-    image: asset-inventory-api:dev
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://inventory:inventory@postgres:5432/inventory
-      # Trong Docker network dùng cổng của service, không phải cổng publish ra host.
-      REDIS_URL: redis://redis:6379/0
-      CA_MODE: local
-      DEEPAGENT_ENABLED: "true"
-      DEEPAGENT_URL: http://deepagent:8090
-      DEEPAGENT_API_KEY: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
-      DEEPAGENT_MAX_CONCURRENT_JOBS: "${DEEPAGENT_MAX_CONCURRENT_JOBS:-2}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-    # Mount source code (read-only) → uvicorn --reload tự pick up thay đổi.
-    # Agent_dist mount riêng (rw) để alembic / tool khác ghi được.
-    volumes:
-      - ../../server:/app:ro
-      - ../../server/agent_dist:/app/agent_dist:ro
-    working_dir: /app
-    command: >
-      sh -c "alembic upgrade head &&
-             exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
-
-  deepagent:
-    build:
-      context: ../../deepagent
-      dockerfile: Dockerfile
-    image: asset-inventory-deepagent:latest
-    environment:
-      DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_SERVICE_TOKEN:-CHANGE_ME_deepagent_service_token}
-      DEEPAGENT_BACKEND_URL: http://api:8000
-      # Required: DeepAgent must authenticate callbacks to the API. Do not default to empty.
-      DEEPAGENT_BACKEND_API_KEY: "${DEEPAGENT_BACKEND_API_KEY:?DEEPAGENT_BACKEND_API_KEY must be set}"
-      DEEPAGENT_MAX_CONCURRENT_JOBS: "${DEEPAGENT_MAX_CONCURRENT_JOBS:-2}"
-      DEEPAGENT_MCP_COMMAND: /opt/mcp-venv/bin/python
-      DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
-      DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false"}'
-      # Caller deadline for every MCP tool call. A DeepAgent timeout only proves
-      # the MCP call did not return before the deadline (mcp_call_deadline);
-      # it is NOT a Velociraptor flow-level guarantee. Phase 2 will classify
-      # flow-level causes through a tracked bridge patch/fork. Accepted range
-      # 10–1800 seconds; default 180.
-      DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS: "${DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS:-180}"
-    depends_on:
-      api:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
   portal:
     build:
       context: ../../portal
       dockerfile: Dockerfile.dev
     image: asset-inventory-portal:dev
     environment:
+      # api = alias container api của stack asset-inventory (cùng mạng external)
       API_BASE: http://api:8000
       COOKIE_SECURE: "false"   # dev: chạy http, không cần Secure cookie
       NODE_ENV: development
@@ -110,11 +28,10 @@ services:
       # Bật polling cho Docker Desktop / WSL2 / ổ mount chậm
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
-    depends_on:
-      api:
-        condition: service_started
     ports:
-      - "3003:3003"
+      # Chỉ publish 127.0.0.1 — truy cập thật qua nginx (443); 3003 chỉ để
+      # dev/test cục bộ, không expose LAN (tránh bỏ qua lớp ghi IP thật).
+      - "127.0.0.1:3003:3003"
     # Mount source (read-write) + named volume cho node_modules/.next
     # (tránh overwrite symlink trên host + cache qua các lần restart).
     # Cần :rw để Next.js dev ghi next-env.d.ts / cache.
@@ -134,30 +51,29 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    # Host 80 đã bị traefik (stack khác) chiếm → map HTTP lên 8080, HTTPS giữ 443.
+    # Truy cập portal: https://<host>/ (hoặc http://<host>:8080 → redirect 443).
     ports:
       - "443:443"
-      - "80:80"
+      - "8080:80"
       - "9443:9443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx-certs:/etc/nginx/certs:ro
     depends_on:
-      api:
-        condition: service_started
       portal:
         condition: service_started
       certs:
         condition: service_completed_successfully
 
 volumes:
-  pgdata:
   nginx-certs:
   portal_node_modules:
   portal_next:
 
 networks:
   default:
-    # Mạng dùng chung với postgres/redis/deepagent đang chạy (project
+    # Mạng dùng chung với postgres/redis/deepagent/api đang chạy (project
     # "asset-inventory" từ .worktrees/docker-dev-stack/docker-compose.yml).
     # Khai báo external để không bị Compose phàn nàn về label khác project.
     external: true
