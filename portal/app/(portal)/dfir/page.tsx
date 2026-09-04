@@ -80,6 +80,8 @@ export default function DfirPage() {
   const [artifacts, setArtifacts] = useState<VelociraptorArtifact[]>([]);
   const [showArtifactModal, setShowArtifactModal] = useState(false);
   const [artifactYaml, setArtifactYaml] = useState("");
+  const [artifactPlatforms, setArtifactPlatforms] = useState<Array<"windows" | "linux" | "macos">>(["windows"]);
+  const [artifactPriority, setArtifactPriority] = useState(100);
   const [artifactSubmitting, setArtifactSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -118,6 +120,8 @@ export default function DfirPage() {
     try {
       const res = await api.post<VelociraptorArtifact>("/admin/velociraptor/artifacts", {
         definition_yaml: artifactYaml,
+        supported_platforms: artifactPlatforms,
+        selection_priority: artifactPriority,
       });
       setHuntSuccess(
         res.on_server
@@ -126,6 +130,8 @@ export default function DfirPage() {
       );
       setShowArtifactModal(false);
       setArtifactYaml("");
+      setArtifactPlatforms(["windows"]);
+      setArtifactPriority(100);
       await load();
     } catch (e) {
       setHuntError(e instanceof Error ? e.message : "Nạp artifact thất bại");
@@ -455,7 +461,7 @@ export default function DfirPage() {
             <p className="text-xs leading-relaxed text-slate-500">
               Nạp artifact definition (YAML) lên Velociraptor server để mở rộng nguồn dữ liệu cho hunt/collect.
               Chỉ chấp nhận namespace <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Custom.*</code>,
-              không hỗ trợ section <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">tools:</code>.
+              không hỗ trợ section <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">tools:</code>. DeepAgent chỉ nhận artifact phù hợp nền tảng máy đích.
             </p>
             <Button size="sm" onClick={() => setShowArtifactModal(true)} disabled={!cfgOk}>
               <FileUp className="size-3.5" /> Nạp artifact
@@ -476,6 +482,8 @@ export default function DfirPage() {
                   <tr>
                     <th className="px-4 py-2.5 text-left">Tên</th>
                     <th className="px-4 py-2.5 text-left">Type</th>
+                    <th className="px-4 py-2.5 text-left">Nền tảng</th>
+                    <th className="px-4 py-2.5 text-left">Ưu tiên</th>
                     <th className="px-4 py-2.5 text-left">Trên server</th>
                     <th className="px-4 py-2.5 text-left">Push gần nhất</th>
                     <th className="px-4 py-2.5 text-left">Cập nhật</th>
@@ -489,6 +497,16 @@ export default function DfirPage() {
                       <td className="px-4 py-3">
                         <Badge className="bg-slate-100 text-slate-700 ring-slate-600/20">{a.artifact_type}</Badge>
                       </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          {a.supported_platforms.map((platform) => (
+                            <Badge key={platform} className="bg-sky-100 text-sky-700 ring-sky-600/20">
+                              {platform === "macos" ? "macOS" : platform}
+                            </Badge>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-700">{a.selection_priority}</td>
                       <td className="px-4 py-3">
                         {a.on_server ? (
                           <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">Đã nạp</Badge>
@@ -743,7 +761,7 @@ export default function DfirPage() {
             <Button variant="secondary" onClick={() => setShowArtifactModal(false)} disabled={artifactSubmitting}>
               Hủy
             </Button>
-            <Button onClick={() => void submitArtifact()} disabled={artifactSubmitting || !artifactYaml.trim()}>
+            <Button onClick={() => void submitArtifact()} disabled={artifactSubmitting || !artifactYaml.trim() || artifactPlatforms.length === 0}>
               {artifactSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <FileUp className="size-3.5" />}
               Nạp lên server
             </Button>
@@ -753,7 +771,7 @@ export default function DfirPage() {
         <div className="space-y-4">
           <Field
             label="Artifact definition (YAML)"
-            hint="Chỉ namespace Custom.*; tối đa 256KB; mọi sources entry phải có query/queries; không chấp nhận section tools:."
+            hint="Chỉ namespace Custom.*; tối đa 256KB; mọi sources entry phải có query/queries; không chấp nhận section tools:. Description trong YAML là thông tin LLM dùng để hiểu mục đích artifact."
           >
             <Textarea
               value={artifactYaml}
@@ -761,6 +779,33 @@ export default function DfirPage() {
               rows={12}
               placeholder={"name: Custom.MyOrg.Pslist\ndescription: Danh sách tiến trình tuỳ chỉnh\ntype: CLIENT\nsources:\n  - query: SELECT * FROM pslist()"}
               className="font-mono text-xs"
+            />
+          </Field>
+          <Field label="Nền tảng hỗ trợ" hint="Backend chỉ đưa artifact này cho DeepAgent khi máy đích thuộc nền tảng đã chọn.">
+            <div className="flex gap-4">
+              {(["windows", "linux", "macos"] as const).map((platform) => (
+                <label key={platform} className="inline-flex items-center gap-1.5 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={artifactPlatforms.includes(platform)}
+                    onChange={(e) => setArtifactPlatforms((current) => e.target.checked
+                      ? [...current, platform]
+                      : current.filter((item) => item !== platform))}
+                  />
+                  {platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}
+                </label>
+              ))}
+            </div>
+          </Field>
+          <Field label="Ưu tiên chọn catalog" hint="0–1000; số cao hơn được đưa vào catalog trước khi vượt giới hạn 20 artifact.">
+            <input
+              aria-label="Ưu tiên chọn catalog"
+              type="number"
+              min={0}
+              max={1000}
+              value={artifactPriority}
+              onChange={(e) => setArtifactPriority(Math.max(0, Math.min(1000, Number(e.target.value) || 0)))}
+              className="w-28 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
             />
           </Field>
           <div className="flex items-center gap-2">

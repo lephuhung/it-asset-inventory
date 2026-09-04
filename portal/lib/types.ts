@@ -506,6 +506,8 @@ export interface VelociraptorArtifact {
   sha256: string;
   artifact_type: string;
   enabled: boolean;
+  supported_platforms: Array<"windows" | "linux" | "macos">;
+  selection_priority: number;
   /** Artifact đã hiện diện trên Velociraptor server (verify qua artifact_definitions). */
   on_server: boolean;
   last_push_status: string | null;

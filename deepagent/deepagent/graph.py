@@ -87,7 +87,10 @@ def build_investigation_graph(
         raw_plan = await model.plan(state["request"])
         return {
             "plan": sanitize_plan(
-                raw_plan, settings.max_steps, custom_tool_names(state["request"])
+                raw_plan,
+                settings.max_steps,
+                custom_tool_names(state["request"]),
+                state["request"].target_platform,
             )
         }
 

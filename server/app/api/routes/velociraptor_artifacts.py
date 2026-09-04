@@ -50,6 +50,8 @@ def _to_out(row: VelociraptorArtifact, *, on_server: bool) -> VelociraptorArtifa
         sha256=row.sha256,
         artifact_type=row.artifact_type,
         enabled=row.enabled,
+        supported_platforms=row.supported_platforms,
+        selection_priority=row.selection_priority,
         on_server=on_server,
         last_push_status=row.last_push_status,
         last_push_error=row.last_push_error,
@@ -141,6 +143,8 @@ async def upload_artifact(
             definition_yaml=spec.definition_yaml,
             sha256=spec.sha256,
             artifact_type=spec.artifact_type,
+            supported_platforms=body.supported_platforms,
+            selection_priority=body.selection_priority,
             created_by=admin.id,
         )
         db.add(row)
@@ -149,6 +153,8 @@ async def upload_artifact(
         row.definition_yaml = spec.definition_yaml
         row.sha256 = spec.sha256
         row.artifact_type = spec.artifact_type
+        row.supported_platforms = body.supported_platforms
+        row.selection_priority = body.selection_priority
 
     await _push_and_record(db, row, spec.definition_yaml)
     await append_audit(

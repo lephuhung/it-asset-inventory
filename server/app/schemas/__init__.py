@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
@@ -1643,6 +1643,15 @@ class VelociraptorArtifactUpload(BaseModel):
     """Nạp artifact definition YAML — Super Admin."""
 
     definition_yaml: str = Field(min_length=1, max_length=262_144)
+    supported_platforms: list[Literal["windows", "linux", "macos"]] = Field(
+        default_factory=lambda: ["windows"], min_length=1, max_length=3
+    )
+    selection_priority: int = Field(default=100, ge=0, le=1000)
+
+    @model_validator(mode="after")
+    def validate_supported_platforms(self) -> VelociraptorArtifactUpload:
+        self.supported_platforms = list(dict.fromkeys(self.supported_platforms))
+        return self
 
 
 class VelociraptorArtifactOut(BaseModel):
@@ -1653,6 +1662,8 @@ class VelociraptorArtifactOut(BaseModel):
     sha256: str
     artifact_type: str
     enabled: bool
+    supported_platforms: list[str]
+    selection_priority: int
     on_server: bool = False
     last_push_status: str | None = None
     last_push_error: str | None = None

@@ -83,6 +83,7 @@ async def test_failed_job_and_backend_callback_withhold_external_error_bodies(mo
         investigation_id="11111111-1111-1111-1111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={"from": "2026-01-01T00:00:00Z", "to": "2026-01-01T01:00:00Z"},
         suspicious_activity="Check read-only behavior",
         llm_runtime=LlmRuntime(
@@ -128,6 +129,7 @@ async def test_runner_none_job_summary_includes_timed_out_tool_count(capsys, mon
         investigation_id="11111111-1111-1111-1111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={"from": "2026-01-01T00:00:00Z", "to": "2026-01-01T01:00:00Z"},
         suspicious_activity="Read-only check",
         llm_runtime=LlmRuntime(

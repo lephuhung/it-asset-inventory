@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
 Confidence = Literal["high", "medium", "low"]
+Platform = Literal["windows", "linux", "macos"]
 
 # Constants for event log expansion constraints
 MAX_DETAIL_CALLS: int = 2
@@ -56,10 +57,11 @@ class CustomArtifactRef(BaseModel):
 
 
 class InvestigationRequest(BaseModel):
-    schema_version: Literal["dfir.deepagent.request/1.1"] = "dfir.deepagent.request/1.1"
+    schema_version: Literal["dfir.deepagent.request/1.2"] = "dfir.deepagent.request/1.2"
     investigation_id: UUID
     client_id: str = Field(min_length=3, max_length=64)
     hostname: str = Field(min_length=1, max_length=255)
+    target_platform: Platform
     time_range: TimeRange
     suspicious_activity: str = Field(min_length=1, max_length=4000)
     org_id: str | None = Field(default=None, max_length=128)

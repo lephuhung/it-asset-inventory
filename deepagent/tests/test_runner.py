@@ -53,6 +53,7 @@ async def test_runner_emits_progress_before_final_result(monkeypatch, capsys):
         investigation_id="11111111-1111-1111-1111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={
             "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "to": datetime.now(UTC).isoformat(),
@@ -120,6 +121,7 @@ async def test_runner_logs_safe_failed_job_summary(monkeypatch, capsys):
         investigation_id="11111111-1111-1111-1111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={
             "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "to": datetime.now(UTC).isoformat(),
@@ -189,6 +191,7 @@ async def test_runner_reports_event_log_triage_and_detail_progress(monkeypatch, 
         investigation_id="11111111-1111-1111-1111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={
             "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "to": datetime.now(UTC).isoformat(),
@@ -295,6 +298,7 @@ async def test_runner_job_summary_counts_timed_out_evidence_safely(monkeypatch, 
         investigation_id="11111111-1111-4111-8111-111111111111",
         client_id="C.test-client",
         hostname="TEST-HOST",
+        target_platform="windows",
         time_range={
             "from": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
             "to": datetime.now(UTC).isoformat(),

@@ -273,6 +273,50 @@ async def test_upload_pushes_persists_and_audits(
 
 
 @pytest.mark.asyncio
+async def test_upload_persists_platforms_and_priority(
+    client, seeded_env, session_factory, monkeypatch
+) -> None:
+    _patch_client(monkeypatch, FakeRouteClient())
+    headers = await _admin_headers(client, seeded_env)
+
+    response = await client.post(
+        "/api/admin/velociraptor/artifacts",
+        headers=headers,
+        json={
+            "definition_yaml": VALID_YAML,
+            "supported_platforms": ["windows", "linux"],
+            "selection_priority": 250,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["supported_platforms"] == ["windows", "linux"]
+    assert response.json()["selection_priority"] == 250
+    async with session_factory() as db:
+        row = await db.scalar(
+            select(VelociraptorArtifact).where(
+                VelociraptorArtifact.name == "Custom.Inventory.Test"
+            )
+        )
+        assert row is not None
+        assert row.supported_platforms == ["windows", "linux"]
+        assert row.selection_priority == 250
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_empty_or_unknown_platforms(client, seeded_env, monkeypatch) -> None:
+    _patch_client(monkeypatch, FakeRouteClient())
+    headers = await _admin_headers(client, seeded_env)
+    for platforms in ([], ["android"]):
+        response = await client.post(
+            "/api/admin/velociraptor/artifacts",
+            headers=headers,
+            json={"definition_yaml": VALID_YAML, "supported_platforms": platforms},
+        )
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_upload_push_failure_returns_502_and_marks_row(
     client, seeded_env, session_factory, monkeypatch
 ) -> None:
@@ -338,7 +382,7 @@ async def test_list_and_repush(client, seeded_env, session_factory, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_custom_artifact_refs_only_enabled_client_and_capped(session_factory) -> None:
+async def test_custom_artifact_refs_filter_by_platform_order_and_cap(session_factory) -> None:
     """Payload DeepAgent chỉ chứa artifact CLIENT + enabled, description ≤300 ký tự."""
     from app.services.dfir_investigation import _load_custom_artifact_refs
 
@@ -350,6 +394,8 @@ async def test_custom_artifact_refs_only_enabled_client_and_capped(session_facto
                 sha256="a" * 64,
                 artifact_type="CLIENT",
                 enabled=True,
+                supported_platforms=["windows"],
+                selection_priority=100,
             ),
             VelociraptorArtifact(
                 name="Custom.Test.Disabled",
@@ -357,6 +403,7 @@ async def test_custom_artifact_refs_only_enabled_client_and_capped(session_facto
                 sha256="b" * 64,
                 artifact_type="CLIENT",
                 enabled=False,
+                supported_platforms=["windows", "linux"],
             ),
             VelociraptorArtifact(
                 name="Custom.Test.ServerType",
@@ -364,6 +411,7 @@ async def test_custom_artifact_refs_only_enabled_client_and_capped(session_facto
                 sha256="c" * 64,
                 artifact_type="SERVER",
                 enabled=True,
+                supported_platforms=["linux"],
             ),
             VelociraptorArtifact(
                 name="Custom.Test.LongDesc",
@@ -371,14 +419,17 @@ async def test_custom_artifact_refs_only_enabled_client_and_capped(session_facto
                 sha256="d" * 64,
                 artifact_type="CLIENT",
                 enabled=True,
+                supported_platforms=["linux"],
+                selection_priority=500,
             ),
         ])
         await db.commit()
 
-        refs = await _load_custom_artifact_refs(db)
+        refs = await _load_custom_artifact_refs(db, "linux")
 
     names = [r["name"] for r in refs]
-    assert "Custom.Test.Enabled" in names
+    assert names == ["Custom.Test.LongDesc"]
+    assert "Custom.Test.Enabled" not in names
     assert "Custom.Test.Disabled" not in names
     assert "Custom.Test.ServerType" not in names
     long_ref = next(r for r in refs if r["name"] == "Custom.Test.LongDesc")

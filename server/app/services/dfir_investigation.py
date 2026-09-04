@@ -23,6 +23,7 @@ from app.db.models import (
     DfirInvestigationMessage,
     LlmConfig,
     Machine,
+    MachineCurrent,
     VelociraptorArtifact,
     VelociraptorConfig,
     VelociraptorLink,
@@ -48,7 +49,7 @@ class ExternalInvestigationNotFound(LlmError):
     """Investigation external không tồn tại."""
 
 
-async def _load_custom_artifact_refs(db: AsyncSession) -> list[dict]:
+async def _load_custom_artifact_refs(db: AsyncSession, target_platform: str) -> list[dict]:
     """Catalog artifact Custom.* (CLIENT, enabled) cho DeepAgent request payload.
 
     Description parse từ YAML đã lưu, cắt 300 ký tự — đúng hợp đồng
@@ -60,7 +61,11 @@ async def _load_custom_artifact_refs(db: AsyncSession) -> list[dict]:
                 select(VelociraptorArtifact)
                 .where(VelociraptorArtifact.enabled.is_(True))
                 .where(VelociraptorArtifact.artifact_type == "CLIENT")
-                .order_by(VelociraptorArtifact.name)
+                .where(VelociraptorArtifact.supported_platforms.contains([target_platform]))
+                .order_by(
+                    VelociraptorArtifact.selection_priority.desc(),
+                    VelociraptorArtifact.name,
+                )
                 .limit(20)
             )
         )
@@ -78,6 +83,27 @@ async def _load_custom_artifact_refs(db: AsyncSession) -> list[dict]:
             description = ""
         refs.append({"name": row.name, "description": description})
     return refs
+
+
+def _normalize_platform(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized == "darwin":
+        return "macos"
+    return normalized if normalized in {"windows", "linux", "macos"} else None
+
+
+async def _resolve_target_platform(db: AsyncSession, machine_id) -> str:
+    link = await db.scalar(
+        select(VelociraptorLink).where(VelociraptorLink.machine_id == machine_id)
+    )
+    platform = _normalize_platform((link.os_info or {}).get("system") if link else None)
+    if platform:
+        return platform
+    current = await db.get(MachineCurrent, machine_id)
+    platform = _normalize_platform(current.platform if current else None)
+    if platform:
+        return platform
+    raise LlmError("Không xác định được nền tảng hệ điều hành của máy điều tra")
 
 
 class ExternalCallbackConflict(LlmError):
@@ -456,6 +482,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         await db.execute(select(Machine).where(Machine.id == inv.machine_id))
     ).scalar_one_or_none()
     hostname = machine.hostname if machine and machine.hostname else str(inv.machine_id)
+    target_platform = await _resolve_target_platform(db, inv.machine_id)
     llm_cfg = await _load_llm_config(db)
     if not llm_cfg or not llm_cfg.enabled or not llm_cfg.base_url or not llm_cfg.model:
         raise LlmError("LLM runtime chưa được cấu hình")
@@ -476,16 +503,17 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     time_from = now - timedelta(hours=settings.deepagent_default_lookback_hours)
     expected_job_id = f"deepagent-{inv.id}"
     request_body = {
-        "schema_version": "dfir.deepagent.request/1.1",
+        "schema_version": "dfir.deepagent.request/1.2",
         "investigation_id": str(inv.id),
         "client_id": inv.velociraptor_client_id,
         "hostname": hostname,
+        "target_platform": target_platform,
         "time_range": {"from": time_from.isoformat(), "to": now.isoformat()},
         "suspicious_activity": inv.custom_instructions
         or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
         "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt},
         "velociraptor_api_client_yaml": api_client_yaml,
-        "custom_artifacts": await _load_custom_artifact_refs(db),
+        "custom_artifacts": await _load_custom_artifact_refs(db, target_platform),
     }
     inv.status = "analyzing"
     inv.external_job_id = expected_job_id

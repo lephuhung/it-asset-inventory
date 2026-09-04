@@ -74,6 +74,16 @@ BASELINE_TOOLS = (
     "windows_powershell_scriptblock",
 )
 
+
+def tool_policies_for(platform: str) -> dict[str, ToolPolicy]:
+    """Static bridge helpers allowed for a target platform.
+
+    Linux/macOS currently rely on the backend-filtered Custom.* catalog. Do not
+    offer Windows helpers to a different platform until equivalent typed bridge
+    policies are defined.
+    """
+    return WINDOWS_TOOL_POLICIES if platform == "windows" else {}
+
 # Prefix tool tổng hợp cho artifact Custom.* do backend ký phát trong request.
 # Model chỉ chọn theo tên; collect() resolve sang MCP collect_custom_artifact
 # với arguments khóa cứng (không parameters, không fields tự chọn).
@@ -85,10 +95,13 @@ def custom_tool_names(request) -> set[str]:
     return {CUSTOM_TOOL_PREFIX + ref.name for ref in request.custom_artifacts}
 
 
-def catalog_prompt(custom_artifacts=None) -> str:
+def catalog_prompt(platform: str, custom_artifacts=None) -> str:
     lines = [
-        f"- {name}: {policy.description}" for name, policy in WINDOWS_TOOL_POLICIES.items()
+        f"- {name}: {policy.description}"
+        for name, policy in tool_policies_for(platform).items()
     ]
+    if not lines:
+        lines.append("- Không có tool nền tảng cố định; chỉ chọn artifact Custom.* phù hợp.")
     if custom_artifacts:
         lines.append("")
         lines.append(
