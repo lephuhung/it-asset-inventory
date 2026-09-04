@@ -7,6 +7,7 @@ import { AuthProvider, useAuth } from "@/components/auth-context";
 import { RealtimeProvider, useRealtimeStatus } from "@/components/realtime-context";
 import { NotificationProvider, NotificationBell, NotificationToast } from "@/components/notification-bell";
 import { ComplianceGate } from "@/components/compliance-gate";
+import { PasswordChangeGate } from "@/components/password-change-gate";
 import { Sidebar } from "@/components/sidebar";
 import { UserInfo } from "@/components/user-info";
 import { Spinner } from "@/components/ui";
@@ -55,6 +56,12 @@ function Shell({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  // Đang dùng mật khẩu mặc định → chặn toàn bộ portal cho tới khi đổi mật khẩu
+  // (server cũng trả 403 PASSWORD_CHANGE_REQUIRED cho mọi API khác).
+  if (user.must_change_password) {
+    return <PasswordChangeGate />;
+  }
 
   return (
     <div className="flex h-dvh overflow-hidden">

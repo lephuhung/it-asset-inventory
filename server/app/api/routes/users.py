@@ -54,6 +54,8 @@ def _to_out(u: User) -> UserOut:
         is_active=u.is_active,
         created_at=u.created_at,
         org_name=u.org.name if u.org else None,
+        last_login_at=u.last_login_at,
+        must_change_password=u.must_change_password,
     )
 
 
@@ -64,6 +66,7 @@ async def list_users(
     org_id: uuid.UUID | None = None,
     role: str | None = None,
     q: str | None = None,
+    activated: bool | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
@@ -74,6 +77,9 @@ async def list_users(
         query = query.where(User.org_id == org_id)
     if role:
         query = query.where(User.role == role)
+    if activated is not None:
+        # activated=True → đã từng đăng nhập (kích hoạt); False → chưa đăng nhập lần nào
+        query = query.where(User.last_login_at.isnot(None) if activated else User.last_login_at.is_(None))
     if q:
         like = f"%{q}%"
         query = query.where(User.full_name.ilike(like) | User.email.ilike(like))
@@ -112,6 +118,8 @@ async def create_user(
         role=body.role,
         password_hash=hash_password(body.password),
         phone_encrypted=encrypt_phone(body.phone) if body.phone else None,
+        # Mật khẩu do admin cấp → user phải tự đổi ngay sau lần đăng nhập đầu
+        must_change_password=True,
     )
     db.add(user)
     await append_audit(
@@ -191,6 +199,8 @@ async def reset_password(
     if u is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Người dùng không tồn tại")
     u.password_hash = hash_password(body.new_password)
+    # Mật khẩu mới do admin đặt → buộc user tự đổi lại ở lần đăng nhập tới
+    u.must_change_password = True
     await append_audit(db, action="user.reset_password", actor=str(admin.id), target=str(u.id))
     await db.commit()
     return {"ok": True}

@@ -26,9 +26,9 @@ ADMIN_ROLES = {
 SUPER_ADMIN_ROLES = {UserRole.SUPER_ADMIN.value, UserRole.ADMIN_GLOBAL.value}
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: AsyncSession = Depends(get_db),
+async def _resolve_user_from_token(
+    credentials: HTTPAuthorizationCredentials | None,
+    db: AsyncSession,
 ) -> User:
     if credentials is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Thiếu token")
@@ -41,6 +41,30 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User không tồn tại hoặc bị khóa")
     return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Dependency mặc định — chặn user chưa đổi mật khẩu mặc định (403).
+
+    User có `must_change_password=True` (tài khoản seed / vừa được reset) chỉ được
+    phép gọi các endpoint dùng `get_current_user_allow_password_change` — buộc đổi
+    mật khẩu trước khi dùng bất kỳ chức năng nào khác.
+    """
+    user = await _resolve_user_from_token(credentials, db)
+    if user.must_change_password:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="PASSWORD_CHANGE_REQUIRED")
+    return user
+
+
+async def get_current_user_allow_password_change(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Cho phép user đang bị bắt đổi mật khẩu — chỉ dùng cho auth.me / change-password / logout."""
+    return await _resolve_user_from_token(credentials, db)
 
 
 def require_role(*roles: UserRole):

@@ -60,6 +60,7 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     requires_2fa: bool = False  # True khi user đã bật 2FA nhưng chưa nhập code
+    must_change_password: bool = False  # True = đang dùng MK mặc định → bắt buộc đổi ngay
 
 
 class TotpSetupResponse(BaseModel):
@@ -810,6 +811,7 @@ class UserOut(BaseModel):
     created_at: datetime
     org_name: str | None = None
     last_login_at: datetime | None = None
+    must_change_password: bool = False
 
 
 class UserCreateRequest(BaseModel):

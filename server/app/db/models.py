@@ -184,6 +184,10 @@ class User(Base):
     backup_codes: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # hash bcrypt, dùng 1 lần
     is_2fa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Lần đăng nhập thành công gần nhất — NULL nghĩa là chưa từng đăng nhập (chưa kích hoạt)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # True = đang dùng mật khẩu mặc định/được cấp → phải đổi mật khẩu ngay sau đăng nhập
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Telegram bot linking (mỗi user link 1 chat_id với account)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     telegram_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

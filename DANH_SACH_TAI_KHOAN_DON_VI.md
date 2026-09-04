@@ -14,7 +14,9 @@
   1. **Nhập Tên đăng nhập (Username):** Ví dụ `thachlac`, `skhcn`, `phuongthanhsen` (hệ thống có hỗ trợ alias viết tắt hoặc tên không dấu đầy đủ).
   2. **Nhập Email:** Ví dụ `thachlac@hatinh.gov.vn`, `skhcn@hatinh.gov.vn`.
 - **Mật khẩu khởi tạo:** `Hatinh@123`
-- *Khuyến nghị:* Sau lần đầu đăng nhập, quản trị viên đơn vị nên đổi mật khẩu hoặc kích hoạt xác thực 2 bước (2FA - TOTP) trong mục Cài đặt tài khoản.
+- **Bắt buộc đổi mật khẩu lần đầu:** Ngay sau khi đăng nhập bằng mật khẩu khởi tạo, hệ thống chặn mọi chức năng và yêu cầu đặt mật khẩu mới (tối thiểu 8 ký tự) trước khi sử dụng portal.
+- *Khuyến nghị:* Sau khi đổi mật khẩu, quản trị viên đơn vị nên kích hoạt xác thực 2 bước (2FA - TOTP) trong mục Cài đặt tài khoản.
+- *Theo dõi kích hoạt:* Super Admin xem trạng thái **Đã kích hoạt / Chưa kích hoạt** (tài khoản đã đăng nhập lần đầu hay chưa) và thời điểm đăng nhập gần nhất tại trang **Quản trị tài khoản**.
 
 ---
 

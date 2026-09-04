@@ -23,6 +23,9 @@ export interface SessionUser {
   role: UserRole;
   org_id: string;
   is_2fa_enabled: boolean;
+  /** True = đang dùng mật khẩu mặc định/được cấp → bắt buộc đổi trước khi dùng portal. */
+  must_change_password: boolean;
+  last_login_at?: string | null;
 }
 
 export interface LoginResponse {
@@ -30,6 +33,7 @@ export interface LoginResponse {
   refresh_token: string;
   token_type: string;
   requires_2fa: boolean;
+  must_change_password: boolean;
 }
 
 export interface TotpSetupResponse {
@@ -428,6 +432,9 @@ export interface ManagedUser {
   is_active: boolean;
   created_at: string;
   org_name: string | null;
+  /** Lần đăng nhập gần nhất — null = chưa kích hoạt. */
+  last_login_at: string | null;
+  must_change_password: boolean;
 }
 
 export interface UserCreatePayload {

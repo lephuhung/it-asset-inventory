@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
@@ -9,7 +10,7 @@ from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_user_allow_password_change
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
@@ -45,7 +46,11 @@ limiter = Limiter(key_func=get_remote_address)
 def _issue_tokens(user: User) -> LoginResponse:
     access = create_access_token(str(user.id), user.role, str(user.org_id))
     refresh = create_refresh_token(str(user.id))
-    return LoginResponse(access_token=access, refresh_token=refresh)
+    return LoginResponse(
+        access_token=access,
+        refresh_token=refresh,
+        must_change_password=user.must_change_password,
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -86,6 +91,8 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
             await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Mã 2FA không đúng")
 
+    # Đánh dấu kích hoạt: lần đăng nhập thành công gần nhất (sau khi qua 2FA nếu có)
+    user.last_login_at = datetime.now(UTC)
     await append_audit(db, action="auth.login", actor=str(user.id),
                        ip=get_client_ip(request))
     await db.commit()
@@ -106,7 +113,7 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me", response_model=dict)
-async def me(user: User = Depends(get_current_user)):
+async def me(user: User = Depends(get_current_user_allow_password_change)):
     return {
         "id": str(user.id),
         "email": user.email,
@@ -114,6 +121,8 @@ async def me(user: User = Depends(get_current_user)):
         "role": user.role,
         "org_id": str(user.org_id),
         "is_2fa_enabled": user.is_2fa_enabled,
+        "must_change_password": user.must_change_password,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
 
 
@@ -149,7 +158,7 @@ async def totp_confirm(
 
 
 @router.post("/logout")
-async def logout(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def logout(user: User = Depends(get_current_user_allow_password_change), db: AsyncSession = Depends(get_db)):
     await append_audit(db, action="auth.logout", actor=str(user.id))
     await db.commit()
     return {"ok": True}
@@ -158,7 +167,7 @@ async def logout(user: User = Depends(get_current_user), db: AsyncSession = Depe
 @router.post("/change-password")
 async def change_password(
     body: ChangePasswordRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_allow_password_change),
     db: AsyncSession = Depends(get_db),
 ):
     """User đổi mật khẩu của chính mình.
@@ -166,6 +175,7 @@ async def change_password(
     Yêu cầu mật khẩu hiện tại (chống chiếm đoạt phiên). Rate-limit theo IP
     (5/phút) để chống brute-force mật khẩu hiện tại.
     Ghi audit log với target=self để truy vết nếu nghi ngờ.
+    Đổi thành công sẽ gỡ cờ bắt buộc đổi mật khẩu (must_change_password).
     """
     if not verify_password(body.current_password, user.password_hash):
         raise HTTPException(
@@ -178,6 +188,7 @@ async def change_password(
             detail="Mật khẩu mới phải khác mật khẩu hiện tại",
         )
     user.password_hash = hash_password(body.new_password)
+    user.must_change_password = False
     await append_audit(db, action="auth.change_password", actor=str(user.id), target=str(user.id))
     await db.commit()
     return {"ok": True}
@@ -203,6 +214,8 @@ async def update_my_profile(
         "role": user.role,
         "org_id": str(user.org_id),
         "is_2fa_enabled": user.is_2fa_enabled,
+        "must_change_password": user.must_change_password,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
 
 

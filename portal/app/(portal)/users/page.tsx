@@ -72,6 +72,10 @@ export default function UsersPage() {
   const flatOrgs = useFlatOrgs(orgs);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Lọc trạng thái kích hoạt: "" = tất cả, "true" = đã đăng nhập, "false" = chưa đăng nhập
+  const [activated, setActivated] = useState<"" | "true" | "false">("");
+  // Tiến độ kích hoạt toàn hệ thống (không phụ thuộc bộ lọc đang chọn)
+  const [activationStats, setActivationStats] = useState<{ activated: number; total: number } | null>(null);
 
   // Form tạo user
   const [showCreate, setShowCreate] = useState(false);
@@ -95,16 +99,26 @@ export default function UsersPage() {
   const load = useCallback(async (silent = false, overrideOffset?: number) => {
     const useOffset = overrideOffset ?? offset;
     try {
-      const data = await api.get<PageResponse<ManagedUser>>("/users", { limit: 50, offset: useOffset });
+      const data = await api.get<PageResponse<ManagedUser>>("/users", {
+        limit: 50,
+        offset: useOffset,
+        activated: activated === "" ? undefined : activated === "true",
+      });
       setUsers(data.items);
       setPage(data);
       setError(null);
+      // 2 query limit=1 chỉ lấy total — nhẹ, cho biết tiến độ kích hoạt toàn hệ thống
+      const [allRes, activatedRes] = await Promise.all([
+        api.get<PageResponse<ManagedUser>>("/users", { limit: 1 }),
+        api.get<PageResponse<ManagedUser>>("/users", { limit: 1, activated: true }),
+      ]);
+      setActivationStats({ activated: activatedRes.total, total: allRes.total });
     } catch (e) {
       if (!silent) setError(e instanceof Error ? e.message : "Không tải được danh sách tài khoản");
     } finally {
       setLoading(false);
     }
-  }, [offset]);
+  }, [offset, activated]);
 
   useEffect(() => {
     void load();
@@ -175,6 +189,19 @@ export default function UsersPage() {
         description="Tạo tài khoản admin, cấp vai trò, đặt lại mật khẩu — chỉ Super Admin (mọi thao tác ghi audit log)"
         actions={
           <>
+            <Select
+              value={activated}
+              onChange={(e) => {
+                setActivated(e.target.value as "" | "true" | "false");
+                setOffset(0);
+              }}
+              className="w-44"
+              aria-label="Lọc trạng thái kích hoạt"
+            >
+              <option value="">Tất cả trạng thái</option>
+              <option value="true">Đã kích hoạt</option>
+              <option value="false">Chưa kích hoạt</option>
+            </Select>
             <Button variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
               <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} /> Nạp lại
             </Button>
@@ -186,6 +213,18 @@ export default function UsersPage() {
       />
 
       {error && <ErrorBanner message={error} onRetry={() => void load()} />}
+
+      {activationStats && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+          <span className="font-medium">Tiến độ kích hoạt tài khoản:</span>
+          <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
+            Đã kích hoạt: {activationStats.activated}
+          </Badge>
+          <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">
+            Chưa kích hoạt: {activationStats.total - activationStats.activated}
+          </Badge>
+        </div>
+      )}
 
       {loading && (users?.length ?? 0) === 0 ? (
         <Spinner label="Đang tải danh sách tài khoản…" />
@@ -205,6 +244,7 @@ export default function UsersPage() {
                   <th scope="col" className={TH}>Tổ chức</th>
                   <th scope="col" className={TH}>Vai trò</th>
                   <th scope="col" className={TH}>Trạng thái</th>
+                  <th scope="col" className={TH}>Kích hoạt</th>
                   <th scope="col" className={TH}>2FA</th>
                   <th scope="col" className={TH}>Tạo lúc</th>
                   <th scope="col" className={`${TH} text-right`}>Thao tác</th>
@@ -227,6 +267,21 @@ export default function UsersPage() {
                       ) : (
                         <Badge className="bg-rose-50 text-rose-700 ring-rose-600/20">Đã khóa</Badge>
                       )}
+                    </td>
+                    <td className={TD}>
+                      <div className="flex flex-col items-start gap-1">
+                        {u.last_login_at ? (
+                          <>
+                            <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">Đã kích hoạt</Badge>
+                            <p className="text-xs text-slate-400">{formatDateTime(u.last_login_at)}</p>
+                          </>
+                        ) : (
+                          <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">Chưa kích hoạt</Badge>
+                        )}
+                        {u.must_change_password && (
+                          <Badge className="bg-amber-50 text-amber-700 ring-amber-600/20">Cần đổi MK</Badge>
+                        )}
+                      </div>
                     </td>
                     <td className={TD}>
                       {u.is_2fa_enabled ? (

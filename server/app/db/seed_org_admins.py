@@ -263,12 +263,13 @@ async def seed_org_admins(
                 # Đã có admin với email khác
                 if reset_password:
                     existing_admin.password_hash = pwd_hash
+                    existing_admin.must_change_password = True
                     updated += 1
                 else:
                     skipped += 1
                 continue
 
-            # Tạo user quản trị mới
+            # Tạo user quản trị mới — mật khẩu mặc định → bắt buộc đổi ở lần đăng nhập đầu
             user = User(
                 org_id=org.id,
                 full_name=spec["full_name"],
@@ -276,6 +277,7 @@ async def seed_org_admins(
                 role=UserRole.ORG_ADMIN.value,
                 password_hash=pwd_hash,
                 is_active=True,
+                must_change_password=True,
             )
             db.add(user)
             created += 1
@@ -283,6 +285,7 @@ async def seed_org_admins(
             if reset_password:
                 existing_user.password_hash = pwd_hash
                 existing_user.is_active = True
+                existing_user.must_change_password = True
                 updated += 1
             else:
                 skipped += 1
