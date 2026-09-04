@@ -47,6 +47,44 @@ TO = datetime(2026, 6, 1, 11, 0, 0, tzinfo=UTC)
 REQUEST_RANGE = TimeRange(**{"from": FROM, "to": TO})
 
 
+def test_custom_artifact_ref_validates_namespace() -> None:
+    from deepagent.models import CustomArtifactRef
+
+    ref = CustomArtifactRef(name="Custom.Inventory.SmokeTest", description="mô tả")
+    assert ref.name.startswith("Custom.")
+
+    with pytest.raises(ValidationError):
+        CustomArtifactRef(name="Windows.System.Pslist")
+    with pytest.raises(ValidationError):
+        CustomArtifactRef(name="Custom.Bad Name!")
+    with pytest.raises(ValidationError):
+        CustomArtifactRef(name="Custom.X", description="x" * 301)
+
+
+def test_investigation_request_caps_custom_artifacts() -> None:
+    base = {
+        "investigation_id": "11111111-1111-4111-8111-111111111111",
+        "client_id": "C.test",
+        "hostname": "WS-01",
+        "time_range": {"from": FROM.isoformat(), "to": TO.isoformat()},
+        "suspicious_activity": "test",
+        "llm_runtime": {"base_url": "http://localhost:11434/v1", "api_key": "k", "model": "m"},
+        "velociraptor_api_client_yaml": "y" * 32,
+    }
+    ok = [f"Custom.A{i}" for i in range(20)]
+    request = InvestigationRequest(
+        **base,
+        custom_artifacts=[{"name": n, "description": ""} for n in ok],
+    )
+    assert len(request.custom_artifacts) == 20
+
+    with pytest.raises(ValidationError):
+        InvestigationRequest(
+            **base,
+            custom_artifacts=[{"name": n, "description": ""} for n in [*ok, "Custom.Overflow"]],
+        )
+
+
 def valid_expansion(event_id: str) -> dict:
     """Create a valid expansion dict for testing."""
     return {

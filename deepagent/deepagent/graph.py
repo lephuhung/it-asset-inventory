@@ -11,6 +11,7 @@ from deepagent.analysis_model import (
     sanitize_plan,
     validate_assessment_evidence,
 )
+from deepagent.catalog import custom_tool_names
 from deepagent.config import Settings
 from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
 from deepagent.models import (
@@ -84,7 +85,11 @@ def build_investigation_graph(
 
     async def plan(state: InvestigationState) -> dict:
         raw_plan = await model.plan(state["request"])
-        return {"plan": sanitize_plan(raw_plan, settings.max_steps)}
+        return {
+            "plan": sanitize_plan(
+                raw_plan, settings.max_steps, custom_tool_names(state["request"])
+            )
+        }
 
     async def collect_step(state: InvestigationState) -> dict:
         request = state["request"]
@@ -121,6 +126,7 @@ def build_investigation_graph(
                 org_id=request.org_id or settings.velociraptor_org_id,
                 time_from=request.time_range.from_,
                 time_to=request.time_range.to,
+                custom_names=custom_tool_names(request),
             )
             ok = bool(payload.get("ok"))
             item = EvidenceItem(
@@ -129,6 +135,7 @@ def build_investigation_graph(
                 collected_at=datetime.now(UTC),
                 ok=ok,
                 data=payload.get("data") if ok else None,
+                pagination=payload.get("pagination") if ok else None,
                 error=None if ok else _FAILED_ENVELOPE_ERROR,
             )
         except Exception as exc:  # noqa: BLE001 - một tool lỗi không làm mất bằng chứng khác

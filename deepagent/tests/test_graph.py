@@ -536,6 +536,29 @@ def test_validate_event_log_expansions_rejects_over_60_min() -> None:
     assert "window_exceeds_60_minutes" in rejections
 
 
+def test_sanitize_plan_keeps_only_signed_custom_tools() -> None:
+    """Custom tool chỉ sống sót sanitize khi có trong custom_names của request."""
+    from deepagent.models import InvestigationPlan
+
+    plan = InvestigationPlan(
+        hypothesis="h",
+        steps=[
+            {"tool": "custom:Custom.Inventory.SmokeTest", "rationale": "custom evidence"},
+            {"tool": "custom:Custom.Hallucinated.X", "rationale": "not signed"},
+            {"tool": "windows_pslist", "rationale": "static catalog"},
+        ],
+    )
+    sanitized = sanitize_plan(
+        plan, 6, custom_names={"custom:Custom.Inventory.SmokeTest"}
+    )
+    tools = [s.tool for s in sanitized.steps]
+    assert tools == ["custom:Custom.Inventory.SmokeTest", "windows_pslist"]
+
+    # Không truyền custom_names → mọi custom tool bị loại
+    sanitized_none = sanitize_plan(plan, 6)
+    assert [s.tool for s in sanitized_none.steps] == ["windows_pslist"]
+
+
 def test_fit_evidence_budget_respects_limit() -> None:
     """fit_evidence_budget should respect max_chars limit."""
     import json

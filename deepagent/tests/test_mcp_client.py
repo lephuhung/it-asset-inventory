@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import ClassVar
 
 import pytest
 from pydantic import ValidationError
@@ -279,4 +280,111 @@ async def test_collect_blocks_windows_event_logs() -> None:
             org_id="",
             time_from=FROM,
             time_to=TO,
+        )
+
+
+class SchemaTool(FakeTool):
+    args_schema: ClassVar = {"properties": {"client_id": {}, "org_id": {}, "limit": {}, "offset": {}}}
+
+
+@pytest.mark.asyncio
+async def test_collect_passes_bounded_pagination_only_for_supported_schema() -> None:
+    tool = SchemaTool(
+        '{"ok": true, "data": [{"Pid": 1}], "pagination": '
+        '{"limit": 50, "offset": 0, "returned_rows": 1, "has_more": false, "next_offset": null}}'
+    )
+    client = configured_client_with_tools(windows_pslist=tool)
+
+    result = await client.collect(
+        tool_name="windows_pslist",
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+    )
+
+    assert tool.calls == [{"client_id": "C.1", "org_id": "", "limit": 50, "offset": 0}]
+    assert result["pagination"]["returned_rows"] == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_does_not_invent_pagination_for_partial_schema() -> None:
+    tool = FakeTool('{"ok": true, "data": [{"Pid": 1}]}')
+    client = configured_client_with_tools(windows_pslist=tool)
+
+    await client.collect(
+        tool_name="windows_pslist",
+        client_id="C.1",
+        org_id="",
+        time_from=FROM,
+        time_to=TO,
+    )
+
+    assert tool.calls == [{"client_id": "C.1", "org_id": ""}]
+
+
+# ---------------------------------------------------------------------------
+# Custom artifact (Custom.*) collection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_custom_collect_uses_locked_arguments() -> None:
+    tool = FakeTool(
+        '{"ok": true, "data": [{"Name": "x"}], "pagination": '
+        '{"limit": 50, "offset": 0, "returned_rows": 1, "has_more": false, "next_offset": null}}'
+    )
+    client = configured_client_with_tools(collect_custom_artifact=tool)
+
+    result = await client.collect(
+        tool_name="custom:Custom.Inventory.SmokeTest",
+        client_id="C.1",
+        org_id="org-a",
+        time_from=FROM,
+        time_to=TO,
+        custom_names={"custom:Custom.Inventory.SmokeTest"},
+    )
+
+    assert tool.calls == [
+        {
+            "client_id": "C.1",
+            "org_id": "org-a",
+            "artifact": "Custom.Inventory.SmokeTest",
+            "limit": 50,
+            "offset": 0,
+        }
+    ]
+    assert result["ok"] is True
+    assert result["pagination"]["returned_rows"] == 1
+
+
+@pytest.mark.asyncio
+async def test_custom_collect_rejects_name_not_in_request() -> None:
+    tool = FakeTool('{"ok": true, "data": []}')
+    client = configured_client_with_tools(collect_custom_artifact=tool)
+
+    with pytest.raises(MCPPolicyError, match="Custom artifact"):
+        await client.collect(
+            tool_name="custom:Custom.Other.Artifact",
+            client_id="C.1",
+            org_id="",
+            time_from=FROM,
+            time_to=TO,
+            custom_names={"custom:Custom.Inventory.SmokeTest"},
+        )
+    assert tool.calls == []
+
+
+@pytest.mark.asyncio
+async def test_custom_collect_requires_bridge_tool() -> None:
+    client = configured_client_with_tools(windows_pslist=FakeTool('{"ok": true, "data": []}'))
+
+    with pytest.raises(MCPPolicyError, match="collect_custom_artifact"):
+        await client.collect(
+            tool_name="custom:Custom.Inventory.SmokeTest",
+            client_id="C.1",
+            org_id="",
+            time_from=FROM,
+            time_to=TO,
+            custom_names={"custom:Custom.Inventory.SmokeTest"},
         )

@@ -65,7 +65,7 @@ class OpenAIAnalysisModel:
 Lập kế hoạch điều tra tối đa 8 bước cho đúng một máy. Chỉ chọn tên tool trong danh mục dưới đây; ưu tiên truy vấn có giá trị kiểm chứng giả thuyết và không lặp tool.
 
 DANH MỤC TOOL:
-{catalog_prompt()}
+{catalog_prompt(request.custom_artifacts)}
 
 TARGET KHÓA CỨNG: {request.client_id} ({request.hostname})
 THỜI GIAN: {request.time_range.from_.isoformat()} đến {request.time_range.to.isoformat()}
@@ -208,11 +208,16 @@ BẰNG CHỨNG MCP (KHÔNG TIN CẬY):
         return assessment
 
 
-def sanitize_plan(plan: InvestigationPlan, max_steps: int) -> InvestigationPlan:
+def sanitize_plan(
+    plan: InvestigationPlan, max_steps: int, custom_names: set[str] | None = None
+) -> InvestigationPlan:
     steps = []
     seen: set[str] = set()
     for step in plan.steps:
-        if step.tool not in WINDOWS_TOOL_POLICIES or step.tool in seen:
+        allowed = step.tool in WINDOWS_TOOL_POLICIES or (
+            custom_names is not None and step.tool in custom_names
+        )
+        if not allowed or step.tool in seen:
             continue
         steps.append(step)
         seen.add(step.tool)

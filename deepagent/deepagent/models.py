@@ -43,6 +43,18 @@ class LlmRuntime(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=8000)
 
 
+class CustomArtifactRef(BaseModel):
+    """Một artifact Custom.* do backend ký phát trong request — model chỉ được
+    chọn theo tên, không được tự thêm artifact hay tham số."""
+
+    name: str = Field(
+        min_length=8,
+        max_length=255,
+        pattern=r"^Custom\.[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$",
+    )
+    description: str = Field(default="", max_length=300)
+
+
 class InvestigationRequest(BaseModel):
     schema_version: Literal["dfir.deepagent.request/1.1"] = "dfir.deepagent.request/1.1"
     investigation_id: UUID
@@ -53,6 +65,9 @@ class InvestigationRequest(BaseModel):
     org_id: str | None = Field(default=None, max_length=128)
     llm_runtime: LlmRuntime
     velociraptor_api_client_yaml: str = Field(min_length=32, max_length=256_000)
+    # Catalog động: artifact Custom.* (type CLIENT) đang enabled trên backend.
+    # Optional để tương thích ngược với backend cũ (schema giữ 1.1).
+    custom_artifacts: list[CustomArtifactRef] = Field(default_factory=list, max_length=20)
 
 
 class InvestigationStep(BaseModel):
@@ -71,9 +86,10 @@ class EvidenceItem(BaseModel):
     collected_at: datetime
     ok: bool
     data: object | None = None
+    pagination: dict[str, object] | None = None
     error: str | None = None
     # Explicit non-sensitive marker set when the MCP call hit its caller
-    # deadline. The runner uses it to compute `timed_out_tool_count` without
+    # deadline. The runner uses it to compute timed_out_tool_count without
     # matching external error strings, which may contain sensitive content.
     timeout: bool = False
 
@@ -319,6 +335,7 @@ def fit_evidence_budget(
                 collected_at=item.collected_at,
                 ok=item.ok,
                 data=new_data,
+                pagination=item.pagination,
                 error=item.error,
                 timeout=item.timeout,
             )
@@ -335,6 +352,7 @@ def fit_evidence_budget(
                     collected_at=item.collected_at,
                     ok=item.ok,
                     data={"truncated": True, "preview": preview},
+                    pagination=item.pagination,
                     error=item.error,
                     timeout=item.timeout,
                 )
@@ -349,6 +367,7 @@ def fit_evidence_budget(
                         collected_at=item.collected_at,
                         ok=item.ok,
                         data={"truncated": True, "preview": preview[:100] if preview else ""},
+                        pagination=item.pagination,
                         error=item.error,
                         timeout=item.timeout,
                     )
@@ -363,6 +382,7 @@ def fit_evidence_budget(
                         collected_at=item.collected_at,
                         ok=item.ok,
                         data={"truncated": True, "preview": f"{len(new_data)} fields truncated"},
+                        pagination=item.pagination,
                         error=item.error,
                         timeout=item.timeout,
                     )
@@ -379,6 +399,7 @@ def fit_evidence_budget(
                         collected_at=item.collected_at,
                         ok=item.ok,
                         data={"truncated": True, "preview": f"{len(new_data)} rows truncated"},
+                        pagination=item.pagination,
                         error=item.error,
                         timeout=item.timeout,
                     )
@@ -408,6 +429,7 @@ def fit_evidence_budget(
             collected_at=item.collected_at,
             ok=item.ok,
             data={"truncated": True, "preview": "data truncated due to budget"},
+            pagination=item.pagination,
             error=item.error,
             timeout=item.timeout,
         )
@@ -422,6 +444,7 @@ def fit_evidence_budget(
                 collected_at=item.collected_at,
                 ok=item.ok,
                 data=None,
+                pagination=item.pagination,
                 error=item.error,
                 timeout=item.timeout,
             )

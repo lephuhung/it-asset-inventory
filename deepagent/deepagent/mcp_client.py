@@ -9,9 +9,23 @@ from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from deepagent.catalog import WINDOWS_TOOL_POLICIES
+from deepagent.catalog import CUSTOM_TOOL_PREFIX, TOOL_CAPABILITIES, WINDOWS_TOOL_POLICIES
 from deepagent.config import Settings
 from deepagent.observability import log_event
+
+
+def _tool_accepts_argument(tool: Any, name: str) -> bool:
+    """Return whether the discovered MCP schema declares an argument."""
+    schema = getattr(tool, "args_schema", None) or getattr(tool, "input_schema", None)
+    if schema is None:
+        return False
+    fields = getattr(schema, "model_fields", None)
+    if isinstance(fields, Mapping):
+        return name in fields
+    if isinstance(schema, Mapping):
+        properties = schema.get("properties")
+        return isinstance(properties, Mapping) and name in properties
+    return False
 
 
 class MCPPolicyError(RuntimeError):
@@ -170,10 +184,13 @@ class VelociraptorMCP:
         serialized = json.dumps(data, ensure_ascii=False, default=str)
         truncated = isinstance(data, dict) and data.get("truncated") is True
         original_chars = data.get("original_chars") if truncated else len(serialized)
+        pagination = payload.get("pagination")
+        safe_pagination = pagination if isinstance(pagination, Mapping) else None
         return {
             "result_chars": original_chars,
             "result_truncated": truncated,
             "truncated_preview_chars": len(data.get("preview", "")) if truncated else None,
+            "pagination": dict(safe_pagination) if safe_pagination is not None else None,
         }
 
     def _log_tool_result(
@@ -232,9 +249,7 @@ class VelociraptorMCP:
             tool_name="list_clients",
             arguments={"search": "", "limit": 1, "org_id": self.settings.velociraptor_org_id},
         )
-        self._log_tool_result(
-            tool_name="list_clients", payload=payload, duration_ms=duration_ms
-        )
+        self._log_tool_result(tool_name="list_clients", payload=payload, duration_ms=duration_ms)
         if not payload.get("ok"):
             raise MCPPolicyError(str(payload.get("error") or "MCP list_clients thất bại"))
         data = payload.get("data")
@@ -253,12 +268,20 @@ class VelociraptorMCP:
         org_id: str | None,
         time_from: datetime,
         time_to: datetime,
+        limit: int = 50,
+        offset: int = 0,
+        custom_names: set[str] | None = None,
     ) -> dict[str, Any]:
+        if tool_name.startswith(CUSTOM_TOOL_PREFIX):
+            return await self._collect_custom(
+                tool_name=tool_name,
+                custom_names=custom_names or set(),
+                client_id=client_id,
+                org_id=org_id,
+            )
         policy = WINDOWS_TOOL_POLICIES.get(tool_name)
         if policy is None:
             raise MCPPolicyError(f"Tool bị chặn bởi allowlist: {tool_name}")
-        # F-4 fix: structurally reject windows_event_logs in generic collect.
-        # The only allowed access is through the typed triage/detail helpers.
         if tool_name == "windows_event_logs":
             raise MCPPolicyError(
                 "windows_event_logs must be accessed through typed helpers: "
@@ -268,15 +291,28 @@ class VelociraptorMCP:
         tool = tools.get(tool_name)
         if tool is None:
             raise MCPPolicyError(f"MCP không cung cấp tool: {tool_name}")
-
+        capability = TOOL_CAPABILITIES.get(tool_name)
         arguments: dict[str, Any] = {
             "client_id": client_id,
             "org_id": org_id or self.settings.velociraptor_org_id,
         }
-        if policy.uses_time_range:
+        uses_time_range = policy.uses_time_range or bool(
+            capability and capability.uses_time_range
+        )
+        if uses_time_range and _tool_accepts_argument(tool, "DateAfter") and _tool_accepts_argument(
+            tool, "DateBefore"
+        ):
             arguments["DateAfter"] = _iso_z(time_from)
             arguments["DateBefore"] = _iso_z(time_to)
-
+        pagination_supported = (
+            capability
+            and capability.paginated
+            and _tool_accepts_argument(tool, "limit")
+            and _tool_accepts_argument(tool, "offset")
+        )
+        if pagination_supported:
+            # Schema discovery is authoritative; never send unsupported args.
+            arguments.update(limit=min(max(limit, 1), 50), offset=max(offset, 0))
         payload, duration_ms = await self._invoke_tool(
             tool=tool, tool_name=tool_name, arguments=arguments
         )
@@ -288,9 +324,49 @@ class VelociraptorMCP:
                 "original_chars": len(serialized),
                 "preview": serialized[: self.settings.max_tool_result_chars],
             }
-        self._log_tool_result(
-            tool_name=tool_name, payload=payload, duration_ms=duration_ms
+        self._log_tool_result(tool_name=tool_name, payload=payload, duration_ms=duration_ms)
+        return payload
+
+    async def _collect_custom(
+        self,
+        *,
+        tool_name: str,
+        custom_names: set[str],
+        client_id: str,
+        org_id: str | None,
+    ) -> dict[str, Any]:
+        """Collect một artifact Custom.* qua bridge tool `collect_custom_artifact`.
+
+        Artifact name phải thuộc danh sách backend ký phát trong request
+        (``custom_names``); arguments khóa cứng — model không thể đặt parameters,
+        fields hay pagination.
+        """
+        if tool_name not in custom_names:
+            raise MCPPolicyError(f"Custom artifact không có trong request: {tool_name}")
+        artifact = tool_name[len(CUSTOM_TOOL_PREFIX):]
+        tools = await self._load_tools()
+        tool = tools.get("collect_custom_artifact")
+        if tool is None:
+            raise MCPPolicyError("MCP không cung cấp tool collect_custom_artifact")
+        arguments: dict[str, Any] = {
+            "client_id": client_id,
+            "org_id": org_id or self.settings.velociraptor_org_id,
+            "artifact": artifact,
+            "limit": 50,
+            "offset": 0,
+        }
+        payload, duration_ms = await self._invoke_tool(
+            tool=tool, tool_name=tool_name, arguments=arguments
         )
+        data = payload.get("data")
+        serialized = json.dumps(data, ensure_ascii=False, default=str)
+        if len(serialized) > self.settings.max_tool_result_chars:
+            payload["data"] = {
+                "truncated": True,
+                "original_chars": len(serialized),
+                "preview": serialized[: self.settings.max_tool_result_chars],
+            }
+        self._log_tool_result(tool_name=tool_name, payload=payload, duration_ms=duration_ms)
         return payload
 
     # -------------------------------------------------------------------------
