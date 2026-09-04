@@ -1,0 +1,13 @@
+diff --git a/deepagent/deepagent/mcp_client.py b/deepagent/deepagent/mcp_client.py
+index ec81cee..bf49af7 100644
+--- a/deepagent/deepagent/mcp_client.py
++++ b/deepagent/deepagent/mcp_client.py
+@@ -9,7 +9,7 @@ from typing import Any
+ 
+ from langchain_mcp_adapters.client import MultiServerMCPClient
+ 
+-from deepagent.catalog import WINDOWS_TOOL_POLICIES
++from deepagent.catalog import WINDOWS_TOOL_POLICIES, TOOL_CAPABILITIES
+ from deepagent.config import Settings
+ from deepagent.observability import log_event
+ 

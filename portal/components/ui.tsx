@@ -158,8 +158,8 @@ export function KpiCard({
 }) {
   const [showHint, setShowHint] = useState(false);
   return (
-    <div className="kpi-card flex h-24 flex-col justify-between p-4">
-      <div className="flex items-center justify-between">
+    <div className="kpi-card flex min-h-[108px] h-full flex-col justify-between p-3.5 sm:p-4">
+      <div className="flex items-start justify-between gap-2">
         <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-400">
           {label}
           {hint && (
@@ -189,11 +189,11 @@ export function KpiCard({
             </span>
           )}
         </p>
-        <span className={`flex size-7 items-center justify-center rounded-lg ${accent}`}>{icon}</span>
+        <span className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${accent}`}>{icon}</span>
       </div>
-      <div>
-        <p className="text-2xl font-bold tabular-nums text-slate-900">{value}</p>
-        {sub && <p className="mt-0.5 text-[11px] text-slate-400">{sub}</p>}
+      <div className="mt-2">
+        <p className="text-2xl font-bold leading-tight tabular-nums text-slate-900">{value}</p>
+        {sub && <p className="mt-1 text-[11px] leading-snug text-slate-400">{sub}</p>}
       </div>
     </div>
   );

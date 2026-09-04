@@ -57,15 +57,21 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     ],
   },
   {
-    group: "Quản lý tài sản",
+    group: "Quản lý máy tính",
     items: [
-      { href: "/machines", label: "Assets", icon: Monitor },
-      { href: "/approvals", label: "Chờ duyệt", icon: ClipboardCheck, roles: ADMIN_ROLES },
+      { href: "/machines", label: "Máy tính", icon: Monitor },
+      { href: "/approvals", label: "Máy chờ duyệt", icon: ClipboardCheck, roles: ADMIN_ROLES },
       { href: "/ghost-machines", label: "Máy mất kết nối", icon: Ghost },
       {
         href: "/tokens",
         label: "Thêm máy mới",
         icon: Ticket,
+        roles: ADMIN_ROLES,
+      },
+      {
+        href: "/offline-import",
+        label: "Thêm máy BMNN",
+        icon: HardDriveDownload,
         roles: ADMIN_ROLES,
       },
     ],
@@ -93,12 +99,6 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
       { href: "/inventory-stats", label: "Thống kê cấu hình", icon: BarChart3 },
       { href: "/llm-dfir/stats", label: "Điều tra AI", icon: Brain, roles: ADMIN_ROLES },
       { href: "/eol", label: "Windows hết hỗ trợ", icon: CalendarClock },
-      {
-        href: "/offline-import",
-        label: "Máy BMNN — Import",
-        icon: HardDriveDownload,
-        roles: ADMIN_ROLES,
-      },
     ],
   },
   {

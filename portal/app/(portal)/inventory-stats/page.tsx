@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   AppWindow,
+  BarChart3,
   Cpu,
   Flame,
+  List,
   MemoryStick,
   Monitor,
   RefreshCcw,
@@ -98,32 +100,6 @@ export default function InventoryStatsPage() {
       antivirusOn: bucketValue(arr(data.by_antivirus), "true"),
     };
   }, [data]);
-
-  // Bản đồ tên hiển thị cho từng nhóm OS (đồng bộ với backend)
-  const OS_LABELS: Record<string, string> = {
-    windows_11: "Windows 11",
-    windows_10: "Windows 10",
-    windows_server_2022: "Windows Server 2022",
-    windows_server_2019: "Windows Server 2019",
-    windows_server_2016: "Windows Server 2016",
-    windows_server_other: "Windows Server (khác)",
-    linux: "Linux",
-    macos: "macOS",
-    other: "Khác",
-  };
-
-  const UPDATE_STATUS_LABELS: Record<string, string> = {
-    "up-to-date": "Đã cập nhật",
-    pending: "Có bản chờ cài",
-    paused: "Tạm dừng",
-    unknown: "Không xác định",
-  };
-
-  const BITLOCKER_LABELS: Record<string, string> = {
-    on: "Đang bật",
-    off: "Đã tắt",
-    unknown: "Không xác định",
-  };
 
   return (
     <div>
@@ -268,50 +244,7 @@ export default function InventoryStatsPage() {
 
           {/* Hàng 2: Bảo mật */}
           <div className="mt-5 grid gap-5 lg:grid-cols-2">
-            <Card title="Bảo mật máy trạm" subtitle="Firewall · Windows Update · Antivirus · BitLocker" padded={false}>
-              <div className="divide-y divide-slate-100">
-                <SecurityRow
-                  label="Firewall Windows"
-                  icon={<Shield className="size-4 text-sky-600" />}
-                  buckets={arr(data.by_firewall)}
-                  total={data.total_machines}
-                  valueLabels={{ true: "Bật", false: "Tắt", unknown: "Chưa rõ" }}
-                  tone={{ true: "good", false: "bad", unknown: "muted" }}
-                />
-                <SecurityRow
-                  label="Auto Windows Update"
-                  icon={<ShieldCheck className="size-4 text-emerald-600" />}
-                  buckets={arr(data.by_windows_update_enabled)}
-                  total={data.total_machines}
-                  valueLabels={{ true: "Đang bật", false: "Đã tắt", unknown: "Chưa rõ" }}
-                  tone={{ true: "good", false: "bad", unknown: "muted" }}
-                />
-                <SecurityRow
-                  label="Trạng thái Windows Update"
-                  icon={<Shield className="size-4 text-amber-600" />}
-                  buckets={arr(data.by_windows_update_status)}
-                  total={data.total_machines}
-                  valueLabels={UPDATE_STATUS_LABELS}
-                  tone={{ "up-to-date": "good", pending: "warn", paused: "warn", unknown: "muted" }}
-                />
-                <SecurityRow
-                  label="Antivirus"
-                  icon={<ShieldCheck className="size-4 text-violet-600" />}
-                  buckets={arr(data.by_antivirus)}
-                  total={data.total_machines}
-                  valueLabels={{ true: "Đang bật", false: "Đã tắt", unknown: "Chưa rõ" }}
-                  tone={{ true: "good", false: "bad", unknown: "muted" }}
-                />
-                <SecurityRow
-                  label="BitLocker"
-                  icon={<Flame className="size-4 text-rose-600" />}
-                  buckets={arr(data.by_bitlocker)}
-                  total={data.total_machines}
-                  valueLabels={BITLOCKER_LABELS}
-                  tone={{ on: "good", off: "bad", unknown: "muted" }}
-                />
-              </div>
-            </Card>
+            <SecurityCard data={data} total={data.total_machines} />
 
             <BucketCard
               title="Máy ảo / Vật lý"
@@ -544,6 +477,293 @@ function BucketCard({
   );
 }
 
+/* Bản đồ tên hiển thị cho từng nhóm OS & bảo mật (đồng bộ với backend) */
+const OS_LABELS: Record<string, string> = {
+  windows_11: "Windows 11",
+  windows_10: "Windows 10",
+  windows_server_2022: "Windows Server 2022",
+  windows_server_2019: "Windows Server 2019",
+  windows_server_2016: "Windows Server 2016",
+  windows_server_other: "Windows Server (khác)",
+  linux: "Linux",
+  macos: "macOS",
+  other: "Khác",
+};
+
+const UPDATE_STATUS_LABELS: Record<string, string> = {
+  "up-to-date": "Đã cập nhật",
+  pending: "Có bản chờ cài",
+  paused: "Tạm dừng",
+  unknown: "Không xác định",
+};
+
+const BITLOCKER_LABELS: Record<string, string> = {
+  on: "Đang bật",
+  off: "Đã tắt",
+  unknown: "Không xác định",
+};
+
+function SecurityCard({
+  data,
+  total,
+}: {
+  data: InventoryStatsResponse;
+  total: number;
+}) {
+  const [viewMode, setViewMode] = useState<"chart" | "list">("chart");
+
+  const categories = useMemo(() => {
+    return [
+      {
+        id: "firewall",
+        shortLabel: "Firewall",
+        label: "Firewall Windows",
+        icon: <Shield className="size-3.5 text-sky-600" />,
+        columns: [
+          { key: "on", label: "Đang bật", count: bucketValue(arr(data.by_firewall), "true"), tone: "good" as const },
+          { key: "off", label: "Đã tắt", count: bucketValue(arr(data.by_firewall), "false"), tone: "bad" as const },
+          { key: "unknown", label: "Chưa rõ", count: bucketValue(arr(data.by_firewall), "unknown"), tone: "muted" as const },
+        ],
+      },
+      {
+        id: "update_enabled",
+        shortLabel: "Auto Update",
+        label: "Tự động cập nhật OS",
+        icon: <ShieldCheck className="size-3.5 text-emerald-600" />,
+        columns: [
+          { key: "on", label: "Đang bật", count: bucketValue(arr(data.by_windows_update_enabled), "true"), tone: "good" as const },
+          { key: "off", label: "Đã tắt", count: bucketValue(arr(data.by_windows_update_enabled), "false"), tone: "bad" as const },
+          { key: "unknown", label: "Chưa rõ", count: bucketValue(arr(data.by_windows_update_enabled), "unknown"), tone: "muted" as const },
+        ],
+      },
+      {
+        id: "update_status",
+        shortLabel: "TT Update",
+        label: "Trạng thái Windows Update",
+        icon: <Shield className="size-3.5 text-amber-600" />,
+        columns: [
+          { key: "up-to-date", label: "Đã cập nhật", count: bucketValue(arr(data.by_windows_update_status), "up-to-date"), tone: "good" as const },
+          { key: "pending", label: "Chờ cài / Tạm dừng", count: bucketValue(arr(data.by_windows_update_status), "pending") + bucketValue(arr(data.by_windows_update_status), "paused"), tone: "warn" as const },
+          { key: "unknown", label: "Chưa rõ", count: bucketValue(arr(data.by_windows_update_status), "unknown"), tone: "muted" as const },
+        ],
+      },
+      {
+        id: "antivirus",
+        shortLabel: "Antivirus",
+        label: "Phần mềm diệt virus",
+        icon: <ShieldCheck className="size-3.5 text-violet-600" />,
+        columns: [
+          { key: "on", label: "Đang bật", count: bucketValue(arr(data.by_antivirus), "true"), tone: "good" as const },
+          { key: "off", label: "Đã tắt", count: bucketValue(arr(data.by_antivirus), "false"), tone: "bad" as const },
+          { key: "unknown", label: "Chưa rõ", count: bucketValue(arr(data.by_antivirus), "unknown"), tone: "muted" as const },
+        ],
+      },
+      {
+        id: "bitlocker",
+        shortLabel: "BitLocker",
+        label: "Mã hóa BitLocker",
+        icon: <Flame className="size-3.5 text-rose-600" />,
+        columns: [
+          { key: "on", label: "Đang bật", count: bucketValue(arr(data.by_bitlocker), "on"), tone: "good" as const },
+          { key: "off", label: "Đã tắt", count: bucketValue(arr(data.by_bitlocker), "off"), tone: "bad" as const },
+          { key: "unknown", label: "Chưa rõ", count: bucketValue(arr(data.by_bitlocker), "unknown"), tone: "muted" as const },
+        ],
+      },
+    ];
+  }, [data]);
+
+  const maxVal = Math.max(1, total);
+
+  return (
+    <Card
+      title="Bảo mật máy trạm"
+      subtitle="Firewall · Windows Update · Antivirus · BitLocker"
+      padded={false}
+      actions={
+        <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium text-slate-600">
+          <button
+            type="button"
+            onClick={() => setViewMode("chart")}
+            className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 transition-all ${
+              viewMode === "chart"
+                ? "bg-white font-semibold text-slate-900 shadow-xs ring-1 ring-slate-200"
+                : "text-slate-500 hover:text-slate-900"
+            }`}
+          >
+            <BarChart3 className="size-3.5" />
+            Biểu đồ cột
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 transition-all ${
+              viewMode === "list"
+                ? "bg-white font-semibold text-slate-900 shadow-xs ring-1 ring-slate-200"
+                : "text-slate-500 hover:text-slate-900"
+            }`}
+          >
+            <List className="size-3.5" />
+            Danh sách
+          </button>
+        </div>
+      }
+    >
+      {viewMode === "chart" ? (
+        <div className="p-4 sm:p-5">
+          {/* Legend */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <span className="text-xs text-slate-500">
+              3 cột tương ứng 3 trạng thái cho mỗi loại
+            </span>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <div className="flex items-center gap-1.5">
+                <span className="size-2.5 rounded-xs bg-emerald-500" />
+                <span className="font-medium text-slate-600">Bật / Đã cập nhật</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="size-2.5 rounded-xs bg-rose-500" />
+                <span className="font-medium text-slate-600">Tắt / Chờ cài</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="size-2.5 rounded-xs bg-slate-300" />
+                <span className="font-medium text-slate-600">Chưa rõ</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Chart Graphic */}
+          <div className="relative pt-3">
+            {/* Guide lines (100%, 50%, 0%) */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-14 top-3 flex flex-col justify-between text-[10px] text-slate-400">
+              <div className="flex items-center gap-2 border-b border-dashed border-slate-200/70 pb-0.5">
+                <span className="tabular-nums font-mono opacity-50">{maxVal}</span>
+              </div>
+              <div className="flex items-center gap-2 border-b border-dashed border-slate-200/70 pb-0.5">
+                <span className="tabular-nums font-mono opacity-50">{Math.round(maxVal / 2)}</span>
+              </div>
+              <div className="flex items-center gap-2 border-b border-slate-200 pb-0.5">
+                <span className="tabular-nums font-mono opacity-50">0</span>
+              </div>
+            </div>
+
+            {/* Grouped Columns Grid (5 categories, 3 bars each) */}
+            <div className="relative grid grid-cols-5 gap-1.5 sm:gap-3 pl-5">
+              {categories.map((cat) => (
+                <div key={cat.id} className="flex flex-col items-center">
+                  {/* Vertical columns container */}
+                  <div className="flex h-40 w-full items-end justify-center gap-1 sm:gap-1.5 pb-0.5">
+                    {cat.columns.map((col, idx) => {
+                      const pct = maxVal > 0 ? (col.count / maxVal) * 100 : 0;
+                      const hasCount = col.count > 0;
+                      const bgClass =
+                        col.tone === "good"
+                          ? "bg-emerald-500 hover:bg-emerald-600"
+                          : col.tone === "bad"
+                            ? "bg-rose-500 hover:bg-rose-600"
+                            : col.tone === "warn"
+                              ? "bg-amber-500 hover:bg-amber-600"
+                              : "bg-slate-300 hover:bg-slate-400";
+
+                      return (
+                        <div
+                          key={idx}
+                          className="group relative flex h-full flex-1 max-w-[22px] flex-col items-center justify-end"
+                        >
+                          {/* Hover Tooltip */}
+                          <div className="pointer-events-none absolute bottom-full mb-2 hidden z-30 whitespace-nowrap rounded-lg bg-slate-900 px-2.5 py-1.5 text-left text-xs font-normal text-white shadow-xl group-hover:block">
+                            <p className="font-semibold text-slate-100">{cat.label}</p>
+                            <p className="text-[11px] text-slate-300">
+                              {col.label}: <b className="text-white">{col.count}</b> máy (
+                              {maxVal > 0 ? ((col.count / maxVal) * 100).toFixed(0) : 0}%)
+                            </p>
+                          </div>
+
+                          {/* Value on top of bar */}
+                          <span
+                            className={`mb-1 text-[10px] sm:text-[11px] tabular-nums transition-colors ${
+                              hasCount ? "font-bold text-slate-700" : "font-medium text-slate-400"
+                            }`}
+                          >
+                            {col.count}
+                          </span>
+
+                          {/* Column Bar: khi = 0 hiển thị vạch màu nhỏ 3px để đồng bộ */}
+                          <div
+                            className={`w-full transition-all duration-500 ${bgClass} ${
+                              hasCount ? "rounded-t" : "rounded-t-xs opacity-60"
+                            }`}
+                            style={{ height: hasCount ? `${Math.max(6, pct)}%` : "3.5px" }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Baseline border */}
+                  <div className="mt-0.5 w-full border-t border-slate-200" />
+
+                  {/* X-axis Category Label */}
+                  <div className="mt-2.5 flex flex-col items-center text-center">
+                    <span className="mb-1 flex size-6 items-center justify-center rounded-md bg-slate-100 text-slate-600 shadow-2xs">
+                      {cat.icon}
+                    </span>
+                    <span className="text-[11px] sm:text-xs font-semibold text-slate-800 leading-tight truncate max-w-full">
+                      {cat.shortLabel}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          <SecurityRow
+            label="Firewall Windows"
+            icon={<Shield className="size-4 text-sky-600" />}
+            buckets={arr(data.by_firewall)}
+            total={data.total_machines}
+            valueLabels={{ true: "Bật", false: "Tắt", unknown: "Chưa rõ" }}
+            tone={{ true: "good", false: "bad", unknown: "muted" }}
+          />
+          <SecurityRow
+            label="Auto Windows Update"
+            icon={<ShieldCheck className="size-4 text-emerald-600" />}
+            buckets={arr(data.by_windows_update_enabled)}
+            total={data.total_machines}
+            valueLabels={{ true: "Đang bật", false: "Đã tắt", unknown: "Chưa rõ" }}
+            tone={{ true: "good", false: "bad", unknown: "muted" }}
+          />
+          <SecurityRow
+            label="Trạng thái Windows Update"
+            icon={<Shield className="size-4 text-amber-600" />}
+            buckets={arr(data.by_windows_update_status)}
+            total={data.total_machines}
+            valueLabels={UPDATE_STATUS_LABELS}
+            tone={{ "up-to-date": "good", pending: "warn", paused: "warn", unknown: "muted" }}
+          />
+          <SecurityRow
+            label="Antivirus"
+            icon={<ShieldCheck className="size-4 text-violet-600" />}
+            buckets={arr(data.by_antivirus)}
+            total={data.total_machines}
+            valueLabels={{ true: "Đang bật", false: "Đã tắt", unknown: "Chưa rõ" }}
+            tone={{ true: "good", false: "bad", unknown: "muted" }}
+          />
+          <SecurityRow
+            label="BitLocker"
+            icon={<Flame className="size-4 text-rose-600" />}
+            buckets={arr(data.by_bitlocker)}
+            total={data.total_machines}
+            valueLabels={BITLOCKER_LABELS}
+            tone={{ on: "good", off: "bad", unknown: "muted" }}
+          />
+        </div>
+      )}
+    </Card>
+  );
+}
+
 type SecurityTone = "good" | "warn" | "bad" | "muted";
 
 function SecurityRow({
@@ -563,79 +783,108 @@ function SecurityRow({
 }) {
   const safeTotal = Math.max(1, total);
   const safeBuckets = Array.isArray(buckets) ? buckets : [];
-  const sortedKeys = Object.keys(valueLabels).filter((k) =>
+  let sortedKeys = Object.keys(valueLabels).filter((k) =>
     safeBuckets.some((b) => b.key === k),
   );
   // bổ sung key có trong buckets nhưng chưa khai báo trong valueLabels (defensive)
   for (const b of safeBuckets) {
     if (!sortedKeys.includes(b.key)) sortedKeys.push(b.key);
   }
+  if (sortedKeys.length === 0) {
+    sortedKeys = Object.keys(valueLabels);
+  }
+
+  const hasData = safeBuckets.some((b) => b.count > 0);
 
   return (
-    <div className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-1 px-5 py-4 sm:grid-cols-[180px_1fr_auto] sm:items-center">
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-slate-100">{icon}</span>
-        {label}
+    <div className="p-4 transition-colors hover:bg-slate-50/50 sm:px-5 sm:py-4">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-2.5 text-sm font-medium text-slate-800">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+            {icon}
+          </span>
+          {label}
+        </div>
+        <span className="text-xs tabular-nums text-slate-400">
+          Tổng <b className="font-semibold text-slate-600">{total}</b> máy
+        </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        {sortedKeys.length === 0 ? (
-          <span className="text-xs text-slate-400">Chưa có dữ liệu</span>
+      {/* Thanh tiến trình phân đoạn trải đều 100% chiều rộng */}
+      <div
+        className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200/50"
+        role="progressbar"
+        aria-label={label}
+      >
+        {!hasData ? (
+          <div className="h-full w-full bg-slate-200" title="Chưa có dữ liệu" />
         ) : (
           sortedKeys.map((k) => {
             const cnt = safeBuckets.find((b) => b.key === k)?.count ?? 0;
+            if (cnt === 0) return null;
             const pct = (cnt / safeTotal) * 100;
             const t = tone[k] ?? "muted";
             const meta = SECURITY_TONE_META[t];
             return (
-              <div key={k} className="flex items-center gap-1.5 text-xs">
-                <Badge className={meta.badge}>{valueLabels[k] ?? prettifyUnknown(k)}</Badge>
-                <span className="tabular-nums font-semibold text-slate-700">{cnt}</span>
-                <span className="text-slate-400 tabular-nums">({pct.toFixed(0)}%)</span>
-              </div>
+              <div
+                key={k}
+                className={`h-full transition-all duration-500 ${meta.bar}`}
+                style={{ width: `${pct}%` }}
+                title={`${valueLabels[k] ?? k}: ${cnt} (${pct.toFixed(pct < 10 ? 1 : 0)}%)`}
+              />
             );
           })
         )}
       </div>
 
-      <div className="col-span-2 mt-1 sm:col-span-1 sm:mt-0">
-        <div className="flex h-2 w-32 overflow-hidden rounded-full bg-slate-100 sm:w-40">
-          {sortedKeys.map((k) => {
+      {/* Danh sách nhãn trạng thái đặt bên dưới thanh tiến trình */}
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 sm:gap-2">
+        {sortedKeys.length === 0 ? (
+          <span className="text-xs text-slate-400">Chưa có dữ liệu</span>
+        ) : (
+          sortedKeys.map((k) => {
             const cnt = safeBuckets.find((b) => b.key === k)?.count ?? 0;
-            if (cnt === 0) return null;
-            const pct = (cnt / safeTotal) * 100;
+            const pct = safeTotal > 0 ? (cnt / safeTotal) * 100 : 0;
             const t = tone[k] ?? "muted";
+            const meta = SECURITY_TONE_META[t];
             return (
-              <div
+              <span
                 key={k}
-                className={SECURITY_TONE_META[t].bar}
-                style={{ width: `${pct}%` }}
-                title={`${valueLabels[k] ?? k}: ${cnt} (${pct.toFixed(0)}%)`}
-              />
+                className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${meta.badge}`}
+              >
+                <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} />
+                <span>{valueLabels[k] ?? prettifyUnknown(k)}</span>
+                <span className="font-bold tabular-nums">{cnt}</span>
+                <span className="text-[11px] opacity-75 tabular-nums">({pct.toFixed(pct < 10 ? 1 : 0)}%)</span>
+              </span>
             );
-          })}
-        </div>
+          })
+        )}
       </div>
     </div>
   );
 }
 
-const SECURITY_TONE_META: Record<SecurityTone, { badge: string; bar: string }> = {
+const SECURITY_TONE_META: Record<SecurityTone, { badge: string; bar: string; dot: string }> = {
   good: {
     badge: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
     bar: "bg-emerald-500",
+    dot: "bg-emerald-500",
   },
   warn: {
     badge: "bg-amber-50 text-amber-700 ring-amber-600/20",
     bar: "bg-amber-500",
+    dot: "bg-amber-500",
   },
   bad: {
     badge: "bg-rose-50 text-rose-700 ring-rose-600/20",
     bar: "bg-rose-500",
+    dot: "bg-rose-500",
   },
   muted: {
-    badge: "bg-slate-100 text-slate-500 ring-slate-500/20",
+    badge: "bg-slate-100 text-slate-600 ring-slate-500/20",
     bar: "bg-slate-300",
+    dot: "bg-slate-400",
   },
 };
 
