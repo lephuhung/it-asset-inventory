@@ -5,13 +5,10 @@ Hệ thống quản lý tài sản CNTT theo mô hình **Agent – Server**, dù
 > **Đơn vị phát triển:** Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh.
 
 ## Tổng quan
-
 Repository này là monorepo gồm ba thành phần chính:
-
 - **API Server:** FastAPI, PostgreSQL, Redis, Alembic; cung cấp API cho agent và portal.
 - **Portal quản trị:** Next.js App Router, TypeScript, React và Tailwind CSS; sử dụng mô hình BFF để giữ JWT trong cookie `httpOnly`.
 - **Agent:** .NET 8 cho Windows Service và Linux systemd; thu thập dữ liệu theo hướng read-only, hỗ trợ mTLS, lưu tạm khi mất mạng và đồng bộ cấu hình từ server.
-
 ```mermaid
 flowchart LR
     WA[Windows Agent] -->|enroll, mTLS, heartbeat, inventory| NX[nginx]
@@ -23,8 +20,71 @@ flowchart LR
     API -. tùy chọn .-> VR[Velociraptor]
     API -. tùy chọn .-> LLM[Ollama / OpenAI-compatible LLM]
 ```
+## Tính năng chính
+
+
+## Phát triển với Docker
+
+Repo hỗ trợ chạy toàn bộ stack (postgres + redis + api + portal) bằng Docker Compose.
+Stack dev có hot reload — sửa code trong `server/app/` hoặc `portal/app/` sẽ tự refresh.
+
+### Yêu cầu
+
+- Docker Engine ≥ 24, Docker Compose v2 (`docker compose`, không phải `docker-compose`)
+
+### Setup lần đầu
+
+```bash
+cp .env.example .env
+# Sửa SECRET_KEY, DATA_ENCRYPTION_KEY, SEED_ADMIN_PASSWORD (xem comment trong file)
+
+docker compose up -d --build
+docker compose logs -f api portal
+```
+
+Sau khi healthy:
+- Portal: http://localhost:3003
+- API docs: http://localhost:8000/docs
+
+### Commands
+
+```bash
+docker compose up -d              # khởi động
+docker compose down               # dừng (giữ DB)
+docker compose down -v            # reset sạch (mất DB)
+docker compose logs -f api        # log api
+docker compose exec api bash      # shell vào api container
+```
+
+### Cấu trúc service
+
+| Service | Host port | Container port | Mục đích |
+|---|---|---|---|
+| postgres | 5432 | 5432 | DB chính |
+| redis | 6381 | 6379 | Cache + pub/sub |
+| api | 8000 | 8000 | FastAPI backend |
+| portal | 3003 | 3003 | Next.js frontend |
+
+### Tách biệt
+
+- **Velociraptor** (DFIR) — `deploy/velociraptor/` (sau này chạy máy khác)
+- **step-ca** — `deploy/step-ca/` (prod/proper mTLS; dev dùng `CA_MODE=local`)
+- **Agent C#** — `agent/`, build riêng trên Windows rồi copy `OrgInventoryAgent.msi` vào `server/agent_dist/`
+- **Nginx** — không có service trong Docker dev stack; deploy thật dùng Nginx Proxy Manager bên ngoài. Cấu hình cũ ở `server/deploy/nginx/nginx.conf` được giữ làm tài liệu tham khảo.
+
+### Build native (fallback)
+
+Nếu không dùng Docker:
+
+```bash
+./build-all.sh    # build server + agent + portal native
+```
+
+> Compose dev canonical nằm ở `docker-compose.yml` tại root (postgres :5432, redis :6381, api :8000, portal :3003); không có service Nginx, step-ca hoặc Velociraptor.
+
 
 ## Tính năng chính
+
 
 - Enroll agent bằng token dùng một lần; heartbeat, inventory, gia hạn chứng chỉ và rescan từ xa.
 - Kiểm kê CPU, RAM, ổ đĩa, mạng, hệ điều hành, phần mềm, startup, cổng mạng và security posture.

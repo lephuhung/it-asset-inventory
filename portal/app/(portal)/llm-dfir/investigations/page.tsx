@@ -40,7 +40,7 @@ import type {
 } from "@/lib/types";
 
 /* Pill tinted theo Design.md — màu đã remap trong globals.css
-   (đồng bộ với trang /admin/llm-dfir/investigations) */
+   (đồng bộ với trang /llm-dfir/investigations) */
 const STATUS_STYLES: Record<
   InvestigationStatus,
   { label: string; badge: string; icon: any }

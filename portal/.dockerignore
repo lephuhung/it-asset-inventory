@@ -2,3 +2,14 @@ node_modules
 .next
 npm-debug.log*
 .env*
+
+*.log
+stitch-ref
+stitch_*.py
+Design.md
+AGENTS.md
+CLAUDE.md
+tsconfig.tsbuildinfo
+.env
+.env.local
+.env.local.example

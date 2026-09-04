@@ -1,0 +1,10 @@
+.venv
+.pytest_cache
+.ruff_cache
+agent_dist
+*.log
+deploy
+tests
+README.md
+.env
+.env.example
