@@ -331,12 +331,14 @@ export function Field({
 }
 
 /* text-input: bo tròn xs 4px — cố ý khác hẳn pill CTA (Design.md §Inputs).
-   Viền #dddddd, focus = primary + shadow Level-1. */
+   KHÔNG kèm h-* ở đây — Input/Select thêm `h-9.5` cố định 38px; Textarea
+   giữ auto-height để `rows` quyết định chiều cao tự nhiên. */
 const CONTROL_CLASS =
-  "h-9.5 w-full rounded-xs border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 transition-shadow focus:border-brand-600 focus:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600/15 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+  "w-full rounded-xs border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 transition-shadow focus:border-brand-600 focus:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600/15 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+const INPUT_FIXED_H = "h-9.5";  // height cố định cho Input 1 dòng (Design.md text-input)
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={`${CONTROL_CLASS} ${props.className ?? ""}`} />;
+  return <input {...props} className={`${CONTROL_CLASS} ${INPUT_FIXED_H} ${props.className ?? ""}`} />;
 }
 
 /* Select — thả xuống đồng bộ design (Design.md §Inputs): bo xs 4px, chevron
@@ -352,15 +354,17 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     <span className={`relative block ${hasWidth ? "" : "w-full"}`}>
       <select
         {...props}
-        className={`${CONTROL_CLASS.replace(" w-full", "")} cursor-pointer appearance-none pr-9 ${widthClass}`}
+        className={`${CONTROL_CLASS} ${INPUT_FIXED_H} cursor-pointer appearance-none pr-9 ${widthClass}`}
       />
       <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
     </span>
   );
 }
 
+/* Textarea — KHÔNG dùng height cố định (rows sẽ quyết định); resize-y để
+   user kéo dài thêm nếu cần. min-h-20 giữ footprint tối thiểu khi rows=1. */
 export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className={`${CONTROL_CLASS} min-h-20 py-2 ${props.className ?? ""}`} />;
+  return <textarea {...props} className={`${CONTROL_CLASS} min-h-20 resize-y py-2 ${props.className ?? ""}`} />;
 }
 
 /* ── Loading / Empty ───────────────────────────────────────── */
@@ -431,14 +435,24 @@ export function Modal({
   title,
   children,
   footer,
-  wide = false,
+  width = "sm",
+  dense = false,
 }: {
   open: boolean;
   onClose: () => void;
   title: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
-  wide?: boolean;
+  /** Kích thước panel — theo Design.md §modal-card (xl rounded) + khung rộng cho editor:
+   *  sm  = max-w-lg  (mặc định; modal nhỏ — confirm, info)
+   *  md  = max-w-2xl (form cỡ vừa)
+   *  lg  = max-w-3xl (form rộng / danh sách)
+   *  xl  = max-w-4xl (editor / YAML dài — nạp artifact) */
+  width?: "sm" | "md" | "lg" | "xl";
+  /** Padding gọn hơn (header px-5 py-3, body px-5 py-4) — dùng cho modal có nội dung dài
+   *  như editor / danh sách lớn, để nội dung chiếm phần lớn khung. Theo Design.md
+   *  spacing: thay `spacing.lg`(24) bằng `spacing.md`(16) cho padding utility. */
+  dense?: boolean;
 }) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -503,6 +517,12 @@ export function Modal({
 
   if (!open) return null;
 
+  const WIDTH_CLASS = {
+    sm: "max-w-lg",
+    md: "max-w-2xl",
+    lg: "max-w-3xl",
+    xl: "max-w-4xl",
+  }[width];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/55" onClick={onClose} />
@@ -511,20 +531,27 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-2xl outline-none ${
-          wide ? "max-w-3xl" : "max-w-lg"
-        }`}
+        className={`relative z-10 max-h-[90vh] w-full overflow-y-auto rounded-2xl bg-white shadow-2xl outline-none ${WIDTH_CLASS}`}
       >
-        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-6 py-4">
-          <h3 id={titleId} className="text-[15px] font-semibold text-slate-800">{title}</h3>
-          <IconButton label="Đóng" onClick={onClose} className="hover:bg-slate-100 hover:text-slate-600">
-            <X className="size-4" />
-          </IconButton>
-        </header>
-        <div className="px-6 py-5">{children}</div>
-        {footer && (
-          <footer className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/50 px-6 py-4">{footer}</footer>
-        )}
+        {(() => {
+          const HEADER_PX = dense ? "px-5 py-3" : "px-6 py-4";
+          const BODY_PX = dense ? "px-5 py-4" : "px-6 py-5";
+          const FOOTER_PX = dense ? "px-5 py-3" : "px-6 py-4";
+          return (
+            <>
+              <header className={`sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white ${HEADER_PX}`}>
+                <h3 id={titleId} className="text-[15px] font-semibold text-slate-800">{title}</h3>
+                <IconButton label="Đóng" onClick={onClose} className="hover:bg-slate-100 hover:text-slate-600">
+                  <X className="size-4" />
+                </IconButton>
+              </header>
+              <div className={BODY_PX}>{children}</div>
+              {footer && (
+                <footer className={`flex justify-end gap-2 border-t border-slate-100 bg-slate-50/50 ${FOOTER_PX}`}>{footer}</footer>
+              )}
+            </>
+          );
+        })()}
       </div>
     </div>
   );

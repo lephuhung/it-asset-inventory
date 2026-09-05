@@ -760,7 +760,7 @@ export default function TokensPage() {
             <KeyRound className="size-4 text-emerald-600" /> Token đã sinh
           </span>
         }
-        wide
+        width="lg"
         footer={
           <Button variant="secondary" onClick={() => { setCreated(null); setCreatedOs("windows"); }}>
             Xong
@@ -1100,7 +1100,7 @@ export default function TokensPage() {
             <KeyRound className="size-4 text-emerald-600" /> Đã tạo {bulkResult?.created ?? 0} token
           </span>
         }
-        wide
+        width="lg"
         footer={
           <Button variant="secondary" onClick={() => setBulkResult(null)}>
             Xong

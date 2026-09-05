@@ -93,7 +93,7 @@ function AccountModal({ open, onClose }: { open: boolean; onClose: () => void })
   ];
 
   return (
-    <Modal open={open} onClose={onClose} title="Tài khoản của tôi" wide>
+    <Modal open={open} onClose={onClose} title="Tài khoản của tôi" width="lg">
       {/* Tab layout — sidebar dọc (md+) / ngang mobile.
           Header strip đã bỏ — avatar/tên/email/role được dồn vào tab "Thông tin"
           làm đầu trang gọn gàng (Design.md: figure/ground dựa trên hairline, không cần

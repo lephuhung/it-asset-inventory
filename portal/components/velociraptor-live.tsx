@@ -83,7 +83,7 @@ export function VelociraptorLiveCard({
               onClick={onShowHistory}
               title="Lịch sử các cuộc điều tra AI trên máy này"
             >
-              <History className="size-3.5" /> Lịch sử điều tra
+              <History className="size-3.5" /> Lịch sử
             </Button>
           )}
           {onInvestigateAI && (
@@ -110,11 +110,10 @@ export function VelociraptorLiveCard({
     >
       {result && (
         <div
-          className={`mb-3 flex items-start gap-2 rounded-lg px-4 py-3 text-sm ring-1 ring-inset ${
-            result.ok
-              ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
-              : "bg-rose-50 text-rose-800 ring-rose-200"
-          }`}
+          className={`mb-3 flex items-start gap-2 rounded-lg px-4 py-3 text-sm ring-1 ring-inset ${result.ok
+            ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+            : "bg-rose-50 text-rose-800 ring-rose-200"
+            }`}
         >
           {result.ok ? (
             <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
@@ -172,8 +171,8 @@ export function VelociraptorLiveCard({
               <dd className="font-medium text-slate-900">
                 {metadata.last_seen_at
                   ? formatDateTime(
-                      metadata.last_seen_at,
-                    )
+                    metadata.last_seen_at,
+                  )
                   : "—"}
               </dd>
             </div>
@@ -188,8 +187,8 @@ export function VelociraptorLiveCard({
               <dd className="font-medium text-slate-900">
                 {metadata.first_seen_at
                   ? formatDateTime(
-                      new Date(Number(metadata.first_seen_at) * 1000).toISOString(),
-                    )
+                    new Date(Number(metadata.first_seen_at) * 1000).toISOString(),
+                  )
                   : "—"}
               </dd>
             </div>
@@ -236,16 +235,14 @@ export function VeloLogDrawer({
       <div
         aria-hidden={!open}
         onClick={onClose}
-        className={`fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none ${
-          open ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
+        className={`fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none ${open ? "opacity-100" : "pointer-events-none opacity-0"
+          }`}
       />
       <aside
         aria-hidden={!open}
         aria-label="Log Velociraptor"
-        className={`fixed inset-y-0 right-0 z-50 flex w-full transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none lg:w-1/2 ${
-          open ? "translate-x-0" : "pointer-events-none translate-x-full"
-        }`}
+        className={`fixed inset-y-0 right-0 z-50 flex w-full transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none lg:w-1/2 ${open ? "translate-x-0" : "pointer-events-none translate-x-full"
+          }`}
       >
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div className="min-w-0">
@@ -321,8 +318,8 @@ export function VeloLogDrawer({
                   <dd className="font-medium text-slate-900">
                     {metadata.last_seen_at
                       ? formatDateTime(
-                          metadata.last_seen_at,
-                        )
+                        metadata.last_seen_at,
+                      )
                       : "—"}
                   </dd>
                 </div>
@@ -337,8 +334,8 @@ export function VeloLogDrawer({
                   <dd className="font-medium text-slate-900">
                     {metadata.first_seen_at
                       ? formatDateTime(
-                          new Date(Number(metadata.first_seen_at) * 1000).toISOString(),
-                        )
+                        new Date(Number(metadata.first_seen_at) * 1000).toISOString(),
+                      )
                       : "—"}
                   </dd>
                 </div>

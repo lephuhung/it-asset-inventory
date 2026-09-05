@@ -71,12 +71,12 @@ export default function InvestigationDetailPage({
 
   const load = useCallback(async () => {
     try {
-      const data = await api.get<DfirInvestigation>(`/llm-dfir/investigations/${id}`);
+      const data = await api.get<DfirInvestigation>(`/admin/llm-dfir/investigations/${id}`);
       setInv(data);
       setNotFound(false);
       if (data.status === "completed" || data.status === "failed") {
         const msgs = await api.get<DfirInvestigationMessage[]>(
-          `/llm-dfir/investigations/${id}/messages`,
+          `/admin/llm-dfir/investigations/${id}/messages`,
         );
         setMessages(msgs);
       }
@@ -123,7 +123,7 @@ export default function InvestigationDetailPage({
     ]);
     try {
       const res = await api.post<{ response: string; model: string }>(
-        `/llm-dfir/investigations/${id}/chat`,
+        `/admin/llm-dfir/investigations/${id}/chat`,
         { message: msg },
       );
       setMessages((m) => [
@@ -144,7 +144,7 @@ export default function InvestigationDetailPage({
   const onDelete = async () => {
     setDeleting(true);
     try {
-      await api.delete(`/llm-dfir/investigations/${id}`);
+      await api.delete(`/admin/llm-dfir/investigations/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Xoá lỗi");
       setDeleting(false);

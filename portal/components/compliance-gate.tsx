@@ -73,7 +73,7 @@ export function ComplianceGate({ disabled = false }: { disabled?: boolean }) {
           {notice && <span className="text-xs text-slate-400">v{notice.version}</span>}
         </span>
       }
-      wide
+      width="lg"
       footer={
         <>
           <Button variant="secondary" onClick={() => window.location.href = "/login"}>
