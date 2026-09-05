@@ -1,5 +1,6 @@
 # CI — kiểm chứng tự động mỗi push/PR lên GitHub
-# Jobs: server (pytest + ruff), agent (dotnet build Linux + Windows), portal (typecheck + build)
+# Jobs: server (pytest + ruff), agent (dotnet build Linux + Windows), portal (typecheck + build),
+#       deepagent (pytest + ruff)
 
 name: CI
 
@@ -89,3 +90,22 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+
+  deepagent:
+    name: DeepAgent LangGraph (pytest + ruff)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deepagent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Cài dependencies
+        run: pip install -e ".[dev]"
+      - name: Lint (ruff)
+        run: ruff check deepagent tests
+      - name: Chạy test
+        run: pytest -q
