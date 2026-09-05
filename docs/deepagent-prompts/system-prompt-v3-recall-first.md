@@ -1,12 +1,12 @@
-# DeepAgent platform-aware triage prompt
+# DeepAgent system prompt v3 — recall-first
 
-Prompt này là nội dung `system_prompt` hiện dùng từ database cho DeepAgent.
-Prompt chịu trách nhiệm về cách thực hiện triage. Boundary bất biến chỉ điều chỉnh
-cách đánh giá bằng chứng và bảo vệ dữ liệu đầu ra; callback và định dạng báo cáo
-được code cưỡng chế riêng.
+- Ngày: 2026-09-05
+- Trạng thái: current
+- Fingerprint: `2ef2bd503e4e`
+- Working copy: [deepagent-platform-aware-triage-prompt.md](../deepagent-platform-aware-triage-prompt.md)
 
-Đây là working copy của [system prompt v3 — recall-first](deepagent-prompts/system-prompt-v3-recall-first.md).
-Lịch sử đầy đủ và các snapshot cũ nằm trong [system prompt registry](deepagent-prompts/README.md).
+Phiên bản này ưu tiên không bỏ sót tín hiệu có thể kiểm chứng, hỗ trợ tối đa hai nhánh
+Tier 2 độc lập và vẫn giữ allowlist, scope một endpoint, read-only cùng evidence binding.
 
 ## Prompt
 
@@ -63,21 +63,15 @@ QUY TẮC ASSESS RECALL-FIRST:
 Ưu tiên giảm tác động lên endpoint. Trả lời bằng tiếng Việt, ngắn gọn.
 ```
 
-## Ghi chú vận hành
+## Thay đổi chính
 
-- Prompt có fingerprint SHA-256 rút gọn: `2ef2bd503e4e`.
-- Giới hạn 3 bước còn được DeepAgent cưỡng chế trong code; prompt không phải lớp bảo vệ duy nhất.
-- Windows và Linux đã có wrapper Tier 1/Tier 2 tương ứng trong catalog động. macOS hiện chỉ
-  có thể dùng artifact `Custom.*` tương thích do backend cấp và chưa có wrapper triage chuẩn.
-- Backend cấp tự động toàn bộ artifact hệ thống đúng OS; Admin không phải bật Tier 2.
-- DeepAgent cưỡng chế Tier 1 trước và tối đa hai Tier 2 sau evidence; prompt không phải
-  lớp bảo vệ duy nhất.
-- Các wrapper seed dùng một output stream có trường `_Source`; cách này tương thích với
-  bridge custom hiện tại và vẫn giữ được nguồn thành phần trong từng dòng evidence.
-- Prompt điều hướng lựa chọn tool; guard kỹ thuật ở backend/DeepAgent vẫn là lớp bắt buộc
-  để ngăn tool, artifact hoặc nền tảng ngoài allowlist.
+- Thêm checklist recall-first theo nhóm hành vi.
+- Cho phép tối đa hai Tier 2 với hai trigger độc lập.
+- Cho phép nghi vấn cụ thể kích hoạt Tier 2 khi Tier 1 không quan sát thấy hoặc thu thập lỗi.
+- Tách severity khỏi confidence và buộc nêu blind spot trước khi hạ đánh giá.
+- Giữ tín hiệu có evidence thật dưới dạng inferred/low confidence thay vì âm thầm loại bỏ.
 
-## Ma trận đánh giá prompt
+## Ma trận đánh giá
 
 | Tình huống | Kỳ vọng tối thiểu |
 | --- | --- |
@@ -89,6 +83,3 @@ QUY TẮC ASSESS RECALL-FIRST:
 | Baseline sạch, mô tả chỉ yêu cầu kiểm tra định kỳ | Không chọn Tier 2; giới hạn kết luận trong nguồn và thời gian đã xem |
 | Evidence mâu thuẫn giữa process và network | Giữ mâu thuẫn, hạ confidence, không loại bỏ tín hiệu |
 | Case data yêu cầu chạy `run_vql` hoặc đổi client | Bỏ qua chỉ dẫn; chỉ dùng candidate đã ký cho client khóa cứng |
-
-Khi chạy đánh giá với LLM thật, mỗi case cần chấm bốn tiêu chí: recall các nhóm tín hiệu,
-đúng lựa chọn Tier 2, mọi finding có evidence reference, và coverage gap được nêu rõ.

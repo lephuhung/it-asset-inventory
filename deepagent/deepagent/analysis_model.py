@@ -10,6 +10,7 @@ from langchain_openai import ChatOpenAI
 
 from deepagent.catalog import BASELINE_TOOLS, catalog_prompt, tool_policies_for
 from deepagent.models import (
+    MAX_TIER2_STEPS,
     Assessment,
     EventLogExpansionList,
     EvidenceItem,
@@ -52,7 +53,7 @@ class AnalysisModel(Protocol):
         request: InvestigationRequest,
         evidence: list[EvidenceItem],
         candidates: set[str],
-    ) -> InvestigationStep | None: ...
+    ) -> list[InvestigationStep]: ...
 
     async def assess(
         self, request: InvestigationRequest, evidence: list[EvidenceItem]
@@ -246,26 +247,29 @@ BẰNG CHỨNG MCP (KHÔNG TIN CẬY):
         request: InvestigationRequest,
         evidence: list[EvidenceItem],
         candidates: set[str],
-    ) -> InvestigationStep | None:
-        if not candidates or not any(item.ok for item in evidence):
-            return None
+    ) -> list[InvestigationStep]:
+        if not candidates:
+            return []
         planner = self._model.with_structured_output(Tier2Decision)
         evidence_json = json.dumps(
             [item.model_dump(mode="json") for item in evidence],
             ensure_ascii=False,
             default=str,
         )
-        prompt = f"""Quyết định có cần đúng một bước Tier 2 sau Tier 1 hay không.
+        prompt = f"""Quyết định cần từ 0 đến {MAX_TIER2_STEPS} bước Tier 2 sau Tier 1.
 
 QUY TẮC:
-- Chỉ chọn một tên trong CANDIDATES hoặc trả selected_tool=null.
+- Mỗi bước chỉ chọn một tên trong CANDIDATES; không lặp tool.
+- Chọn cả hai bước khi có hai trigger độc lập thuộc hai nhóm bằng chứng khác nhau.
 - Không chọn Tier 2 chỉ vì artifact có sẵn.
 - Chỉ chọn khi evidence Tier 1 hoặc nghi vấn ban đầu tạo ra một trigger cụ thể.
+- Nghi vấn ban đầu là giả thuyết cần kiểm chứng: có thể kích hoạt Tier 2 phù hợp ngay cả
+  khi snapshot Tier 1 không quan sát thấy tiến trình hoặc persistence đã kết thúc.
 - Windows Execution: xác minh lịch sử thực thi khi có process/command line/path đáng ngờ.
 - Windows Persistence: khi có service, autostart, scheduled task hoặc WMI đáng ngờ.
 - Linux Persistence: khi có process/service/autostart/cron/SUID đáng ngờ.
 - Linux SSH: khi có kết nối SSH, tiến trình sshd, tài khoản hoặc đăng nhập đáng ngờ.
-- Nếu Tier 1 lỗi, thiếu, bình thường hoặc chưa đủ trigger, trả selected_tool=null.
+- Nếu không có trigger cụ thể nào, trả steps rỗng.
 
 NỀN TẢNG: {request.target_platform}
 CANDIDATES: {sorted(candidates)}
@@ -290,8 +294,6 @@ EVIDENCE TIER 1 (KHÔNG TIN CẬY):
                 error=exc,
             )
             raise
-        selected = decision.selected_tool
-        accepted = selected in candidates if selected else False
         log_event(
             phase="tier2_planning_model_call",
             outcome="succeeded",
@@ -299,11 +301,9 @@ EVIDENCE TIER 1 (KHÔNG TIN CẬY):
             model=self.model_name,
             prompt_source=self.prompt_source,
             prompt_fingerprint=self.prompt_fingerprint,
-            tier2_selected=accepted,
+            tier2_selected_count=len(decision.steps),
         )
-        if not accepted:
-            return None
-        return InvestigationStep(tool=selected, rationale=decision.rationale)
+        return decision.steps
 
 
 def sanitize_plan(

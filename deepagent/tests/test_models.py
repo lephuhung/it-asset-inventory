@@ -88,6 +88,31 @@ def test_investigation_request_caps_custom_artifacts() -> None:
         )
 
 
+def test_tier2_decision_accepts_at_most_two_triggered_steps() -> None:
+    """The model contract permits dual coverage but rejects broader expansion."""
+    from deepagent.models import Tier2Decision
+
+    valid_steps = [
+        {
+            "tool": "custom:Custom.DFIR.Windows.Execution",
+            "rationale": "Execution trigger",
+        },
+        {
+            "tool": "custom:Custom.DFIR.Windows.Persistence",
+            "rationale": "Persistence trigger",
+        },
+    ]
+
+    decision = Tier2Decision(steps=valid_steps)
+    assert [step.tool for step in decision.steps] == [
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+
+    with pytest.raises(ValidationError):
+        Tier2Decision(steps=[*valid_steps, valid_steps[0]])
+
+
 def valid_expansion(event_id: str) -> dict:
     """Create a valid expansion dict for testing."""
     return {

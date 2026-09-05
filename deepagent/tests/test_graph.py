@@ -212,6 +212,234 @@ async def test_graph_asks_llm_for_one_tier2_after_tier1_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_collects_two_independently_triggered_tier2_artifacts() -> None:
+    """A dual execution+persistence signal must not lose either evidence branch."""
+
+    class DualTriggerModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="PowerShell execution followed by a new autostart entry",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="Tier 1 baseline",
+                    )
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            return [
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="Encoded PowerShell needs execution-history correlation",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Persistence",
+                    rationale="New autostart entry needs persistence collection",
+                ),
+            ]
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=DualTriggerModel(),
+        settings=Settings(max_steps=3),
+    )
+
+    result = await graph.ainvoke({"request": tiered_request()})
+
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+    assert [item.tool for item in result["evidence"]] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_rejects_duplicate_and_unsigned_tier2_selections() -> None:
+    """Only unique, backend-signed Tier 2 candidates may reach MCP collection."""
+
+    class InvalidSelectionModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Collect a baseline before bounded expansion",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="Tier 1 baseline",
+                    )
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            return [
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="Valid execution trigger",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.Unsigned.Persistence",
+                    rationale="Must be rejected",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="Duplicate must be rejected",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Persistence",
+                    rationale="Valid persistence trigger",
+                ),
+            ]
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=InvalidSelectionModel(),
+        settings=Settings(max_steps=3),
+    )
+
+    await graph.ainvoke({"request": tiered_request()})
+
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_uses_case_trigger_for_tier2_when_tier1_collection_fails() -> None:
+    """A failed snapshot must not suppress a concrete execution hypothesis."""
+
+    class FailedTier1MCP(FakeMCP):
+        async def collect(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["tool_name"] == "custom:Custom.DFIR.Windows.Triage":
+                return {"ok": False, "error": "untrusted bridge detail"}
+            return {"ok": True, "data": [{"tool": kwargs["tool_name"], "row": 1}]}
+
+    class CaseTriggeredModel(FakeModel):
+        def __init__(self) -> None:
+            self.tier2_planner_called = False
+
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Encoded PowerShell may have exited before snapshot",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="Tier 1 baseline",
+                    )
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            self.tier2_planner_called = True
+            return [
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="Case description provides a concrete execution trigger",
+                )
+            ]
+
+        async def assess(
+            self, _request: InvestigationRequest, _evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="medium",
+                confidence="low",
+                executive_summary="Tier 1 failed; execution history remains relevant.",
+                conclusion="Further evidence was requested from the case trigger.",
+            )
+
+    model = CaseTriggeredModel()
+    mcp = FailedTier1MCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=model,
+        settings=Settings(max_steps=3),
+    )
+
+    result = await graph.ainvoke({"request": tiered_request()})
+
+    assert model.tier2_planner_called is True
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Execution",
+    ]
+    assert result["evidence"][0].ok is False
+    assert result["evidence"][1].ok is True
+
+
+@pytest.mark.asyncio
+async def test_graph_skips_tier2_when_model_finds_no_concrete_trigger() -> None:
+    """Recall-first still permits no expansion for a genuinely clean baseline."""
+
+    class CleanModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Routine proactive check without a concrete indicator",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="Tier 1 baseline",
+                    )
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            return []
+
+        async def assess(
+            self, _request: InvestigationRequest, _evidence: list[EvidenceItem]
+        ) -> Assessment:
+            return Assessment(
+                severity="info",
+                confidence="medium",
+                executive_summary="No concrete trigger was identified.",
+                conclusion="No Tier 2 expansion was warranted for this bounded check.",
+            )
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=CleanModel(),
+        settings=Settings(max_steps=3),
+    )
+
+    await graph.ainvoke({"request": tiered_request()})
+
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_graph_binds_target_and_emits_evidence_backed_markdown(capsys) -> None:
     settings = Settings(max_steps=8)
     mcp = FakeMCP()

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
+import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from deepagent.analysis_model import INVARIANT_BOUNDARY, OpenAIAnalysisModel
-from deepagent.models import LlmRuntime
+from deepagent.models import EvidenceItem, InvestigationRequest, LlmRuntime
 
 
 def _runtime(system_prompt: str | None) -> LlmRuntime:
@@ -67,3 +70,66 @@ def test_empty_database_prompt_uses_default_playbook_fingerprint() -> None:
 
     assert model.prompt_source == "default"
     assert len(model.prompt_fingerprint) == 12
+
+
+@pytest.mark.asyncio
+async def test_tier2_planner_returns_two_structured_triggered_steps() -> None:
+    """The model adapter must preserve two independent Tier 2 selections."""
+
+    class StructuredInvoker:
+        async def ainvoke(self, _messages):
+            return {
+                "steps": [
+                    {
+                        "tool": "custom:Custom.DFIR.Windows.Execution",
+                        "rationale": "Encoded PowerShell execution trigger",
+                    },
+                    {
+                        "tool": "custom:Custom.DFIR.Windows.Persistence",
+                        "rationale": "New autorun persistence trigger",
+                    },
+                ]
+            }
+
+    class FakeChatModel:
+        def with_structured_output(self, _schema):
+            return StructuredInvoker()
+
+    now = datetime.now(UTC)
+    request = InvestigationRequest(
+        investigation_id="11111111-1111-4111-8111-111111111111",
+        client_id="C.0123456789abcdef",
+        hostname="WS-01",
+        target_platform="windows",
+        time_range={"from": (now - timedelta(hours=1)).isoformat(), "to": now.isoformat()},
+        suspicious_activity="Encoded PowerShell and a new Run key",
+        llm_runtime=_runtime("RECALL-FIRST PLAYBOOK"),
+        velociraptor_api_client_yaml=(
+            "ca_certificate: test\nclient_cert: test\nclient_private_key: test\n"
+        ),
+    )
+    evidence = [
+        EvidenceItem(
+            evidence_id="E-001",
+            tool="custom:Custom.DFIR.Windows.Triage",
+            collected_at=now,
+            ok=True,
+            data={"rows": []},
+        )
+    ]
+    model = OpenAIAnalysisModel(_runtime("RECALL-FIRST PLAYBOOK"))
+    model._model = FakeChatModel()
+
+    steps = await model.plan_tier2_expansion(
+        request,
+        evidence,
+        {
+            "custom:Custom.DFIR.Windows.Execution",
+            "custom:Custom.DFIR.Windows.Persistence",
+        },
+    )
+
+    assert [step.tool for step in steps] == [
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]

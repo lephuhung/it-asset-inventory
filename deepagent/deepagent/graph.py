@@ -21,11 +21,13 @@ from deepagent.config import Settings
 from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
 from deepagent.models import (
     MAX_DETAIL_CALLS,
+    MAX_TIER2_STEPS,
     Assessment,
     EventLogExpansion,
     EvidenceItem,
     InvestigationPlan,
     InvestigationRequest,
+    InvestigationStep,
     fit_evidence_budget,
     validate_event_log_expansions,
 )
@@ -114,25 +116,43 @@ def build_investigation_graph(
         )
         if (
             not candidates
-            or not any(item.ok for item in evidence)
             or not hasattr(model, "plan_tier2_expansion")
         ):
             return {"tier2_planned": True}
         try:
-            step = await model.plan_tier2_expansion(request, evidence, candidates)
+            proposed = await model.plan_tier2_expansion(request, evidence, candidates)
         except Exception as exc:  # noqa: BLE001 - Tier 2 is optional
             log_event(phase="tier2_planning", outcome="failed", error=exc)
             return {
                 "tier2_planned": True,
                 "limitations": [*state.get("limitations", []), "tier2_planning_failed"],
             }
+        if proposed is None:
+            return {"tier2_planned": True}
+        proposed_steps = [proposed] if isinstance(proposed, InvestigationStep) else proposed
         existing_tools = {item.tool for item in evidence}
-        if step is None or step.tool not in candidates or step.tool in existing_tools:
+        accepted_steps: list[InvestigationStep] = []
+        for step in proposed_steps:
+            if (
+                not isinstance(step, InvestigationStep)
+                or step.tool not in candidates
+                or step.tool in existing_tools
+            ):
+                continue
+            accepted_steps.append(step)
+            existing_tools.add(step.tool)
+            if len(accepted_steps) >= MAX_TIER2_STEPS:
+                break
+        if not accepted_steps:
             return {"tier2_planned": True}
         current_plan = state["plan"]
+        remaining_steps = max(settings.max_steps - len(current_plan.steps), 0)
+        accepted_steps = accepted_steps[:remaining_steps]
+        if not accepted_steps:
+            return {"tier2_planned": True}
         expanded_plan = InvestigationPlan(
             hypothesis=current_plan.hypothesis,
-            steps=[*current_plan.steps, step],
+            steps=[*current_plan.steps, *accepted_steps],
         )
         return {"plan": expanded_plan, "tier2_planned": True}
 

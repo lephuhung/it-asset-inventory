@@ -13,6 +13,7 @@ Platform = Literal["windows", "linux", "macos"]
 
 # Constants for event log expansion constraints
 MAX_DETAIL_CALLS: int = 2
+MAX_TIER2_STEPS: int = 2
 MAX_EVENT_LOG_DURATION_MINUTES: int = 60
 MAX_EVENT_LOG_EXPANSION_ROWS: int = 50
 
@@ -83,16 +84,9 @@ class InvestigationPlan(BaseModel):
 
 
 class Tier2Decision(BaseModel):
-    """Optional, single bounded expansion selected after Tier 1 evidence."""
+    """Up to two independently triggered, bounded expansions after Tier 1."""
 
-    selected_tool: str | None = None
-    rationale: str = Field(default="", max_length=500)
-
-    @model_validator(mode="after")
-    def require_rationale_for_selection(self) -> Tier2Decision:
-        if self.selected_tool and not self.rationale.strip():
-            raise ValueError("Tier 2 selection requires a rationale")
-        return self
+    steps: list[InvestigationStep] = Field(default_factory=list, max_length=MAX_TIER2_STEPS)
 
 
 class EvidenceItem(BaseModel):
