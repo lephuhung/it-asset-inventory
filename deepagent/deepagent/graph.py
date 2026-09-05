@@ -7,11 +7,16 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from deepagent.analysis_model import (
+    INITIAL_TRIAGE_MAX_STEPS,
     AnalysisModel,
     sanitize_plan,
     validate_assessment_evidence,
 )
-from deepagent.catalog import custom_tool_names
+from deepagent.catalog import (
+    custom_tool_names,
+    initial_custom_tool_names,
+    tier2_custom_tool_names,
+)
 from deepagent.config import Settings
 from deepagent.mcp_client import MCPToolTimeout, VelociraptorMCP
 from deepagent.models import (
@@ -52,6 +57,7 @@ class InvestigationState(TypedDict, total=False):
     evidence: list[EvidenceItem]
     assessment: Assessment
     report_markdown: str
+    tier2_planned: bool
     # M-3 fix: safe limitations from expansion validation (never raw LLM text)
     limitations: list[str]
 
@@ -81,18 +87,54 @@ def build_investigation_graph(
             duration_ms=(perf_counter() - started_at) * 1000,
             metadata_field_count=len(metadata),
         )
-        return {"target_metadata": metadata, "evidence": [], "step_index": 0}
+        return {
+            "target_metadata": metadata,
+            "evidence": [],
+            "step_index": 0,
+            "tier2_planned": False,
+        }
 
     async def plan(state: InvestigationState) -> dict:
         raw_plan = await model.plan(state["request"])
         return {
             "plan": sanitize_plan(
                 raw_plan,
-                settings.max_steps,
-                custom_tool_names(state["request"]),
+                min(settings.max_steps, INITIAL_TRIAGE_MAX_STEPS),
+                initial_custom_tool_names(state["request"]),
                 state["request"].target_platform,
             )
         }
+
+    async def plan_tier2(state: InvestigationState) -> dict:
+        request = state["request"]
+        candidates = tier2_custom_tool_names(request)
+        evidence = fit_evidence_budget(
+            state.get("evidence", []),
+            settings.max_evidence_chars,
+        )
+        if (
+            not candidates
+            or not any(item.ok for item in evidence)
+            or not hasattr(model, "plan_tier2_expansion")
+        ):
+            return {"tier2_planned": True}
+        try:
+            step = await model.plan_tier2_expansion(request, evidence, candidates)
+        except Exception as exc:  # noqa: BLE001 - Tier 2 is optional
+            log_event(phase="tier2_planning", outcome="failed", error=exc)
+            return {
+                "tier2_planned": True,
+                "limitations": [*state.get("limitations", []), "tier2_planning_failed"],
+            }
+        existing_tools = {item.tool for item in evidence}
+        if step is None or step.tool not in candidates or step.tool in existing_tools:
+            return {"tier2_planned": True}
+        current_plan = state["plan"]
+        expanded_plan = InvestigationPlan(
+            hypothesis=current_plan.hypothesis,
+            steps=[*current_plan.steps, step],
+        )
+        return {"plan": expanded_plan, "tier2_planned": True}
 
     async def collect_step(state: InvestigationState) -> dict:
         request = state["request"]
@@ -153,7 +195,14 @@ def build_investigation_graph(
             )
         return {"evidence": [*evidence, item], "step_index": index + 1}
 
-    def after_collect(state: InvestigationState) -> Literal["collect", "assess"]:
+    def after_collect(
+        state: InvestigationState,
+    ) -> Literal["collect", "plan_tier2", "assess"]:
+        if state["step_index"] < len(state["plan"].steps):
+            return "collect"
+        return "assess" if state.get("tier2_planned") else "plan_tier2"
+
+    def after_tier2_plan(state: InvestigationState) -> Literal["collect", "assess"]:
         return "collect" if state["step_index"] < len(state["plan"].steps) else "assess"
 
     async def assess(state: InvestigationState) -> dict:
@@ -200,6 +249,7 @@ def build_investigation_graph(
     builder = StateGraph(InvestigationState)
     builder.add_node("verify_target", verify_target)
     builder.add_node("plan", plan)
+    builder.add_node("plan_tier2", plan_tier2)
     builder.add_node("collect", collect_step)
     builder.add_node("assess", assess)
     builder.add_node("render_report", render_report)
@@ -207,6 +257,7 @@ def build_investigation_graph(
     builder.add_edge("verify_target", "plan")
     builder.add_edge("plan", "collect")
     builder.add_conditional_edges("collect", after_collect)
+    builder.add_conditional_edges("plan_tier2", after_tier2_plan)
     builder.add_edge("assess", "render_report")
     builder.add_edge("render_report", END)
     return builder.compile()

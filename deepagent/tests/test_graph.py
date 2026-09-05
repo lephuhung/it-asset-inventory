@@ -35,6 +35,25 @@ def request() -> InvestigationRequest:
     )
 
 
+def tiered_request() -> InvestigationRequest:
+    payload = request().model_dump(mode="json", by_alias=True)
+    payload["custom_artifacts"] = [
+        {
+            "name": "Custom.DFIR.Windows.Triage",
+            "description": "Tier 1 Windows triage wrapper",
+        },
+        {
+            "name": "Custom.DFIR.Windows.Execution",
+            "description": "Tier 2 Windows execution wrapper",
+        },
+        {
+            "name": "Custom.DFIR.Windows.Persistence",
+            "description": "Tier 2 Windows persistence wrapper",
+        },
+    ]
+    return InvestigationRequest.model_validate(payload)
+
+
 class FakeMCP:
     def __init__(self):
         self.calls: list[dict] = []
@@ -101,6 +120,95 @@ def test_sanitize_plan_drops_disallowed_tools() -> None:
         ],
     )
     assert [step.tool for step in sanitize_plan(plan, 8).steps] == ["windows_pslist"]
+
+
+@pytest.mark.asyncio
+async def test_graph_enforces_three_step_initial_triage_limit() -> None:
+    class FiveStepModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Model proposed an overly broad initial investigation",
+                steps=[
+                    InvestigationStep(tool="windows_pslist", rationale="processes"),
+                    InvestigationStep(tool="windows_netstat_enriched", rationale="network"),
+                    InvestigationStep(tool="windows_services", rationale="services"),
+                    InvestigationStep(tool="windows_event_logs", rationale="logs"),
+                    InvestigationStep(tool="windows_execution_prefetch", rationale="disk"),
+                ],
+            )
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=FiveStepModel(),
+        settings=Settings(max_steps=8),
+    )
+
+    await graph.ainvoke({"request": request()})
+
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "windows_pslist",
+        "windows_netstat_enriched",
+        "windows_services",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_asks_llm_for_one_tier2_after_tier1_evidence() -> None:
+    class TieredModel(FakeModel):
+        def __init__(self) -> None:
+            self.tier2_evidence_tools: list[str] = []
+
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Start with lightweight OS triage",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="Tier 1 baseline",
+                    ),
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Execution",
+                        rationale="Must not run before Tier 1 evidence",
+                    ),
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            evidence: list[EvidenceItem],
+            candidates: set[str],
+        ) -> InvestigationStep | None:
+            self.tier2_evidence_tools = [item.tool for item in evidence]
+            assert candidates == {
+                "custom:Custom.DFIR.Windows.Execution",
+                "custom:Custom.DFIR.Windows.Persistence",
+            }
+            return InvestigationStep(
+                tool="custom:Custom.DFIR.Windows.Persistence",
+                rationale="Tier 1 evidence indicates persistence",
+            )
+
+    model = TieredModel()
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=model,
+        settings=Settings(max_steps=3),
+    )
+
+    result = await graph.ainvoke({"request": tiered_request()})
+
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+    assert model.tier2_evidence_tools == ["custom:Custom.DFIR.Windows.Triage"]
+    assert [item.tool for item in result["evidence"]] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
 
 
 @pytest.mark.asyncio

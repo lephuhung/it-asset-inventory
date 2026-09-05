@@ -1,0 +1,25 @@
+artifacts:
+  - file: linux_persistence.yaml
+    supported_platforms: [linux]
+    selection_priority: 100
+    enabled: true
+  - file: linux_ssh.yaml
+    supported_platforms: [linux]
+    selection_priority: 100
+    enabled: true
+  - file: linux_triage.yaml
+    supported_platforms: [linux]
+    selection_priority: 300
+    enabled: true
+  - file: windows_execution.yaml
+    supported_platforms: [windows]
+    selection_priority: 100
+    enabled: true
+  - file: windows_persistence.yaml
+    supported_platforms: [windows]
+    selection_priority: 100
+    enabled: true
+  - file: windows_triage.yaml
+    supported_platforms: [windows]
+    selection_priority: 300
+    enabled: true

@@ -1,0 +1,14 @@
+name: Custom.DFIR.Linux.SSH
+description: Tier 2 Linux SSH wrapper for users, root users, authorized keys, known hosts, and login evidence; use only after Tier 1 evidence indicates SSH or account activity.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "linux"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        users={ SELECT "Users" AS _Source, * FROM Artifact.Linux.Sys.Users() LIMIT 5 },
+        root_users={ SELECT "RootUsers" AS _Source, * FROM Artifact.Linux.Users.RootUsers() LIMIT 5 },
+        authorized_keys={ SELECT "AuthorizedKeys" AS _Source, * FROM Artifact.Linux.Ssh.AuthorizedKeys() LIMIT 5 },
+        known_hosts={ SELECT "KnownHosts" AS _Source, * FROM Artifact.Linux.Ssh.KnownHosts() LIMIT 5 },
+        last_login={ SELECT "LastUserLogin" AS _Source, * FROM Artifact.Linux.Sys.LastUserLogin() LIMIT 5 },
+        ssh_login={ SELECT "SSHLogin" AS _Source, * FROM Artifact.Linux.Syslog.SSHLogin() LIMIT 5 }
+      )

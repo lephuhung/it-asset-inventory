@@ -93,12 +93,11 @@ class BackendCallbackClient:
             "X-Idempotency-Key": payload.external_job_id,
         }
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    url, headers=headers, json=payload.model_dump(mode="json")
-                )
-            response.raise_for_status()
-            result = response.json()
+            result = await self._submit_result_with_retry(
+                url=url,
+                headers=headers,
+                body=payload.model_dump(mode="json"),
+            )
         except Exception as exc:
             log_event(
                 phase="backend_result_callback",
@@ -115,3 +114,27 @@ class BackendCallbackClient:
             severity=payload.severity,
         )
         return result
+
+    async def _submit_result_with_retry(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        body: dict,
+    ) -> dict:
+        """Try the final callback at most three times with an unchanged request."""
+        last_error: Exception | None = None
+        async with httpx.AsyncClient(timeout=30) as client:
+            for _attempt in range(3):
+                try:
+                    response = await client.post(url, headers=headers, json=body)
+                    response.raise_for_status()
+                    if response.status_code != 200:
+                        raise RuntimeError(
+                            f"Backend result callback returned HTTP {response.status_code}"
+                        )
+                    return response.json()
+                except Exception as exc:  # noqa: BLE001 - retry transport and HTTP failures
+                    last_error = exc
+        assert last_error is not None
+        raise last_error

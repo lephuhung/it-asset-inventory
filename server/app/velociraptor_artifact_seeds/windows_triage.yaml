@@ -1,0 +1,13 @@
+name: Custom.DFIR.Windows.Triage
+description: Tier 1 Windows triage wrapper for client identity, processes, process tree, network connections, and services; read-only with 50-row output caps.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "windows"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        client_info={ SELECT "ClientInfo" AS _Source, * FROM Artifact.Generic.Client.Info() LIMIT 3 },
+        processes={ SELECT "Processes" AS _Source, * FROM Artifact.Windows.System.Pslist() LIMIT 8 },
+        process_tree={ SELECT "ProcessTree" AS _Source, * FROM Artifact.Generic.System.Pstree() LIMIT 6 },
+        network={ SELECT "Network" AS _Source, * FROM Artifact.Windows.Network.NetstatEnriched() LIMIT 6 },
+        services={ SELECT "Services" AS _Source, * FROM Artifact.Windows.System.Services() LIMIT 6 }
+      )

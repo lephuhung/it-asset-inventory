@@ -15,19 +15,23 @@ def build_markdown_report(
     successful = sum(1 for item in evidence if item.ok)
     failed = len(evidence) - successful
     lines = [
+        "---",
+        "schema_version: dfir.report/1.0",
+        "---",
+        "",
         f"# Báo cáo điều tra máy {_clean(request.hostname)}",
         "",
-        f"**Client ID:** `{request.client_id}`  ",
-        f"**Khoảng thời gian:** `{request.time_range.from_.isoformat()}` đến `{request.time_range.to.isoformat()}`  ",
-        f"**Mức độ:** `{assessment.severity}`  ",
-        f"**Độ tin cậy:** `{assessment.confidence}`  ",
-        f"**Số phát hiện:** `{len(assessment.findings)}`",
-        "",
-        "## 1. Tóm tắt điều hành",
+        "## 1. Tóm tắt",
         "",
         _clean(assessment.executive_summary),
         "",
         "## 2. Phạm vi và nguồn dữ liệu",
+        "",
+        f"- **Client ID:** `{request.client_id}`",
+        f"- **Khoảng thời gian:** `{request.time_range.from_.isoformat()}` đến `{request.time_range.to.isoformat()}`",
+        f"- **Mức độ:** `{assessment.severity}`",
+        f"- **Độ tin cậy:** `{assessment.confidence}`",
+        f"- **Số phát hiện:** `{len(assessment.findings)}`",
         "",
         f"DeepAgent đã thực hiện {len(evidence)} truy vấn MCP read-only: {successful} thành công, {failed} lỗi.",
         "",
@@ -50,29 +54,46 @@ def build_markdown_report(
                 f"- **Độ tin cậy:** `{finding.confidence}`",
                 f"- **Bằng chứng:** {refs} — {_clean(finding.evidence)}",
                 f"- **MITRE ATT&CK:** `{finding.mitre_id or 'N/A'}`",
-                f"- **Khuyến nghị:** {_clean(finding.recommendation)}",
                 "",
             ]
         )
 
-    lines.extend(["## 4. Dấu hiệu IoC", ""])
+    lines.extend(["## 4. IoC", ""])
     if assessment.iocs:
         for ioc in assessment.iocs:
             lines.append(f"- **{ioc.type}:** `{_clean(ioc.value)}` — nguồn `{ioc.evidence_ref}`")
     else:
         lines.append("Không trích xuất được IoC có nguồn bằng chứng hợp lệ.")
 
+    lines.extend(["", "## 5. Dòng thời gian", ""])
+    if evidence:
+        for item in sorted(evidence, key=lambda value: value.collected_at):
+            status = "thành công" if item.ok else "thất bại"
+            lines.append(
+                f"- `{item.collected_at.isoformat()}` — `{item.evidence_id}` — "
+                f"`{item.tool}` — {status}"
+            )
+    else:
+        lines.append("Không có mốc thu thập bằng chứng trong phạm vi điều tra.")
+
     lines.extend(
-        [
-            "",
-            "## 5. Đánh giá và kết luận",
-            "",
-            _clean(assessment.conclusion),
-            "",
-            "## 6. Hạn chế",
-            "",
-        ]
+        ["", "## 6. Đánh giá và kết luận", "", _clean(assessment.conclusion), ""]
     )
+
+    lines.extend(["## 7. Khuyến nghị", ""])
+    recommendations = list(
+        dict.fromkeys(
+            _clean(finding.recommendation)
+            for finding in assessment.findings
+            if finding.recommendation.strip()
+        )
+    )
+    if recommendations:
+        lines.extend(f"- {item}" for item in recommendations)
+    else:
+        lines.append("- Tiếp tục giám sát và chỉ mở rộng điều tra khi có chỉ dấu mới.")
+
+    lines.extend(["", "## 8. Hạn chế", ""])
     limitations = list(assessment.limitations)
     limitations.extend(
         f"Truy vấn `{item.tool}` thất bại: {item.error}" for item in evidence if not item.ok

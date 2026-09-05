@@ -1,0 +1,11 @@
+name: Custom.DFIR.Windows.Persistence
+description: Tier 2 Windows persistence wrapper for startup items, scheduled tasks, and permanent WMI events; use only after Tier 1 evidence indicates persistence.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "windows"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        startup_items={ SELECT "StartupItems" AS _Source, * FROM Artifact.Windows.Sys.StartupItems() LIMIT 8 },
+        scheduled_tasks={ SELECT "ScheduledTasks" AS _Source, * FROM Artifact.Windows.System.TaskScheduler() LIMIT 12 },
+        permanent_wmi={ SELECT "PermanentWMIEvents" AS _Source, * FROM Artifact.Windows.Persistence.PermanentWMIEvents() LIMIT 8 }
+      )

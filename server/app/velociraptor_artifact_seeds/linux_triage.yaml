@@ -1,0 +1,13 @@
+name: Custom.DFIR.Linux.Triage
+description: Tier 1 Linux triage wrapper for client identity, processes, process tree, network connections, and services; read-only with 50-row output caps.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "linux"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        client_info={ SELECT "ClientInfo" AS _Source, * FROM Artifact.Generic.Client.Info() LIMIT 3 },
+        processes={ SELECT "Processes" AS _Source, * FROM Artifact.Linux.Sys.Pslist() LIMIT 8 },
+        process_tree={ SELECT "ProcessTree" AS _Source, * FROM Artifact.Generic.System.Pstree() LIMIT 6 },
+        network={ SELECT "Network" AS _Source, * FROM Artifact.Linux.Network.NetstatEnriched() LIMIT 6 },
+        services={ SELECT "Services" AS _Source, * FROM Artifact.Linux.Sys.Services() LIMIT 6 }
+      )

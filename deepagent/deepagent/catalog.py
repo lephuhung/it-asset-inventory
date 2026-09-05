@@ -89,10 +89,42 @@ def tool_policies_for(platform: str) -> dict[str, ToolPolicy]:
 # với arguments khóa cứng (không parameters, không fields tự chọn).
 CUSTOM_TOOL_PREFIX = "custom:"
 
+TIER1_CUSTOM_TOOLS: dict[str, frozenset[str]] = {
+    "windows": frozenset({"custom:Custom.DFIR.Windows.Triage"}),
+    "linux": frozenset({"custom:Custom.DFIR.Linux.Triage"}),
+    "macos": frozenset(),
+}
+
+TIER2_CUSTOM_TOOLS: dict[str, frozenset[str]] = {
+    "windows": frozenset(
+        {
+            "custom:Custom.DFIR.Windows.Execution",
+            "custom:Custom.DFIR.Windows.Persistence",
+        }
+    ),
+    "linux": frozenset(
+        {
+            "custom:Custom.DFIR.Linux.Persistence",
+            "custom:Custom.DFIR.Linux.SSH",
+        }
+    ),
+    "macos": frozenset(),
+}
+
 
 def custom_tool_names(request) -> set[str]:
     """Tập tên tool custom: hợp lệ cho một investigation request."""
     return {CUSTOM_TOOL_PREFIX + ref.name for ref in request.custom_artifacts}
+
+
+def initial_custom_tool_names(request) -> set[str]:
+    """Only trusted Tier 1 wrappers may be used in the initial collection."""
+    return custom_tool_names(request) & set(TIER1_CUSTOM_TOOLS.get(request.target_platform, ()))
+
+
+def tier2_custom_tool_names(request) -> set[str]:
+    """Trusted OS-specific Tier 2 candidates present in the backend catalog."""
+    return custom_tool_names(request) & set(TIER2_CUSTOM_TOOLS.get(request.target_platform, ()))
 
 
 def catalog_prompt(platform: str, custom_artifacts=None) -> str:
@@ -110,8 +142,15 @@ def catalog_prompt(platform: str, custom_artifacts=None) -> str:
         )
         for ref in custom_artifacts:
             desc = ref.description or "không có mô tả"
+            tool_name = CUSTOM_TOOL_PREFIX + ref.name
+            if tool_name in TIER1_CUSTOM_TOOLS.get(platform, ()):
+                tier = "Tier 1"
+            elif tool_name in TIER2_CUSTOM_TOOLS.get(platform, ()):
+                tier = "Tier 2"
+            else:
+                tier = "Unclassified"
             lines.append(
-                f"- {CUSTOM_TOOL_PREFIX}{ref.name}: "
+                f"- [{tier}] {tool_name}: "
                 f"<untrusted_description>{desc}</untrusted_description>"
             )
     return "\n".join(lines)

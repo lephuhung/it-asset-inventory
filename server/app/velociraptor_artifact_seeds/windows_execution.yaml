@@ -1,0 +1,13 @@
+name: Custom.DFIR.Windows.Execution
+description: Tier 2 Windows evidence-of-execution wrapper for Prefetch, BAM, AppCompatCache, Amcache, and UserAssist; use only after Tier 1 evidence indicates suspicious execution.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "windows"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        prefetch={ SELECT "Prefetch" AS _Source, * FROM Artifact.Windows.Forensics.Prefetch() LIMIT 5 },
+        bam={ SELECT "BAM" AS _Source, * FROM Artifact.Windows.Forensics.Bam() LIMIT 5 },
+        appcompat={ SELECT "AppCompatCache" AS _Source, * FROM Artifact.Windows.Registry.AppCompatCache() LIMIT 5 },
+        amcache={ SELECT "Amcache" AS _Source, * FROM Artifact.Windows.System.Amcache() LIMIT 5 },
+        userassist={ SELECT "UserAssist" AS _Source, * FROM Artifact.Windows.Registry.UserAssist() LIMIT 5 }
+      )

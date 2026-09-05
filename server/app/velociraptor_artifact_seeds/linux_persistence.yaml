@@ -1,0 +1,11 @@
+name: Custom.DFIR.Linux.Persistence
+description: Tier 2 Linux persistence wrapper for services, cron entries, and SUID files; use only after Tier 1 evidence indicates persistence.
+type: CLIENT
+precondition: SELECT OS FROM info() WHERE OS = "linux"
+sources:
+  - query: |
+      SELECT * FROM chain(
+        services={ SELECT "Services" AS _Source, * FROM Artifact.Linux.Sys.Services() LIMIT 10 },
+        crontab={ SELECT "Crontab" AS _Source, * FROM Artifact.Linux.Sys.Crontab() LIMIT 10 },
+        suid={ SELECT "SUID" AS _Source, * FROM Artifact.Linux.Sys.SUID() LIMIT 10 }
+      )

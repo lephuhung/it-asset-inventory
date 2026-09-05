@@ -82,6 +82,19 @@ class InvestigationPlan(BaseModel):
     steps: list[InvestigationStep] = Field(min_length=1, max_length=12)
 
 
+class Tier2Decision(BaseModel):
+    """Optional, single bounded expansion selected after Tier 1 evidence."""
+
+    selected_tool: str | None = None
+    rationale: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def require_rationale_for_selection(self) -> Tier2Decision:
+        if self.selected_tool and not self.rationale.strip():
+            raise ValueError("Tier 2 selection requires a rationale")
+        return self
+
+
 class EvidenceItem(BaseModel):
     evidence_id: str
     tool: str

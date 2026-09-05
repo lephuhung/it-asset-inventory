@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 from uuid import uuid4
 
-from deepagent.analysis_model import AnalysisModel
+from deepagent.analysis_model import INITIAL_TRIAGE_MAX_STEPS, AnalysisModel
 from deepagent.callback import BackendCallbackClient
 from deepagent.config import Settings
 from deepagent.graph import build_investigation_graph
@@ -42,7 +42,8 @@ class InvestigationRunner:
         ):
             try:
                 # H-4 fix: set current_step and total_steps from phase/progress_percent
-                total_steps = self.settings.max_steps + 2  # +2 for event-log detail steps
+                # Initial triage is hard-capped independently of deployment config.
+                total_steps = min(self.settings.max_steps, INITIAL_TRIAGE_MAX_STEPS) + 2
                 await self._status(
                     request,
                     external_job_id=external_job_id,

@@ -18,10 +18,11 @@ Mỗi job được định danh bởi `investigation_id` (idempotency scope) và
 
 ```json
 {
-  "schema_version": "dfir.deepagent.request/1.1",
+  "schema_version": "dfir.deepagent.request/1.2",
   "investigation_id": "uuid",
   "client_id": "C.x",
   "hostname": "WS-01",
+  "target_platform": "windows",
   "time_range": {"from": "2026-08-31T00:00:00Z", "to": "2026-08-31T12:00:00Z"},
   "suspicious_activity": "PowerShell bất thường"
 }
@@ -29,7 +30,9 @@ Mỗi job được định danh bởi `investigation_id` (idempotency scope) và
 
 Backend chọn model, URL và policy agent theo cấu hình portal. Khi bổ sung runtime profile, chỉ truyền snapshot cho đúng job; không ghi API key vào Markdown, log, `raw_response` hoặc trạng thái job.
 
-`system_prompt` là một phần của **LLM config / agent profile** tại portal, không phải input của modal investigation. Backend snapshot profile này khi dispatch để job đang chạy không đổi policy nếu admin cập nhật cấu hình. DeepAgent nối nó **sau** system prompt DFIR cố định; prompt cấu hình không thể nới allowlist, target lock hoặc các yêu cầu evidence-backed.
+`system_prompt` là một phần của **LLM config / agent profile** tại portal, không phải input của modal investigation. Backend snapshot profile này khi dispatch để job đang chạy không đổi policy nếu admin cập nhật cấu hình. DeepAgent ghép prompt này sau `INVARIANT_BOUNDARY` trong cùng một system message. Prompt database điều khiển cách triage; boundary điều khiển cách đánh giá bằng chứng và bảo vệ dữ liệu đầu ra. User message mô tả nghi vấn luôn nằm trong human message riêng.
+
+Lượt triage ban đầu bị giới hạn cứng tối đa 3 tool. Trên Windows, prompt hiện chỉ cho phép `windows_pslist`, `windows_netstat_enriched` và `windows_services`; Linux/macOS chỉ dùng tối đa 3 custom artifact tương thích do backend ký phát trong catalog.
 
 ## Tiến độ
 
@@ -46,6 +49,8 @@ Phase chuẩn: `queued`, `verifying_target`, `planning`, `collecting`, `assessin
 `POST /api/external/llm-dfir/investigations/{id}/result`, scope `investigation:write`, header `X-Idempotency-Key: <external_job_id>`.
 
 Body gồm `report_markdown`, `severity`, `findings_count`, `findings`, `iocs`, `llm_provider`, `llm_model`, `external_job_id` và tùy chọn `error`. Backend là nơi duy nhất lưu kết quả và gửi notification.
+
+DeepAgent thử callback kết quả tối đa 3 lần, giữ nguyên `X-Idempotency-Key` và toàn bộ body. Chỉ HTTP 200 được xem là thành công. `report_markdown` bắt đầu bằng YAML front matter `schema_version: dfir.report/1.0` và được renderer tạo đủ 8 phần: Tóm tắt; Phạm vi và nguồn dữ liệu; Phát hiện; IoC; Dòng thời gian; Đánh giá và kết luận; Khuyến nghị; Hạn chế.
 
 ## Độ tin cậy MCP và deadline
 
