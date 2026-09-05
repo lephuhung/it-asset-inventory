@@ -41,6 +41,7 @@ def test_job_id_is_deterministic_for_investigation_retries(monkeypatch):
                     "investigation_id": "11111111-1111-1111-1111-111111111111",
                     "client_id": "C.test-client",
                     "hostname": "TEST-HOST",
+                    "target_platform": "windows",
                     "time_range": {
                         "from": "2026-01-01T00:00:00Z",
                         "to": "2026-01-01T01:00:00Z",
@@ -234,6 +235,7 @@ async def test_job_stays_queued_until_semaphore_starts(monkeypatch):
                     "investigation_id": "11111111-1111-1111-1111-111111111111",
                     "client_id": "C.test-client",
                     "hostname": "TEST-HOST",
+                    "target_platform": "windows",
                     "time_range": {
                         "from": "2026-01-01T00:00:00Z",
                         "to": "2026-01-01T01:00:00Z"},
@@ -357,6 +359,7 @@ async def test_three_jobs_fifo_ordering(monkeypatch) -> None:
             "investigation_id": inv_id,
             "client_id": "C.test-client",
             "hostname": "TEST-HOST",
+            "target_platform": "windows",
             "time_range": {
                 "from": "2026-01-01T00:00:00Z",
                 "to": "2026-01-01T01:00:00Z",

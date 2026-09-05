@@ -60,6 +60,19 @@ def investigation_context(
         _context.reset(token)
 
 
+def _safe_http_status(error: BaseException) -> int | None:
+    """Extract HTTP status code from exception if it's a real HTTP error response.
+
+    Returns the status code only when it's an integer in the 4xx/5xx range —
+    i.e. an actual HTTP error, not an arbitrary attribute named ``status_code``
+    or a 2xx success code. Returns ``None`` for non-HTTP exceptions.
+    """
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int) and 400 <= status <= 599:
+        return status
+    return None
+
+
 def _safe_error_message(error: BaseException, sensitive_values: tuple[str, ...]) -> str:
     """Never serialize an external error body, which may mix secrets and evidence."""
     message = str(error)
@@ -71,8 +84,16 @@ def _safe_error_message(error: BaseException, sensitive_values: tuple[str, ...])
 
 
 def safe_error_detail(error: BaseException, sensitive_values: tuple[str, ...] = ()) -> str:
-    """Return safe external diagnostics: an exception type and no error-body content."""
-    return f"{type(error).__name__}: {_safe_error_message(error, sensitive_values)}"
+    """Return safe external diagnostics: exception type, redacted message, optional HTTP status.
+
+    HTTP status code (4xx/5xx) là metadata an toàn — phân biệt được 400 (validation)
+    vs 401 (auth) vs 404 (model) vs 500 (server) mà không lộ evidence hay secret.
+    """
+    detail = f"{type(error).__name__}: {_safe_error_message(error, sensitive_values)}"
+    status = _safe_http_status(error)
+    if status is not None:
+        detail = f"{detail} [HTTP {status}]"
+    return detail
 
 
 def log_event(
@@ -102,4 +123,7 @@ def log_event(
         event["error_message"] = _safe_error_message(
             error, context.get("sensitive_values", ())
         )
+        http_status = _safe_http_status(error)
+        if http_status is not None:
+            event["error_http_status"] = http_status
     _event_logger().info(json.dumps(event, ensure_ascii=False, default=str, separators=(",", ":")))

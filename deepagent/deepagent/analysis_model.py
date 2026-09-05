@@ -59,9 +59,15 @@ class OpenAIAnalysisModel:
         )
 
     def _messages(self, task: str) -> list[BaseMessage]:
+        # Ghép INVARIANT_BOUNDARY và operator_prompt thành một SystemMessage duy nhất.
+        # Một số OpenAI-compatible backend (đặc biệt là Qwen3 strict-mode chat
+        # template trong vLLM) từ chối request có ≥2 system messages liên tiếp với
+        # HTTP 400 "System message must be at the beginning.". OpenAI spec khuyến
+        # nghị gộp tất cả system messages; separator "---" giúp operator/reviewer
+        # vẫn phân biệt được hai lớp semantic khi xem log.
+        combined_system = f"{INVARIANT_BOUNDARY}\n\n---\n\n{self._operator_prompt}"
         return [
-            SystemMessage(content=INVARIANT_BOUNDARY),
-            SystemMessage(content=self._operator_prompt),
+            SystemMessage(content=combined_system),
             HumanMessage(content=task),
         ]
 
@@ -247,7 +253,7 @@ def sanitize_plan(
             for tool in BASELINE_TOOLS[:max_steps]
         ]
     if not steps and custom_names:
-        tool = sorted(custom_names)[0]
+        tool = min(custom_names)
         steps = [{"tool": tool, "rationale": "Artifact phù hợp nền tảng do backend cấp"}]
     return InvestigationPlan(hypothesis=plan.hypothesis, steps=steps)
 
