@@ -18,6 +18,7 @@ from app.api.routes import (
     alert_events,
     alert_rules,
     alert_templates_admin,
+    announcements,
     api_keys,
     audit,
     auth,
@@ -105,6 +106,11 @@ async def lifespan(app: FastAPI):
 
             await ensure_system_tags(db, commit=False)
 
+            # Seed thông báo modal chào mừng lần đầu đăng nhập
+            from app.db.seed_announcements import seed_first_login_announcement
+
+            await seed_first_login_announcement(db, commit=False)
+
     # Background monitor: phát hiện offline + đảm bảo partition heartbeats
     from app.services.monitor import start_monitor
 
@@ -159,6 +165,7 @@ app.include_router(api_keys.router)
 app.include_router(api_keys.public_router)
 app.include_router(audit.router)
 app.include_router(compliance.router)
+app.include_router(announcements.router)
 app.include_router(reports.router)
 from app.api.routes import agent_settings
 

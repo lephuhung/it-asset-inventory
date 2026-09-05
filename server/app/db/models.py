@@ -450,6 +450,37 @@ class UserAcknowledgment(Base):
     source: Mapped[str | None] = mapped_column(String(32), nullable=True)  # portal | installer
 
 
+class SystemAnnouncement(Base):
+    __tablename__ = "system_announcements"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_md: Mapped[str] = mapped_column(Text, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), default="ALL")  # ALL | FIRST_LOGIN | ROLE
+    target_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )  # NULL = tất cả đơn vị
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    org: Mapped[Organization | None] = relationship()
+    creator: Mapped[User] = relationship(foreign_keys=[created_by])
+
+
+class UserAnnouncementRead(Base):
+    __tablename__ = "user_announcement_reads"
+    __table_args__ = (UniqueConstraint("user_id", "announcement_id", name="uq_user_announcement_read"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    announcement_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_announcements.id", ondelete="CASCADE"), nullable=False
+    )
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
 class AlertRule(Base):
     """Subscription alert — bind template + scope + recipient_mode (redesign)."""
 

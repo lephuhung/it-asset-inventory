@@ -1674,3 +1674,39 @@ class VelociraptorArtifactDetailOut(VelociraptorArtifactOut):
     """Chi tiết artifact — kèm YAML gốc để chỉnh sửa lại."""
 
     definition_yaml: str
+
+
+# ── System Announcements (Modal thông báo & Onboarding đăng nhập) ──
+
+
+class AnnouncementCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    content_md: str = Field(min_length=1)
+    target_type: str = Field(default="ALL")  # ALL | FIRST_LOGIN | ROLE
+    target_role: str | None = None
+    org_id: uuid.UUID | None = None
+    is_active: bool = True
+
+
+class AnnouncementUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    content_md: str | None = Field(default=None, min_length=1)
+    target_type: str | None = None
+    target_role: str | None = None
+    org_id: uuid.UUID | None = None
+    is_active: bool | None = None
+
+
+class AnnouncementResponse(BaseModel):
+    id: uuid.UUID
+    title: str
+    content_md: str
+    target_type: str
+    target_role: str | None = None
+    org_id: uuid.UUID | None = None
+    org_name: str | None = None
+    is_active: bool
+    created_by: uuid.UUID
+    creator_name: str | None = None
+    created_at: datetime
+

@@ -1016,3 +1016,40 @@ export interface UserNotificationPref {
   muted: boolean;
   min_severity: string | null;
 }
+
+/* ── System Announcements (Modal thông báo & Onboarding đăng nhập) ── */
+
+export type AnnouncementTargetType = "ALL" | "FIRST_LOGIN" | "ROLE";
+
+export interface SystemAnnouncement {
+  id: string;
+  title: string;
+  content_md: string;
+  target_type: AnnouncementTargetType;
+  target_role: string | null;
+  org_id: string | null;
+  org_name: string | null;
+  is_active: boolean;
+  created_by: string;
+  creator_name: string | null;
+  created_at: string;
+}
+
+export interface AnnouncementCreatePayload {
+  title: string;
+  content_md: string;
+  target_type: AnnouncementTargetType;
+  target_role?: string | null;
+  org_id?: string | null;
+  is_active: boolean;
+}
+
+export interface AnnouncementUpdatePayload {
+  title?: string;
+  content_md?: string;
+  target_type?: AnnouncementTargetType;
+  target_role?: string | null;
+  org_id?: string | null;
+  is_active?: boolean;
+}
+

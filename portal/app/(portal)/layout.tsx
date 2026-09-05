@@ -8,6 +8,7 @@ import { RealtimeProvider, useRealtimeStatus } from "@/components/realtime-conte
 import { NotificationProvider, NotificationBell, NotificationToast } from "@/components/notification-bell";
 import { ComplianceGate } from "@/components/compliance-gate";
 import { PasswordChangeGate } from "@/components/password-change-gate";
+import { AnnouncementGate } from "@/components/announcement-gate";
 import { Sidebar } from "@/components/sidebar";
 import { UserInfo } from "@/components/user-info";
 import { Spinner } from "@/components/ui";
@@ -27,6 +28,7 @@ const TITLES: Array<[string, string]> = [
   ["/agent-config", "Cấu hình Agent"],
   ["/org-machine-stats", "Thống kê máy theo tổ chức"],
   ["/notifications-alerts", "Thông báo & Cảnh báo"],
+  ["/admin/announcements", "Thông báo đăng nhập"],
 ];
 
 function titleFor(pathname: string): string {
@@ -121,6 +123,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </div>
 
       <ComplianceGate />
+      <AnnouncementGate />
       <NotificationToast />
     </div>
   );
