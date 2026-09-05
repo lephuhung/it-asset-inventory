@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Activity, AlertTriangle, CheckCircle2, FileKey2, Loader2, PlugZap, Save, ShieldAlert, Trash2, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuth } from "@/components/auth-context";
 import {
   Badge,
   Button,
   Card,
   ConfirmDialog,
+  EmptyState,
   ErrorBanner,
   Field,
   Input,
@@ -26,6 +29,8 @@ import { formatDateTime, timeAgo } from "@/lib/format";
  */
 export default function VelociraptorSettingsPage() {
   const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin_global";
   const [data, setData] = useState<VelociraptorConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,8 +67,10 @@ export default function VelociraptorSettingsPage() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!authLoading && isSuperAdmin) {
+      void load();
+    }
+  }, [load, authLoading, isSuperAdmin]);
 
   const save = async () => {
     setSaving(true);
@@ -80,9 +87,18 @@ export default function VelociraptorSettingsPage() {
         allowlist,
       };
       await api.put("/admin/velociraptor/config", body);
-      setSavedMsg("Đã lưu cấu hình Velociraptor.");
+      setSavedMsg("Đã lưu cấu hình Velociraptor và tự động đồng bộ kết nối.");
       setHasSaved(true);
       await load();
+      try {
+        await Promise.allSettled([
+          api.post("/admin/velociraptor/sync"),
+          api.post("/admin/velociraptor/artifacts/sync-from-server"),
+        ]);
+        await load();
+      } catch {
+        // Bỏ qua nếu sync chưa kết nối được ngay
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Lưu thất bại");
     } finally {
@@ -98,9 +114,18 @@ export default function VelociraptorSettingsPage() {
       const form = new FormData();
       form.append("file", file);
       await api.postForm<VelociraptorConfig>("/admin/velociraptor/config/api-client/upload", form);
-      setSavedMsg("Đã tải lên và mã hoá api_client.yaml.");
+      setSavedMsg("Đã tải lên api_client.yaml và tự động đồng bộ kết nối.");
       setHasSaved(true);
       await load();
+      try {
+        await Promise.allSettled([
+          api.post("/admin/velociraptor/sync"),
+          api.post("/admin/velociraptor/artifacts/sync-from-server"),
+        ]);
+        await load();
+      } catch {
+        // Bỏ qua nếu sync chưa kết nối được ngay
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Tải api_client.yaml thất bại");
     } finally {
@@ -150,6 +175,31 @@ export default function VelociraptorSettingsPage() {
         : !data?.client_config_set
           ? "Tải api_client.yaml trước khi Test."
           : null;
+
+  if (authLoading || (isSuperAdmin && loading)) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
+
+  if (!isSuperAdmin) {
+    return (
+      <div className="mx-auto max-w-4xl p-6">
+        <EmptyState
+          icon={<ShieldAlert className="size-8 text-rose-500" />}
+          title="Yêu cầu quyền Super Admin"
+          description="Chỉ Super Admin mới có quyền truy cập và chỉnh sửa cấu hình máy chủ Velociraptor."
+          action={
+            <Link href="/dfir" className="text-sm font-medium text-brand-600 hover:underline">
+              ← Quay lại trang DFIR
+            </Link>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

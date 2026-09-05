@@ -515,6 +515,23 @@ export interface VelociraptorArtifact {
   updated_at: string;
 }
 
+export interface VelociraptorArtifactDetail extends VelociraptorArtifact {
+  definition_yaml: string;
+}
+
+export interface VelociraptorArtifactUpdate {
+  definition_yaml?: string;
+  supported_platforms?: Array<"windows" | "linux" | "macos">;
+  selection_priority?: number;
+  enabled?: boolean;
+}
+
+export interface VelociraptorArtifactSyncResult {
+  imported: number;
+  updated: number;
+  total_on_server: number;
+}
+
 export interface VelociraptorLink {
   machine_id: string;
   client_id: string;

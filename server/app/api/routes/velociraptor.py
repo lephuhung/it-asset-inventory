@@ -97,10 +97,82 @@ async def upload_api_client_config(
     await db.commit()
     await append_audit(db, action="velociraptor.api_client.upload", actor=str(admin.id), target="velociraptor_config:1", ip=get_client_ip(request))
     await db.commit()
+    if cfg.enabled and cfg.server_url:
+        asyncio.create_task(_trigger_auto_sync_after_config())
     return _config_to_out(cfg)
 
 
 # ── Helpers ─────────────────────────────────────────────────────
+
+
+async def _trigger_auto_sync_after_config() -> None:
+    """Tự động đồng bộ hostname links và artifacts trong nền sau khi lưu cấu hình."""
+    try:
+        from app.services.velociraptor_sync import sync_velociraptor_links
+
+        await sync_velociraptor_links()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Auto sync hostname links sau khi lưu config thất bại: %s", exc)
+
+    try:
+        from app.db.models import VelociraptorArtifact
+        from app.db.session import AsyncSessionLocal
+        from app.services.velociraptor_artifact_seed import seed_velociraptor_artifacts
+        from app.services.velociraptor_artifacts import (
+            ArtifactValidationError,
+            pull_server_artifacts,
+            validate_artifact_definition,
+        )
+
+        async with AsyncSessionLocal() as db:
+            built = await _build_velociraptor_client(db)
+            if built is not None:
+                client, _cfg = built
+                async with client:
+                    # 1. Seed bundled artifacts nếu server chưa có
+                    try:
+                        await seed_velociraptor_artifacts(db, client)
+                    except Exception as seed_exc:  # noqa: BLE001
+                        logger.warning("Auto seed artifacts sau khi lưu config thất bại: %s", seed_exc)
+
+                    # 2. Pull custom artifacts từ server về DB
+                    try:
+                        server_items = await pull_server_artifacts(client)
+                        for item in server_items:
+                            try:
+                                spec = validate_artifact_definition(item.get("raw") or "")
+                            except ArtifactValidationError:
+                                continue
+                            row = (
+                                await db.execute(
+                                    select(VelociraptorArtifact).where(
+                                        VelociraptorArtifact.name == spec.name
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                            if row is None:
+                                row = VelociraptorArtifact(
+                                    name=spec.name,
+                                    definition_yaml=spec.definition_yaml,
+                                    sha256=spec.sha256,
+                                    artifact_type=spec.artifact_type,
+                                    enabled=True,
+                                    supported_platforms=["windows"],
+                                    selection_priority=100,
+                                    last_push_status="pushed",
+                                )
+                                db.add(row)
+                            elif row.sha256 != spec.sha256:
+                                row.definition_yaml = spec.definition_yaml
+                                row.sha256 = spec.sha256
+                                row.artifact_type = spec.artifact_type
+                                row.last_push_status = "pushed"
+                        await db.commit()
+                    except Exception as pull_exc:  # noqa: BLE001
+                        logger.warning("Auto pull artifacts sau khi lưu config thất bại: %s", pull_exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Auto sync artifacts sau khi lưu config thất bại: %s", exc)
+
 
 
 async def _get_config(db: AsyncSession) -> VelociraptorConfig | None:
@@ -374,6 +446,8 @@ async def update_velociraptor_config(
     )
     await db.commit()
     logger.info("Velociraptor config updated by %s: %s", admin.email, list(changes.keys()))
+    if cfg.enabled and cfg.server_url and (cfg.client_config_encrypted or cfg.basic_auth_encrypted):
+        asyncio.create_task(_trigger_auto_sync_after_config())
     return _config_to_out(cfg)
 
 

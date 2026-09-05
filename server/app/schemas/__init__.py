@@ -1676,6 +1676,31 @@ class VelociraptorArtifactDetailOut(VelociraptorArtifactOut):
     definition_yaml: str
 
 
+class VelociraptorArtifactUpdate(BaseModel):
+    """Cập nhật artifact definition YAML hoặc metadata — Super Admin."""
+
+    definition_yaml: str | None = Field(default=None, min_length=1, max_length=262_144)
+    supported_platforms: list[Literal["windows", "linux", "macos"]] | None = Field(
+        default=None, min_length=1, max_length=3
+    )
+    selection_priority: int | None = Field(default=None, ge=0, le=1000)
+    enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_supported_platforms(self) -> VelociraptorArtifactUpdate:
+        if self.supported_platforms is not None:
+            self.supported_platforms = list(dict.fromkeys(self.supported_platforms))
+        return self
+
+
+class VelociraptorArtifactSyncOut(BaseModel):
+    """Kết quả đồng bộ artifact từ Velociraptor server về backend."""
+
+    imported: int
+    updated: int
+    total_on_server: int
+
+
 # ── System Announcements (Modal thông báo & Onboarding đăng nhập) ──
 
 

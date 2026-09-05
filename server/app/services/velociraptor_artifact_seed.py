@@ -110,6 +110,16 @@ async def seed_velociraptor_artifacts(
             row.supported_platforms = item.supported_platforms
             row.selection_priority = item.selection_priority
 
+        # Nếu artifact đã nạp thành công với cùng sha256 và đang có trên server -> bỏ qua re-push
+        if row.last_push_status == "pushed" and row.sha256 == item.spec.sha256:
+            existing_check = await client.vql(
+                "SELECT name FROM artifact_definitions() WHERE name = Name",
+                env={"Name": item.spec.name},
+            )
+            if existing_check:
+                seeded.append(item.spec.name)
+                continue
+
         try:
             await push_artifact(client, item.spec)
         except Exception as exc:

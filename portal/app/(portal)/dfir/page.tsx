@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -17,6 +17,7 @@ import {
   Search,
   ShieldAlert,
   Siren,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -36,7 +37,15 @@ import {
   Spinner,
   Textarea,
 } from "@/components/ui";
-import type { DfirHunt, VelociraptorAlert, VelociraptorArtifact, VelociraptorConfig, VelociraptorLink } from "@/lib/types";
+import type {
+  DfirHunt,
+  VelociraptorAlert,
+  VelociraptorArtifact,
+  VelociraptorArtifactDetail,
+  VelociraptorArtifactSyncResult,
+  VelociraptorConfig,
+  VelociraptorLink,
+} from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/format";
 
 /** Dashboard DFIR (Digital Forensics & Incident Response).
@@ -83,6 +92,19 @@ export default function DfirPage() {
   const [artifactPlatforms, setArtifactPlatforms] = useState<Array<"windows" | "linux" | "macos">>(["windows"]);
   const [artifactPriority, setArtifactPriority] = useState(100);
   const [artifactSubmitting, setArtifactSubmitting] = useState(false);
+
+  // Sync / Edit / Delete artifact state
+  const [syncingArtifacts, setSyncingArtifacts] = useState(false);
+  const [editingArtifact, setEditingArtifact] = useState<VelociraptorArtifact | null>(null);
+  const [editYaml, setEditYaml] = useState("");
+  const [editPlatforms, setEditPlatforms] = useState<Array<"windows" | "linux" | "macos">>(["windows"]);
+  const [editPriority, setEditPriority] = useState(100);
+  const [editEnabled, setEditEnabled] = useState(true);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [deletingArtifact, setDeletingArtifact] = useState<VelociraptorArtifact | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteForce, setDeleteForce] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -140,6 +162,104 @@ export default function DfirPage() {
     }
   };
 
+  const syncArtifactsFromServer = async () => {
+    setSyncingArtifacts(true);
+    setHuntError(null);
+    setHuntSuccess(null);
+    try {
+      const res = await api.post<VelociraptorArtifactSyncResult>(
+        "/admin/velociraptor/artifacts/sync-from-server",
+      );
+      setHuntSuccess(
+        `Đồng bộ xong: Thêm mới ${res.imported}, cập nhật ${res.updated} (tổng ${res.total_on_server} artifact Custom.* trên server).`,
+      );
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : "Đồng bộ từ Velociraptor thất bại");
+    } finally {
+      setSyncingArtifacts(false);
+    }
+  };
+
+  const openEditModal = async (artifact: VelociraptorArtifact) => {
+    setEditingArtifact(artifact);
+    setEditPlatforms(artifact.supported_platforms as Array<"windows" | "linux" | "macos">);
+    setEditPriority(artifact.selection_priority);
+    setEditEnabled(artifact.enabled);
+    setEditLoading(true);
+    setHuntError(null);
+    try {
+      const detail = await api.get<VelociraptorArtifactDetail>(
+        `/admin/velociraptor/artifacts/${encodeURIComponent(artifact.name)}`,
+      );
+      setEditYaml(detail.definition_yaml);
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : `Không tải được YAML của ${artifact.name}`);
+      setEditingArtifact(null);
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const submitEditArtifact = async () => {
+    if (!editingArtifact) return;
+    if (!editYaml.trim()) {
+      setHuntError("Nội dung YAML không được để trống");
+      return;
+    }
+    setEditSubmitting(true);
+    setHuntError(null);
+    try {
+      await api.put<VelociraptorArtifactDetail>(
+        `/admin/velociraptor/artifacts/${encodeURIComponent(editingArtifact.name)}`,
+        {
+          definition_yaml: editYaml,
+          supported_platforms: editPlatforms,
+          selection_priority: editPriority,
+          enabled: editEnabled,
+        },
+      );
+      setHuntSuccess(`Đã cập nhật thành công artifact ${editingArtifact.name}`);
+      setEditingArtifact(null);
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : "Cập nhật artifact thất bại");
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const toggleArtifactEnabled = async (artifact: VelociraptorArtifact) => {
+    try {
+      await api.put(`/admin/velociraptor/artifacts/${encodeURIComponent(artifact.name)}`, {
+        enabled: !artifact.enabled,
+      });
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : `Không thể cập nhật trạng thái của ${artifact.name}`);
+    }
+  };
+
+  const confirmDeleteArtifact = async () => {
+    if (!deletingArtifact) return;
+    setDeleteSubmitting(true);
+    setHuntError(null);
+    try {
+      await api.delete(
+        `/admin/velociraptor/artifacts/${encodeURIComponent(deletingArtifact.name)}` +
+          (deleteForce ? "?force=true" : ""),
+      );
+      setHuntSuccess(`Đã xóa artifact ${deletingArtifact.name}`);
+      setDeletingArtifact(null);
+      setDeleteForce(false);
+      await load();
+    } catch (e) {
+      setHuntError(e instanceof Error ? e.message : `Xóa ${deletingArtifact.name} thất bại`);
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  };
+
   const repushArtifact = async (name: string) => {
     setHuntError(null);
     setHuntSuccess(null);
@@ -157,6 +277,38 @@ export default function DfirPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Tự động đồng bộ hostname links và artifacts khi mở trang DFIR nếu Velociraptor đã kết nối (chỉ Super Admin)
+  const autoSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!config || autoSyncedRef.current || !isSuperAdmin) return;
+    const isConfigured = config.enabled && (config.client_config_set || config.basic_auth_set);
+    if (!isConfigured) return;
+
+    autoSyncedRef.current = true;
+    void (async () => {
+      try {
+        const syncPromises: Promise<unknown>[] = [
+          api.post("/admin/velociraptor/sync"),
+        ];
+        if (isSuperAdmin) {
+          syncPromises.push(api.post("/admin/velociraptor/artifacts/sync-from-server"));
+        }
+        await Promise.allSettled(syncPromises);
+        // Refresh silently để hiển thị dữ liệu mới nhất
+        const [lk, ar] = await Promise.all([
+          api.get<VelociraptorLink[]>("/admin/velociraptor/links"),
+          isSuperAdmin
+            ? api.get<VelociraptorArtifact[]>("/admin/velociraptor/artifacts")
+            : Promise.resolve([]),
+        ]);
+        setLinks(lk);
+        if (isSuperAdmin) setArtifacts(ar);
+      } catch (e) {
+        console.warn("Auto-sync khi mở trang DFIR:", e);
+      }
+    })();
+  }, [config, isSuperAdmin]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -423,7 +575,7 @@ export default function DfirPage() {
                 <span className="text-xs text-slate-400 group-hover:text-brand-600">→</span>
               </Link>
             </li>
-            {isAdmin && (
+            {isSuperAdmin && (
               <li>
                 <Link href="/dfir/settings" className="group flex items-center justify-between rounded-md px-2 py-1.5 text-slate-700 hover:bg-slate-50">
                   Cài đặt Velociraptor
@@ -457,22 +609,34 @@ export default function DfirPage() {
       {/* Custom artifacts — Super Admin nạp artifact mới lên Velociraptor */}
       {isSuperAdmin && (
         <Card title="Artifact tuỳ chỉnh (Custom.*)" className="overflow-hidden p-0">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
             <p className="text-xs leading-relaxed text-slate-500">
               Nạp artifact definition (YAML) lên Velociraptor server để mở rộng nguồn dữ liệu cho hunt/collect.
               Chỉ chấp nhận namespace <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Custom.*</code>,
               không hỗ trợ section <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">tools:</code>. DeepAgent chỉ nhận artifact phù hợp nền tảng máy đích.
             </p>
-            <Button size="sm" onClick={() => setShowArtifactModal(true)} disabled={!cfgOk}>
-              <FileUp className="size-3.5" /> Nạp artifact
-            </Button>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void syncArtifactsFromServer()}
+                disabled={!cfgOk || syncingArtifacts}
+                title="Quét và tải các artifact Custom.* từ server Velociraptor về DB"
+              >
+                <RefreshCw className={`size-3.5 ${syncingArtifacts ? "animate-spin" : ""}`} />
+                {syncingArtifacts ? "Đang đồng bộ…" : "Đồng bộ từ server"}
+              </Button>
+              <Button size="sm" onClick={() => setShowArtifactModal(true)} disabled={!cfgOk}>
+                <FileUp className="size-3.5" /> Nạp artifact
+              </Button>
+            </div>
           </div>
           {artifacts.length === 0 ? (
             <div className="p-6">
               <EmptyState
                 icon={<FileUp className="size-8" />}
                 title="Chưa có artifact tuỳ chỉnh"
-                description="Bấm 'Nạp artifact' để đẩy artifact YAML (namespace Custom.*) lên Velociraptor server."
+                description="Bấm 'Nạp artifact' để đẩy artifact YAML (namespace Custom.*) lên Velociraptor server, hoặc bấm 'Đồng bộ từ server' nếu đã tạo trên Velociraptor."
               />
             </div>
           ) : (
@@ -484,10 +648,11 @@ export default function DfirPage() {
                     <th className="px-4 py-2.5 text-left">Type</th>
                     <th className="px-4 py-2.5 text-left">Nền tảng</th>
                     <th className="px-4 py-2.5 text-left">Ưu tiên</th>
+                    <th className="px-4 py-2.5 text-left">Kích hoạt</th>
                     <th className="px-4 py-2.5 text-left">Trên server</th>
                     <th className="px-4 py-2.5 text-left">Push gần nhất</th>
                     <th className="px-4 py-2.5 text-left">Cập nhật</th>
-                    <th className="px-4 py-2.5 text-left"></th>
+                    <th className="px-4 py-2.5 text-right">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -508,6 +673,20 @@ export default function DfirPage() {
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-700">{a.selection_priority}</td>
                       <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => void toggleArtifactEnabled(a)}
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                            a.enabled
+                              ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                              : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                          }`}
+                          title={a.enabled ? "Bấm để tắt" : "Bấm để bật"}
+                        >
+                          {a.enabled ? "Bật" : "Tắt"}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
                         {a.on_server ? (
                           <Badge className="bg-emerald-100 text-emerald-700 ring-emerald-600/20">Đã nạp</Badge>
                         ) : (
@@ -525,13 +704,35 @@ export default function DfirPage() {
                       </td>
                       <td className="px-4 py-3 text-[11px] text-slate-500">{timeAgo(a.updated_at)}</td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => void repushArtifact(a.name)}
-                          className="text-xs font-medium text-brand-600 hover:underline"
-                        >
-                          Push lại
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void openEditModal(a)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-brand-600 px-1.5 py-1 rounded hover:bg-slate-100"
+                            title="Sửa definition YAML & metadata"
+                          >
+                            <Pencil className="size-3" /> Sửa
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void repushArtifact(a.name)}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:underline px-1.5 py-1"
+                            title="Push lại definition lên Velociraptor"
+                          >
+                            Push lại
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeletingArtifact(a);
+                              setDeleteForce(false);
+                            }}
+                            className="inline-flex items-center gap-1 text-xs font-medium text-rose-600 hover:text-rose-700 px-1.5 py-1 rounded hover:bg-rose-50"
+                            title="Xóa artifact khỏi server và database"
+                          >
+                            <Trash2 className="size-3" /> Xóa
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -832,6 +1033,134 @@ export default function DfirPage() {
               Artifact loại <strong>CLIENT_EVENT</strong> thay đổi hành vi thu thập trên <em>toàn bộ</em> agent fleet ngay khi nạp. Chỉ dùng khi đã kiểm chứng truy vấn.
             </div>
           )}
+        </div>
+      </Modal>
+
+      {/* Modal chỉnh sửa artifact */}
+      <Modal
+        open={!!editingArtifact}
+        title={`Chỉnh sửa artifact: ${editingArtifact?.name ?? ""}`}
+        onClose={() => setEditingArtifact(null)}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setEditingArtifact(null)} disabled={editSubmitting}>
+              Hủy
+            </Button>
+            <Button onClick={() => void submitEditArtifact()} disabled={editSubmitting || editLoading || !editYaml.trim() || editPlatforms.length === 0}>
+              {editSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <Pencil className="size-3.5" />}
+              Lưu thay đổi
+            </Button>
+          </div>
+        }
+      >
+        {editLoading ? (
+          <div className="flex flex-col items-center justify-center p-8 gap-2">
+            <Spinner />
+            <p className="text-xs text-slate-500">Đang tải nội dung YAML từ server…</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <Field
+              label="Artifact definition (YAML)"
+              hint={`Lưu ý: Không được đổi giá trị trường name (${editingArtifact?.name}) trong YAML. Mọi thay đổi sẽ được validate và push đè lên Velociraptor.`}
+            >
+              <Textarea
+                value={editYaml}
+                onChange={(e) => setEditYaml(e.target.value)}
+                rows={12}
+                className="font-mono text-xs"
+              />
+            </Field>
+            <Field label="Nền tảng hỗ trợ" hint="DeepAgent chỉ gửi artifact này khi máy mục tiêu thuộc nền tảng phù hợp.">
+              <div className="flex gap-4">
+                {(["windows", "linux", "macos"] as const).map((platform) => (
+                  <label key={platform} className="inline-flex items-center gap-1.5 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editPlatforms.includes(platform)}
+                      onChange={(e) => setEditPlatforms((current) => e.target.checked
+                        ? [...current, platform]
+                        : current.filter((item) => item !== platform))}
+                    />
+                    {platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}
+                  </label>
+                ))}
+              </div>
+            </Field>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Ưu tiên chọn catalog (0–1000)" hint="Số cao hơn được ưu tiên đưa vào catalog trước.">
+                <input
+                  aria-label="Ưu tiên chọn catalog"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={editPriority}
+                  onChange={(e) => setEditPriority(Math.max(0, Math.min(1000, Number(e.target.value) || 0)))}
+                  className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="Trạng thái kích hoạt" hint="Tắt để DeepAgent tạm thời không sử dụng artifact này.">
+                <label className="mt-1.5 inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editEnabled}
+                    onChange={(e) => setEditEnabled(e.target.checked)}
+                    className="size-4 rounded text-brand-600 focus:ring-brand-500"
+                  />
+                  <span>{editEnabled ? "Đang bật (Enabled)" : "Đang tắt (Disabled)"}</span>
+                </label>
+              </Field>
+            </div>
+            {/^\s*type:\s*client_event\s*$/im.test(editYaml) && (
+              <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
+                <AlertTriangle className="mr-1 inline size-4 align-text-top" />
+                Artifact loại <strong>CLIENT_EVENT</strong> thay đổi hành vi thu thập trên <em>toàn bộ</em> agent fleet ngay khi nạp. Chỉ dùng khi đã kiểm chứng truy vấn.
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal xác nhận xóa artifact */}
+      <Modal
+        open={!!deletingArtifact}
+        title="Xác nhận xóa artifact"
+        onClose={() => setDeletingArtifact(null)}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeletingArtifact(null)} disabled={deleteSubmitting}>
+              Hủy
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void confirmDeleteArtifact()}
+              disabled={deleteSubmitting}
+            >
+              {deleteSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+              Xác nhận xóa
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 text-sm text-slate-600">
+          <p>
+            Bạn có chắc chắn muốn xóa artifact <code className="font-mono font-bold text-rose-600">{deletingArtifact?.name}</code>?
+          </p>
+          <div className="rounded-md bg-rose-50 p-3 text-xs text-rose-800 ring-1 ring-inset ring-rose-200">
+            <AlertTriangle className="mr-1 inline size-4 align-text-top text-rose-600" />
+            Artifact sẽ bị xóa hoàn toàn khỏi <strong>Velociraptor Server</strong> và cơ sở dữ liệu. Thao tác này không thể hoàn tác.
+          </div>
+          <div className="pt-2 border-t border-slate-100">
+            <label className="inline-flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={deleteForce}
+                onChange={(e) => setDeleteForce(e.target.checked)}
+                className="size-3.5 rounded text-rose-600 focus:ring-rose-500"
+              />
+              <span>Buộc xóa trong DB nếu server Velociraptor không phản hồi (?force=true)</span>
+            </label>
+          </div>
         </div>
       </Modal>
 

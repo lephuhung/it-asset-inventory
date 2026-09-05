@@ -11,9 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps cho 1 số wheel (psycopg, bcrypt…) + curl (healthcheck)
+# System deps cho 1 số wheel (psycopg, bcrypt…), curl (healthcheck) và native libs cho WeasyPrint
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc libpq-dev curl \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libgdk-pixbuf-2.0-0 \
+        shared-mime-info fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Đầy đủ Python deps (đồng bộ với pyproject.toml)
@@ -36,6 +38,7 @@ RUN pip install --no-cache-dir \
         "slowapi>=0.1.9" \
         "httpx>=0.27.0" \
         "openpyxl>=3.1.0" \
+        "weasyprint>=62.0" \
         "pyyaml>=6.0.0" \
         "docker>=7.0.0" \
         "python-multipart>=0.0.20" \

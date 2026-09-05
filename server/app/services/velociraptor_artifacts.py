@@ -37,6 +37,10 @@ class ArtifactPushError(RuntimeError):
     """Push artifact lên Velociraptor thất bại — message an toàn."""
 
 
+class ArtifactDeleteError(RuntimeError):
+    """Xóa artifact trên Velociraptor thất bại — message an toàn."""
+
+
 @dataclass(frozen=True)
 class ArtifactSpec:
     name: str
@@ -148,3 +152,52 @@ async def push_artifact(client: VelociraptorClient, spec: ArtifactSpec) -> None:
         raise ArtifactPushError(
             f"Velociraptor không nạp artifact {spec.name} sau khi push"
         )
+
+
+async def delete_artifact(client: VelociraptorClient, name: str) -> None:
+    """Xóa artifact Custom.* khỏi Velociraptor server bằng `artifact_delete()` rồi verify lại.
+
+    Chặn tuyệt đối xóa artifact không thuộc Custom.*.
+    """
+    if not name.startswith(CUSTOM_PREFIX):
+        raise ArtifactDeleteError(
+            f"Chỉ cho phép xóa artifact thuộc namespace {CUSTOM_PREFIX}"
+        )
+
+    try:
+        await client.vql(
+            "SELECT artifact_delete(name=Name) AS Result FROM scope()",
+            env={"Name": name},
+        )
+    except VelociraptorError as exc:
+        raise ArtifactDeleteError(f"Velociraptor từ chối xóa artifact: {exc}") from exc
+
+    verified = await client.vql(
+        "SELECT name FROM artifact_definitions() WHERE name = Name", env={"Name": name}
+    )
+    if verified:
+        raise ArtifactDeleteError(
+            f"Velociraptor không xóa được artifact {name} sau lệnh xóa"
+        )
+
+
+async def pull_server_artifacts(
+    client: VelociraptorClient, *, prefix: str = CUSTOM_PREFIX
+) -> list[dict]:
+    """Lấy danh sách các artifact trên server kèm definition YAML (raw)."""
+    rows = await client.vql(
+        "SELECT name, raw, type, description FROM artifact_definitions() WHERE name =~ Prefix",
+        env={"Prefix": f"^{prefix}"},
+    )
+    results: list[dict] = []
+    for row in rows:
+        name = row.get("name")
+        raw = row.get("raw")
+        if isinstance(name, str) and isinstance(raw, str) and raw.strip():
+            results.append({
+                "name": name,
+                "raw": raw,
+                "type": row.get("type") or "CLIENT",
+                "description": row.get("description") or "",
+            })
+    return results
