@@ -111,6 +111,11 @@ async def lifespan(app: FastAPI):
 
             await seed_first_login_announcement(db, commit=False)
 
+            # Seed thông báo tuân thủ quy định bảo vệ dữ liệu cá nhân (mục 7.4 / Nghị định 13)
+            from app.db.seed_compliance import seed_compliance_notice
+
+            await seed_compliance_notice(db, commit=False)
+
     # Background monitor: phát hiện offline + đảm bảo partition heartbeats
     from app.services.monitor import start_monitor
 
