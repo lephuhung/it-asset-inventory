@@ -249,7 +249,7 @@ body {
   box-shadow: var(--shadow-card);
 }
 
-/* KPI card có vạch màu trái — vạch dùng primary (màu cấu trúc duy nhất) */
+/* KPI card — card trắng, viền mỏng hairline, chỉ điểm nhấn icon (Notion-style) */
 .kpi-card {
   position: relative;
   overflow: hidden;
@@ -257,15 +257,6 @@ body {
   background: var(--surface);
   border-radius: 12px;
   box-shadow: var(--shadow-card);
-}
-.kpi-card::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  background: var(--brand-600);
 }
 
 /* ── Markdown (thông báo tuân thủ) ───────────────────────── */

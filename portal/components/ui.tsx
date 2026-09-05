@@ -138,7 +138,7 @@ export function Card({
   );
 }
 
-/* ── KPI card (theo Design.md §9 — vạch màu trái) ─────────── */
+/* ── KPI card (trắng phẳng + hairline, điểm nhấn màu ở icon) ─── */
 
 export function KpiCard({
   label,
@@ -147,6 +147,7 @@ export function KpiCard({
   accent,
   sub,
   hint,
+  className = "",
 }: {
   label: string;
   value: number | string;
@@ -155,10 +156,11 @@ export function KpiCard({
   sub?: string;
   /** Tooltip giải thích ý nghĩa số liệu (hiển thị khi hover icon ⓘ). */
   hint?: string;
+  className?: string;
 }) {
   const [showHint, setShowHint] = useState(false);
   return (
-    <div className="kpi-card flex min-h-[108px] h-full flex-col justify-between p-3.5 sm:p-4">
+    <div className={`kpi-card flex min-h-[108px] h-full flex-col justify-between p-3.5 sm:p-4 ${className}`}>
       <div className="flex items-start justify-between gap-2">
         <p className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-slate-400">
           {label}
