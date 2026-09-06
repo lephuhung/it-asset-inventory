@@ -1276,6 +1276,8 @@ export interface SystemProfileDetail {
   parties: SystemProfileParty[];
   applications: SystemProfileApplication[];
   ip_ranges: SystemProfileIpRange[];
+  /** Chuyên trách CNTT / tổ chức vận hành đã gắn vào hồ sơ. */
+  contacts: SystemProfileContact[];
   /** Timeline lịch sử hồ sơ — mới nhất trước. */
   events: SystemProfileEvent[];
   physical_diagram_mermaid: string | null;
@@ -1293,4 +1295,53 @@ export interface SystemProfileEvent {
   actor_id: string | null;
   actor_name: string | null;
   created_at: string;
+}
+
+/* ── Danh bạ chuyên trách CNTT / tổ chức vận hành ──────────── */
+
+export type ItContactKind = "person" | "org";
+
+export interface ItContact {
+  id: string;
+  org_id: string;
+  org_name: string | null;
+  kind: ItContactKind;
+  /** Họ tên cá nhân (person) hoặc tên tổ chức (org). */
+  name: string;
+  /** Chức vụ (person) hoặc vai trò vận hành (org). */
+  position: string | null;
+  /** Đầu mối liên hệ (khi kind=org). */
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  note: string | null;
+  profile_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ItContactPayload {
+  org_id: string;
+  kind: ItContactKind;
+  name: string;
+  position?: string | null;
+  contact_person?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  note?: string | null;
+}
+
+/** Contact đã gắn vào hồ sơ cấp độ. */
+export interface SystemProfileContact {
+  contact_id: string;
+  kind: ItContactKind;
+  name: string;
+  position: string | null;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  note: string | null;
+  added_at: string;
 }

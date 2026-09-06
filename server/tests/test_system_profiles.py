@@ -863,3 +863,77 @@ async def test_superadmin_edit_logs_diff(client, org_env):
     assert r.status_code == 200, r.text
     ev_updated = [e for e in r.json()["events"] if e["event"] == "updated"][-1]
     assert "Tên hệ thống" in ev_updated["message"] and "Địa điểm lắp đặt" in ev_updated["message"]
+
+
+# ── Danh bạ chuyên trách CNTT / tổ chức vận hành ────────────
+
+
+async def test_it_contacts_crud_and_rbac(client, session_factory, org_env):
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    other_org = await _make_org(session_factory, "UBND xã C")
+
+    # Super Admin thêm contact cho đơn vị
+    r = await client.post(
+        "/api/it-contacts", headers=sa,
+        json={"org_id": org_env["org_id"], "kind": "person", "name": "Nguyễn Văn A", "position": "Chuyên viên CNTT", "phone": "0912345678"},
+    )
+    assert r.status_code == 201, r.text
+    person_id = r.json()["id"]
+
+    # org_admin thêm contact cho đơn vị khác → 403
+    r = await client.post("/api/it-contacts", headers=oa, json={"org_id": other_org, "kind": "org", "name": "Tổ chức X"})
+    assert r.status_code == 403
+
+    # org_admin thêm tổ chức vận hành cho đơn vị mình
+    r = await client.post(
+        "/api/it-contacts", headers=oa,
+        json={"org_id": org_env["org_id"], "kind": "org", "name": "Trung tâm CNTT", "contact_person": "Trần Văn B"},
+    )
+    assert r.status_code == 201, r.text
+    org_contact_id = r.json()["id"]
+
+    # Filter kind + org
+    r = await client.get("/api/it-contacts", headers=oa, params={"kind": "org"})
+    assert [x["id"] for x in r.json()] == [org_contact_id]
+    r = await client.get("/api/it-contacts", headers=sa, params={"org_id": other_org})
+    assert r.json() == []
+
+    # Sửa + xóa
+    r = await client.patch(f"/api/it-contacts/{person_id}", headers=oa, json={"email": "a@donvi.gov.vn"})
+    assert r.status_code == 200 and r.json()["email"] == "a@donvi.gov.vn"
+    r = await client.delete(f"/api/it-contacts/{org_contact_id}", headers=oa)
+    assert r.status_code == 204
+
+
+async def test_profile_contacts_attach_detach(client, session_factory, org_env):
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống Mạng LAN", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    r = await client.post("/api/it-contacts", headers=oa, json={"org_id": org_env["org_id"], "kind": "person", "name": "Chuyên trách A"})
+    person_id = r.json()["id"]
+    # Contact của đơn vị khác → chặn
+    other = await client.post("/api/it-contacts", headers=sa, json={"org_id": await _make_org(session_factory, "Org D"), "kind": "org", "name": "Org khác"})
+    r = await client.post(f"/api/system-profiles/{pid}/contacts/{other.json()['id']}", headers=oa)
+    assert r.status_code == 400
+
+    # Gắn chuyên trách A với vai trò
+    r = await client.post(f"/api/system-profiles/{pid}/contacts/{person_id}?note=Phụ%20trách%20vận%20hành", headers=oa)
+    assert r.status_code == 201, r.text
+    assert r.json()["contacts"][0]["name"] == "Chuyên trách A"
+    assert r.json()["contacts"][0]["note"] == "Phụ trách vận hành"
+
+    # Gắn trùng → 409; gỡ → 200 và danh sách rỗng
+    r = await client.post(f"/api/system-profiles/{pid}/contacts/{person_id}", headers=oa)
+    assert r.status_code == 409
+    r = await client.delete(f"/api/system-profiles/{pid}/contacts/{person_id}", headers=oa)
+    assert r.status_code == 200 and r.json()["contacts"] == []
+
+    # Timeline ghi gắn/gỡ
+    events = [e["event"] for e in r.json()["events"]]
+    assert "contact_attached" in events and "contact_detached" in events

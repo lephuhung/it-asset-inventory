@@ -31,6 +31,7 @@ from app.api.routes import (
     heartbeat,
     install,
     inventory,
+    it_contacts,
     llm_dfir,
     llm_dfir_external,
     machines,
@@ -166,6 +167,7 @@ app.include_router(tags.router)
 app.include_router(system_profiles.router)
 app.include_router(system_profiles.catalog_router)
 app.include_router(device_types.router)
+app.include_router(it_contacts.router)
 app.include_router(orgs.router)
 app.include_router(alert_rules.router)
 app.include_router(self_service.router)

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Building2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type {
   DeviceType,
@@ -18,6 +18,7 @@ import type {
   SystemProfileIpRange,
   SystemProfileParty,
   PartyRole,
+  ItContact,
 } from "@/lib/types";
 import {
   Badge,
@@ -45,7 +46,7 @@ import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { generateDevicesMermaid, labelFor, validateDevicesMermaid } from "@/lib/system-profile-diagram";
 import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
 
-type Tab = "info" | "history" | "devices" | "machines" | "requirements" | "applications" | "ip-ranges" | "diagram";
+type Tab = "info" | "history" | "devices" | "machines" | "contacts" | "requirements" | "applications" | "ip-ranges" | "diagram";
 
 /** Icon + màu hiển thị từng loại sự kiện trên timeline lịch sử. */
 const EVENT_META: Record<string, { icon: string; cls: string }> = {
@@ -66,6 +67,8 @@ const EVENT_META: Record<string, { icon: string; cls: string }> = {
   requirement_requested: { icon: "🛡️", cls: "bg-amber-50 ring-amber-600/20" },
   requirement_verified: { icon: "🛡️", cls: "bg-emerald-50 ring-emerald-600/20" },
   requirement_rejected: { icon: "🛡️", cls: "bg-rose-50 ring-rose-600/20" },
+  contact_attached: { icon: "🧑‍💼", cls: "bg-slate-100 ring-slate-500/20" },
+  contact_detached: { icon: "🧑‍💼", cls: "bg-slate-100 ring-slate-500/20" },
   party_added: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
   party_updated: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
   party_removed: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
@@ -144,6 +147,11 @@ export default function SystemProfileDetailPage() {
   // Gắn máy
   const [machines, setMachines] = useState<MachineListItem[]>([]);
   const [machinePick, setMachinePick] = useState("");
+
+  // Gắn chuyên trách CNTT / tổ chức vận hành (từ danh bạ đơn vị)
+  const [contactsDir, setContactsDir] = useState<ItContact[]>([]);
+  const [contactPick, setContactPick] = useState("");
+  const [contactNote, setContactNote] = useState("");
 
   // Dossier: chủ quản/vận hành, phạm vi & quy mô, ứng dụng, vùng mạng
   const [partyModal, setPartyModal] = useState<SystemProfileParty | "new-owner" | "new-operator" | null>(null);
@@ -225,7 +233,13 @@ export default function SystemProfileDetailPage() {
 
   useEffect(() => {
     if (tab === "machines" || tab === "applications") void loadMachines();
-  }, [tab, loadMachines]);
+    if (tab === "contacts") {
+      void api
+        .get<ItContact[]>("/it-contacts", { org_id: profile?.org_id })
+        .then(setContactsDir)
+        .catch(() => setContactsDir([]));
+    }
+  }, [tab, loadMachines, profile?.org_id]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setActionError(null);
@@ -351,6 +365,7 @@ export default function SystemProfileDetailPage() {
     { key: "history", label: "Lịch sử" },
     { key: "devices", label: `Thiết bị (${profile.device_count})` },
     { key: "machines", label: `Máy tính (${profile.machine_count})` },
+    { key: "contacts", label: `Chuyên trách & vận hành (${profile.contacts.length})` },
     { key: "requirements", label: `Yêu cầu ATTT (${profile.requirements_verified}/${profile.requirements_total})` },
     { key: "applications", label: `Ứng dụng (${profile.applications.length})` },
     { key: "ip-ranges", label: `Vùng mạng & IP (${profile.ip_ranges.length})` },
@@ -702,6 +717,93 @@ export default function SystemProfileDetailPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      )}
+
+      {tab === "contacts" && (
+        <div className="space-y-3">
+          {canEdit && (
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Field label="Gắn chuyên trách CNTT / tổ chức vận hành" hint="Danh bạ của đơn vị — quản lý thêm ở trang Chuyên trách CNTT.">
+                  <Select value={contactPick} onChange={(e) => setContactPick(e.target.value)}>
+                    <option value="">— chọn từ danh bạ đơn vị —</option>
+                    {contactsDir
+                      .filter((c) => !profile.contacts.some((pc) => pc.contact_id === c.id))
+                      .map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {`${c.kind === "org" ? "🏢" : "👤"} ${c.name}${c.position ? ` — ${c.position}` : ""}`}
+                        </option>
+                      ))}
+                  </Select>
+                </Field>
+              </div>
+              <div className="w-56">
+                <Field label="Vai trò trong hồ sơ (tùy chọn)">
+                  <Input value={contactNote} onChange={(e) => setContactNote(e.target.value)} placeholder="Phụ trách vận hành…" />
+                </Field>
+              </div>
+              <Button
+                disabled={!contactPick || busy}
+                loading={busy}
+                onClick={() => {
+                  const cid = contactPick;
+                  const note = contactNote.trim();
+                  setContactPick("");
+                  setContactNote("");
+                  void act(() => api.post(`/system-profiles/${profile.id}/contacts/${cid}${note ? `?note=${encodeURIComponent(note)}` : ""}`));
+                }}
+              >
+                Gắn
+              </Button>
+            </div>
+          )}
+          {profile.contacts.length === 0 ? (
+            <EmptyState
+              icon={<Building2 className="size-8 text-slate-400" />}
+              title="Chưa gắn chuyên trách/tổ chức nào"
+              description="Gắn người chuyên trách CNTT hoặc tổ chức vận hành liên quan đến hệ thống này từ danh bạ đơn vị."
+            />
+          ) : (
+            <div className={TABLE_WRAP}>
+              <table className={TABLE}>
+                <thead className={THEAD}>
+                  <tr><th className={TH}>Tên</th><th className={TH}>Loại</th><th className={TH}>Chức vụ / Đầu mối</th><th className={TH}>Điện thoại</th><th className={TH}>Email</th><th className={TH}>Vai trò trong hồ sơ</th>{canEdit && <th className={TH}></th>}</tr>
+                </thead>
+                <tbody>
+                  {profile.contacts.map((pc) => (
+                    <tr key={pc.contact_id} className={TR_HOVER}>
+                      <td className={`${TD} font-medium`}>{pc.name}</td>
+                      <td className={TD}>
+                        <Badge className={pc.kind === "org" ? "bg-sky-50 text-sky-700 ring-sky-600/20" : "bg-indigo-50 text-indigo-700 ring-indigo-600/20"}>
+                          {pc.kind === "org" ? "Tổ chức vận hành" : "Chuyên trách CNTT"}
+                        </Badge>
+                      </td>
+                      <td className={`${TD} text-sm`}>
+                        {pc.kind === "org"
+                          ? [pc.position, pc.contact_person ? `Đầu mối: ${pc.contact_person}` : null].filter(Boolean).join(" · ") || "—"
+                          : pc.position || "—"}
+                      </td>
+                      <td className={`${TD} text-sm`}>{pc.phone ?? "—"}</td>
+                      <td className={`${TD} text-sm`}>{pc.email ?? "—"}</td>
+                      <td className={`${TD} text-sm`}>{pc.note ?? "—"}</td>
+                      {canEdit && (
+                        <td className={TD}>
+                          <Button size="sm" variant="danger" loading={busy} onClick={() => void act(() => api.delete(`/system-profiles/${profile.id}/contacts/${pc.contact_id}`))}>Gỡ</Button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {isAdmin && (
+            <p className="text-xs text-slate-400">
+              Quản lý danh bạ đơn vị ở trang{" "}
+              <Link href="/contacts" className="text-brand-600 hover:underline">Chuyên trách CNTT</Link>.
+            </p>
           )}
         </div>
       )}

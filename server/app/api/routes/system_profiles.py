@@ -33,6 +33,7 @@ from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.db.models import (
     DeviceType,
+    ItContact,
     LevelRequirement,
     Machine,
     Organization,
@@ -41,6 +42,7 @@ from app.db.models import (
     SystemDevice,
     SystemProfile,
     SystemProfileApplication,
+    SystemProfileContact,
     SystemProfileEvent,
     SystemProfileIpRange,
     SystemProfileParty,
@@ -68,6 +70,7 @@ from app.schemas import (
     SystemProfileCreate,
     SystemProfileDeviceIn,
     SystemProfileDeviceOut,
+    SystemProfileContactOut,
     SystemProfileDetailOut,
     SystemProfileEventOut,
     SystemProfileMachineOut,
@@ -112,6 +115,7 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
                 selectinload(SystemProfile.parties),
                 selectinload(SystemProfile.applications).selectinload(SystemProfileApplication.machine),
                 selectinload(SystemProfile.ip_ranges),
+                selectinload(SystemProfile.contacts).selectinload(SystemProfileContact.contact),
                 selectinload(SystemProfile.events),
             )
             .where(SystemProfile.id == profile_id)
@@ -241,6 +245,14 @@ def _to_detail(profile: SystemProfile, org_name: str | None) -> SystemProfileDet
             )
             # sort phòng khi selectinload không áp order_by của relationship
             for e in sorted(profile.events or [], key=lambda x: x.created_at, reverse=True)
+        ],
+        contacts=[
+            SystemProfileContactOut(
+                contact_id=pc.contact_id, kind=pc.contact.kind, name=pc.contact.name,
+                position=pc.contact.position, contact_person=pc.contact.contact_person,
+                phone=pc.contact.phone, email=pc.contact.email, note=pc.note, added_at=pc.added_at,
+            )
+            for pc in (profile.contacts or [])
         ],
         requirements_total=len(reqs),
         requirements_verified=verified,
@@ -818,6 +830,74 @@ async def detach_machine(
     )
     await db.commit()
     await db.refresh(profile)
+    return _to_detail(profile, None)
+
+
+# ── Chuyên trách CNTT / tổ chức vận hành gắn vào hồ sơ ──────
+
+
+@router.post("/{profile_id}/contacts/{contact_id}", response_model=SystemProfileDetailOut, status_code=status.HTTP_201_CREATED)
+async def attach_contact(
+    profile_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    note: str | None = None,
+    request: Request = None,  # noqa: RUF012 — gán bởi FastAPI dependency injection
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gắn chuyên trách CNTT / tổ chức vận hành (từ danh bạ) vào hồ sơ.
+
+    Contact phải cùng đơn vị với hồ sơ. `note` ghi vai trò trong hồ sơ
+    (vd: phụ trách vận hành, đầu mối kỹ thuật).
+    """
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    contact = (await db.execute(select(ItContact).where(ItContact.id == contact_id))).scalar_one_or_none()
+    if contact is None or str(contact.org_id) != str(profile.org_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Contact không thuộc đơn vị của hồ sơ")
+    exists = (
+        await db.execute(
+            select(SystemProfileContact).where(
+                SystemProfileContact.profile_id == profile.id,
+                SystemProfileContact.contact_id == contact_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if exists is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Contact đã nằm trong hồ sơ")
+    db.add(SystemProfileContact(profile_id=profile.id, contact_id=contact_id, note=note))
+    kind_label = "Tổ chức vận hành" if contact.kind == "org" else "Chuyên trách CNTT"
+    _log_event(db, profile, "contact_attached", f"Gắn {kind_label.lower()}: {contact.name}", admin)
+    await append_audit(db, action="system_profile.contact.attach", actor=str(admin.id), target=f"{profile.id}:{contact_id}", ip=get_client_ip(request))
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    return _to_detail(profile, None)
+
+
+@router.delete("/{profile_id}/contacts/{contact_id}", response_model=SystemProfileDetailOut)
+async def detach_contact(
+    profile_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    link = (
+        await db.execute(
+            select(SystemProfileContact).where(
+                SystemProfileContact.profile_id == profile.id,
+                SystemProfileContact.contact_id == contact_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if link is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Contact không nằm trong hồ sơ")
+    contact_name = link.contact.name if link.contact else str(contact_id)
+    await db.delete(link)
+    _log_event(db, profile, "contact_detached", f"Gỡ chuyên trách/tổ chức: {contact_name}", admin)
+    await append_audit(db, action="system_profile.contact.detach", actor=str(admin.id), target=f"{profile.id}:{contact_id}", ip=get_client_ip(request))
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
     return _to_detail(profile, None)
 
 

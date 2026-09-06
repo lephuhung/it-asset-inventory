@@ -87,6 +87,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
         roles: ADMIN_ROLES,
       },
       {
+        href: "/contacts",
+        label: "Chuyên trách CNTT",
+        icon: UserCog,
+        roles: ADMIN_ROLES,
+      },
+      {
         href: "/organizations",
         label: "Cây tổ chức",
         icon: Building2,

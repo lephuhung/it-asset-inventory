@@ -1985,6 +1985,7 @@ class SystemProfileDetailOut(SystemProfileOut):
     parties: list[SystemProfilePartyOut] = []
     applications: list[SystemProfileApplicationOut] = []
     ip_ranges: list[SystemProfileIpRangeOut] = []
+    contacts: list[SystemProfileContactOut] = []
     events: list[SystemProfileEventOut] = []
     # Đáp ứng cấp độ: đủ n yêu cầu của cấp độ hồ sơ được thẩm định đạt
     requirements_total: int = 0
@@ -2021,3 +2022,54 @@ class DeviceTypeUpdate(BaseModel):
     icon: str | None = Field(default=None, max_length=16)
     sort_order: int | None = None
     is_active: bool | None = None
+
+
+# ── Danh bạ chuyên trách CNTT / tổ chức vận hành ────────────
+
+
+class ItContactIn(BaseModel):
+    """Tạo/sửa contact: cá nhân chuyên trách CNTT hoặc tổ chức vận hành."""
+
+    org_id: uuid.UUID
+    kind: str = Field(default="person", pattern="^(person|org)$")
+    name: str = Field(min_length=1, max_length=255)
+    position: str | None = Field(default=None, max_length=255)
+    contact_person: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = None
+    note: str | None = None
+
+
+class ItContactUpdate(BaseModel):
+    """Cập nhật một phần contact. `org_id` và `kind` không cho đổi."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    position: str | None = Field(default=None, max_length=255)
+    contact_person: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = None
+    note: str | None = None
+
+
+class ItContactOut(ItContactIn):
+    id: uuid.UUID
+    org_name: str | None = None
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileContactOut(BaseModel):
+    """Contact đã gắn vào hồ sơ."""
+
+    contact_id: uuid.UUID
+    kind: str
+    name: str
+    position: str | None = None
+    contact_person: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    note: str | None = None
+    added_at: datetime

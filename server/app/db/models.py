@@ -1191,6 +1191,9 @@ class SystemProfile(Base):
         cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
         order_by="SystemProfileEvent.created_at.desc()",
     )
+    contacts: Mapped[list[SystemProfileContact]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
 
 
 class SystemDevice(Base):
@@ -1378,6 +1381,57 @@ class SystemProfileEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+
+
+class ItContact(Base):
+    """Danh bạ chuyên trách CNTT / tổ chức vận hành theo đơn vị.
+
+    `kind=person` — cá nhân chuyên trách CNTT (họ tên, chức vụ, liên hệ);
+    `kind=org` — tổ chức được giao vận hành (tên tổ chức, đầu mối liên hệ).
+    Được gắn vào hồ sơ cấp độ qua `system_profile_contacts` (1 hồ sơ gắn được
+    nhiều contact, 1 contact dùng cho nhiều hồ sơ).
+    """
+
+    __tablename__ = "it_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="person")  # person | org
+    name: Mapped[str] = mapped_column(String(255), nullable=False)  # họ tên cá nhân / tên tổ chức
+    position: Mapped[str | None] = mapped_column(String(255), nullable=True)  # chức vụ / vai trò vận hành
+    contact_person: Mapped[str | None] = mapped_column(String(255), nullable=True)  # đầu mối liên hệ (khi kind=org)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    org: Mapped[Organization] = relationship()
+
+
+class SystemProfileContact(Base):
+    """Liên kết hồ sơ cấp độ ↔ chuyên trách CNTT / tổ chức vận hành.
+
+    Ví dụ: hồ sơ "Mạng LAN" gắn chuyên trách A; hồ sơ "Website B" gắn tổ
+    chức vận hành B. Contact phải cùng đơn vị với hồ sơ.
+    """
+
+    __tablename__ = "system_profile_contacts"
+
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), primary_key=True
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("it_contacts.id"), primary_key=True
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)  # vai trò trong hồ sơ
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+    contact: Mapped[ItContact] = relationship()
 
 
 class DeviceType(Base):
