@@ -733,15 +733,27 @@ async def test_document_fields_optional_and_editable_after_approval(client, org_
     assert r.status_code == 400
 
 
-async def test_implementation_flow_and_stats(client, org_env):
-    """approved → (đơn vị khai báo) implemented → (super admin) fulfilled; stats đúng."""
+async def test_implementation_flow_and_stats(client, session_factory, org_env):
+    """approved → khai báo triển khai (chỉ khi đủ 100% yêu cầu ATTT đạt) → fulfilled; stats đúng."""
+    await _seed_requirements(session_factory, [(1, "L1-IMP", "Yêu cầu triển khai")])
     oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
     sa = _auth(await _login(client, org_env["email"], org_env["password"]))
     pid = await _approved_profile(client, org_env, oa, sa)
+    row = (await _get_profile(client, sa, pid))["requirements"][0]["id"]
+
+    # Chưa thẩm định đủ yêu cầu cấp độ → chặn khai báo triển khai
+    r = await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={})
+    assert r.status_code == 400, r.text
+    assert "đã thẩm định đạt" in r.json()["detail"]
 
     # Super admin không confirm được khi hồ sơ còn approved
     r = await client.post(f"/api/system-profiles/{pid}/confirm-implementation", headers=sa, json={})
     assert r.status_code == 400
+
+    # Đơn vị trình thẩm định yêu cầu, Super Admin xác nhận đạt → đủ 100%
+    await client.post(f"/api/system-profiles/{pid}/requirements/{row}/request", headers=oa, json={"evidence": "Đã triển khai xong"})
+    r = await client.post(f"/api/system-profiles/{pid}/requirements/{row}/review", headers=sa, json={"action": "verify"})
+    assert r.json()["level_compliant"] is True
 
     # Đơn vị khai báo đã triển khai
     r = await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={"note": "Đã triển khai xong"})
@@ -766,8 +778,9 @@ async def test_implementation_flow_and_stats(client, org_env):
     assert set(body["by_level"]) <= {"1", "2", "3"}
 
 
-async def test_timeline_events(client, org_env):
+async def test_timeline_events(client, session_factory, org_env):
     """Mọi mutation ghi mốc timeline đúng thứ tự, kèm người thao tác."""
+    await _seed_requirements(session_factory, [(2, "L2-TL", "Yêu cầu timeline")])
     oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
     sa = _auth(await _login(client, org_env["email"], org_env["password"]))
 
@@ -787,9 +800,12 @@ async def test_timeline_events(client, org_env):
         json={"name": "Firewall biên", "device_type": "firewall"},
     )
 
-    # submit → duyệt → khai báo triển khai → confirm
+    # submit → duyệt → thẩm định yêu cầu → khai báo triển khai → confirm
     await client.post(f"/api/system-profiles/{pid}/submit", headers=oa)
     await client.post(f"/api/system-profiles/{pid}/review", headers=sa, json={"action": "approve", "decision_number": "09/QĐ"})
+    req_row = (await _get_profile(client, sa, pid))["requirements"][0]["id"]
+    await client.post(f"/api/system-profiles/{pid}/requirements/{req_row}/request", headers=oa, json={"evidence": "đạt"})
+    await client.post(f"/api/system-profiles/{pid}/requirements/{req_row}/review", headers=sa, json={"action": "verify"})
     await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={})
     r = await client.post(f"/api/system-profiles/{pid}/confirm-implementation", headers=sa, json={})
     events = r.json()["events"]
@@ -797,7 +813,8 @@ async def test_timeline_events(client, org_env):
     codes = [e["event"] for e in events]
     # events mới nhất trước → thứ tự ngược mốc thời gian
     assert codes == [
-        "fulfilled", "implementation_reported", "approved", "submitted", "device_added", "created",
+        "fulfilled", "implementation_reported", "requirement_verified", "requirement_requested",
+        "approved", "submitted", "device_added", "created",
     ]
     assert all(e["message"] for e in events)
     assert all(e["actor_name"] for e in events)
@@ -830,3 +847,19 @@ async def test_reject_requires_reason(client, org_env):
     assert r.json()["review_note"] == "Thiếu danh mục thiết bị"
     # Lý do nằm trên timeline
     assert any("Thiếu danh mục thiết bị" in e["message"] for e in r.json()["events"])
+
+
+async def test_superadmin_edit_logs_diff(client, org_env):
+    """SuperAdmin sửa hồ sơ đã duyệt → timeline ghi rõ từng trường thay đổi."""
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    pid = await _approved_profile(client, org_env, oa, sa)
+
+    r = await client.patch(
+        f"/api/system-profiles/{pid}",
+        headers=sa,
+        json={"name": "Tên mới do SA sửa", "physical_location": "Tầng 3"},
+    )
+    assert r.status_code == 200, r.text
+    ev_updated = [e for e in r.json()["events"] if e["event"] == "updated"][-1]
+    assert "Tên hệ thống" in ev_updated["message"] and "Địa điểm lắp đặt" in ev_updated["message"]

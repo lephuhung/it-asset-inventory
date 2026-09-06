@@ -337,8 +337,12 @@ export default function SystemProfileDetailPage() {
   const canReview = isSuperAdmin && profile.status === "pending_review";
   const canDelete = isSuperAdmin || (isAdmin && (profile.status === "drafted" || profile.status === "rejected"));
   // Khai báo đã triển khai: đơn vị của hồ sơ (Super Admin cũng được) khi đã approved
+  // và đã đáp ứng 100% yêu cầu ATTT của cấp độ (backend cũng chặn lần nữa)
   const canReportImplementation =
-    isAdmin && profile.status === "approved" && (isSuperAdmin || profile.org_id === user?.org_id);
+    isAdmin &&
+    profile.status === "approved" &&
+    profile.level_compliant &&
+    (isSuperAdmin || profile.org_id === user?.org_id);
   // Super Admin xác nhận đáp ứng hồ sơ
   const canConfirmImplementation = isSuperAdmin && profile.status === "implemented";
 

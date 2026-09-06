@@ -456,14 +456,26 @@ async def update_profile(
     level_changed = "level" in changes and changes["level"] != profile.level
     for field, value in {**changes, **doc_fields}.items():
         setattr(profile, field, value)
-    # Ghi timeline: đổi cấp độ / sửa nội dung / bổ sung số văn bản
-    if level_changed:
-        _log_event(db, profile, "level_changed", f"Đổi cấp độ đề xuất sang cấp độ {profile.level}", admin)
+    # Ghi timeline chi tiết từng trường thay đổi (diff) để quản trị dễ truy vết
+    FIELD_LABELS = {
+        "name": "Tên hệ thống",
+        "description": "Mô tả",
+        "diagram_mermaid": "Sơ đồ lô-gic",
+        "physical_diagram_mermaid": "Sơ đồ vật lý",
+        "physical_location": "Địa điểm lắp đặt",
+        "user_accounts": "Số lượng tài khoản",
+        "data_volume": "Lượng dữ liệu",
+        "service_audience": "Đối tượng sử dụng",
+        "managed_by": "Tên chủ quản",
+    }
+    changed_labels = [FIELD_LABELS[f] for f in changes if f in FIELD_LABELS]
+    if "level" in changes:
+        _log_event(db, profile, "level_changed", f"Đổi cấp độ đề xuất: {profile.level} → {changes['level']}", admin)
     if doc_fields:
         parts = [f"{'Số văn bản' if f == 'document_number' else 'Ngày văn bản'}: {v}" for f, v in doc_fields.items()]
         _log_event(db, profile, "document_updated", "Cập nhật văn bản đề nghị — " + "; ".join(parts), admin)
-    if "name" in changes or "description" in changes:
-        _log_event(db, profile, "updated", "Cập nhật thông tin hồ sơ", admin)
+    if changed_labels:
+        _log_event(db, profile, "updated", "Cập nhật hồ sơ: " + ", ".join(changed_labels), admin)
     # Sửa lại hồ sơ sau khi bị từ chối → về drafted để trình lại
     if profile.status == SystemProfileStatus.REJECTED.value:
         profile.status = SystemProfileStatus.DRAFTED.value
@@ -590,6 +602,14 @@ async def report_implementation(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ khai báo được với hồ sơ đã được phê duyệt")
     if not is_super_admin(admin) and str(admin.org_id) != str(profile.org_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Chỉ đơn vị của hồ sơ được khai báo triển khai")
+    # Hồ sơ là căn cứ triển khai — phải đáp ứng đủ 100% yêu cầu ATTT của cấp độ đã thẩm định đạt
+    reqs = profile.requirements or []
+    verified = sum(1 for r in reqs if r.status == ProfileRequirementStatus.VERIFIED.value)
+    if not reqs or verified < len(reqs):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"Chưa đáp ứng đủ yêu cầu cấp độ {profile.level} ({verified}/{len(reqs)} đã thẩm định đạt) — hãy trình và hoàn tất thẩm định trước khi khai báo triển khai",
+        )
     profile.status = SystemProfileStatus.IMPLEMENTED.value
     if body.note:
         profile.review_note = body.note.strip()
