@@ -191,6 +191,17 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
     }
   }, [open, load]);
 
+  // Khóa cuộn trang nền khi panel mở — cuộn tràn khỏi list sẽ không chain
+  // xuống page phía sau (repaint cả trang dưới overlay rất tốn frame).
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
   // ESC đóng panel / modal
   useEffect(() => {
     if (!open) return;
@@ -220,7 +231,7 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
     <>
       {/* Backdrop — mờ nhẹ khi mở, ẩn pointer khi đóng */}
       <div
-        className={`fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none ${
+        className={`fixed inset-0 z-40 bg-slate-900/55 transition-opacity duration-300 motion-reduce:transition-none ${
           open ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         onClick={onClose}
@@ -369,7 +380,7 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
         </div>
 
         {/* ── List ───────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto bg-slate-50/30">
+        <div className="flex-1 overflow-y-auto overscroll-contain bg-slate-50/30">
           {loading && !data ? (
             <Spinner label="Đang tải lịch sử..." />
           ) : error ? (
@@ -568,7 +579,7 @@ function InvestigationHistoryRow({
           {active && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 animate-ping rounded-lg bg-brand-400/30"
+              className="pointer-events-none absolute inset-0 animate-ping rounded-lg bg-brand-400/30 transform-gpu"
             />
           )}
         </span>

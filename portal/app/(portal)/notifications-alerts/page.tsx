@@ -175,6 +175,16 @@ export default function NotificationsAlertsPage() {
     return () => document.removeEventListener("keydown", onKey);
   }, [historyOpen]);
 
+  // Khóa cuộn trang nền khi slide-over lịch sử mở — tránh scroll chain gây jank.
+  useEffect(() => {
+    if (!historyOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [historyOpen]);
+
   // ── History list (computed) ───────────────────────────────
   const historyAll = notifications;
   const historyRead = useMemo(() => notifications.filter((n) => !!n.read_at), [notifications]);
@@ -253,7 +263,7 @@ export default function NotificationsAlertsPage() {
         aria-labelledby="history-title"
       >
         <div
-          className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none"
+          className="absolute inset-0 bg-slate-900/55 transition-opacity duration-300 motion-reduce:transition-none"
           onClick={() => setHistoryOpen(false)}
         />
         <aside
@@ -321,7 +331,7 @@ export default function NotificationsAlertsPage() {
           </div>
 
           {/* List */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
             {visibleHistory.length === 0 ? (
               <EmptyState
                 icon={<Bell className="size-8" />}

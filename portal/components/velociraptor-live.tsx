@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Activity, Brain, CheckCircle2, ExternalLink, History, Loader2, PlayCircle, RefreshCw, ScrollText, X, XCircle } from "lucide-react";
 import type { VelociraptorClientMetadata } from "@/lib/types";
 import { Badge, Button, Card, IconButton } from "@/components/ui";
@@ -229,13 +230,22 @@ export function VeloLogDrawer({
   /** Allowlist artifact đang hiệu lực — xác định artifact nào thu thập được. */
   allowlist?: string[];
 }) {
+  // Khóa cuộn trang nền khi drawer mở — tránh scroll chain gây jank dưới overlay.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
   return (
     <>
       {/* Backdrop — panel overlay lên màn hình ở mọi kích thước (không ép card co lại) */}
       <div
         aria-hidden={!open}
         onClick={onClose}
-        className={`fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-300 motion-reduce:transition-none ${open ? "opacity-100" : "pointer-events-none opacity-0"
+        className={`fixed inset-0 z-40 bg-slate-900/55 transition-opacity duration-300 motion-reduce:transition-none ${open ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
       />
       <aside
@@ -283,7 +293,7 @@ export function VeloLogDrawer({
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
           {error && (
             <p className="mb-3 text-xs text-rose-700">⚠️ {error}</p>
           )}
