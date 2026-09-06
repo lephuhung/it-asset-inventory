@@ -553,9 +553,11 @@ async def review_profile(
         profile.review_note = body.review_note
         _log_event(db, profile, "approved", f"Phê duyệt hồ sơ — quyết định {body.decision_number.strip()}", admin)
     else:
+        if not body.review_note or not body.review_note.strip():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Phải nhập lý do từ chối để đơn vị biết và sửa hồ sơ")
         profile.status = SystemProfileStatus.REJECTED.value
-        profile.review_note = body.review_note
-        _log_event(db, profile, "rejected", "Từ chối hồ sơ" + (f": {body.review_note}" if body.review_note else ""), admin)
+        profile.review_note = body.review_note.strip()
+        _log_event(db, profile, "rejected", f"Từ chối hồ sơ: {body.review_note.strip()}", admin)
     profile.reviewed_by = admin.id
     profile.reviewed_at = datetime.now(UTC)
     await append_audit(

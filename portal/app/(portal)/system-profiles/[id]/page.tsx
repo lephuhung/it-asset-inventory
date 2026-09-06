@@ -942,6 +942,10 @@ export default function SystemProfileDetailPage() {
                   setActionError("Phải nhập số quyết định phê duyệt");
                   return;
                 }
+                if (reviewModal === "reject" && !payload.review_note) {
+                  setActionError("Phải nhập lý do từ chối để đơn vị biết và sửa hồ sơ");
+                  return;
+                }
                 setDecisionNumber("");
                 setDecisionAgency("");
                 setReviewNote("");
@@ -966,7 +970,7 @@ export default function SystemProfileDetailPage() {
               </Field>
             </>
           ) : (
-            <Field label="Lý do từ chối">
+            <Field label="Lý do từ chối" required hint="Lý do hiển thị cho đơn vị để sửa hồ sơ và trình lại.">
               <Textarea value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} rows={3} />
             </Field>
           )}

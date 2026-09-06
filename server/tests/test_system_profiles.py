@@ -803,3 +803,30 @@ async def test_timeline_events(client, org_env):
     assert all(e["actor_name"] for e in events)
     # device_added có tên thiết bị trong message
     assert "Firewall biên" in next(e["message"] for e in events if e["event"] == "device_added")
+
+
+async def test_reject_requires_reason(client, org_env):
+    """Từ chối hồ sơ phải có lý do để đơn vị biết và sửa."""
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    r = await client.post(
+        "/api/system-profiles",
+        headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống reject", "level": 1},
+    )
+    pid = r.json()["id"]
+    await client.post(f"/api/system-profiles/{pid}/submit", headers=oa)
+
+    # Không có lý do → 400, trạng thái không đổi
+    r = await client.post(f"/api/system-profiles/{pid}/review", headers=sa, json={"action": "reject", "review_note": "   "})
+    assert r.status_code == 400
+    r = await client.get(f"/api/system-profiles/{pid}", headers=oa)
+    assert r.json()["status"] == "pending_review"
+
+    # Có lý do → rejected, lý do trả về cho đơn vị
+    r = await client.post(f"/api/system-profiles/{pid}/review", headers=sa, json={"action": "reject", "review_note": "Thiếu danh mục thiết bị"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "rejected"
+    assert r.json()["review_note"] == "Thiếu danh mục thiết bị"
+    # Lý do nằm trên timeline
+    assert any("Thiếu danh mục thiết bị" in e["message"] for e in r.json()["events"])
