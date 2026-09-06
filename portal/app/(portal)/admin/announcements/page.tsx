@@ -361,7 +361,7 @@ export default function AdminAnnouncementsPage() {
       <Modal
         open={editModalOpen}
         onClose={() => setEditModalOpen(false)}
-        wide
+        width="xl"
         title={
           <span className="font-bold tracking-tight text-slate-900">
             {editingId ? "Chỉnh sửa thông báo" : "Tạo thông báo đăng nhập mới"}
@@ -531,7 +531,7 @@ export default function AdminAnnouncementsPage() {
         <Modal
           open={true}
           onClose={() => setPreviewItem(null)}
-          wide
+          width="xl"
           title={
             <div className="flex items-center gap-2.5">
               <span className="flex size-7 items-center justify-center rounded-lg bg-sky-50 text-brand-600">

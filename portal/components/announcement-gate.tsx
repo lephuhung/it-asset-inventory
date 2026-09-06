@@ -77,7 +77,7 @@ export function AnnouncementGate({ disabled = false }: { disabled?: boolean }) {
       onClose={() => {
         // Không đóng khi chưa click xác nhận nhằm đảm bảo người dùng đã đọc thông báo đăng nhập
       }}
-      wide
+      width="xl"
       title={
         <div className="flex items-center gap-2.5">
           <span className="flex size-7 items-center justify-center rounded-lg bg-sky-50 text-brand-600">
