@@ -102,16 +102,16 @@ services:
     ports:
       - "${PORTAL_PORT:-3003}:3003"
     volumes:
-      - ./portal:/app:ro
+      - ./portal:/app
       - portal_node_modules:/app/node_modules
       - portal_next:/app/.next
     working_dir: /app
-    # Production standalone server (Next.js 16 + output:"standalone" trong next.config.ts).
-    # Build tạo `.next/standalone/` chứa server.js + node_modules đã trace sẵn (44M thay vì 134M
-    # của `.next/` đầy đủ). Restart sau dùng cache build đã có.
-    # Dockerfile.dev set NODE_ENV=development; phải override =production để Next.js dùng
-    # production-mode prerendering (dev-mode sẽ fail ở /_global-error do useContext null).
-    command: sh -c "if [ ! -f .next/standalone/.next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && mkdir -p .next/standalone/.next && rm -rf .next/standalone/.next/static && cp -R .next/static .next/standalone/.next/static && cd .next/standalone && NODE_ENV=production node server.js"
+    # Dev server — HMR tự reload khi sửa code, không cần rebuild.
+    # Trước đây dùng production standalone (build trước → chạy server.js),
+    # nhưng mỗi lần sửa code phải xóa BUILD_ID + restart container mới thấy.
+    # app/global-error.tsx đã có sẵn (không dùng AuthContext) nên dev mode
+    # không còn fail ở /_global-error như comment cũ.
+    command: pnpm dev
     depends_on:
       - api
     networks: [inventory-net]
