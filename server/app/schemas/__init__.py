@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
@@ -1795,14 +1795,16 @@ class ProfileRequirementOut(BaseModel):
 
 
 class SystemProfileCreate(BaseModel):
-    """Tạo hồ sơ cấp độ — Super Admin có thể approve trực tiếp (duyệt sẵn)."""
+    """Tạo hồ sơ cấp độ — mã hồ sơ tự sinh; Super Admin có thể approve trực tiếp."""
 
     org_id: uuid.UUID
-    code: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=255)
     level: int = Field(ge=1, le=3)
     description: str | None = None
     diagram_mermaid: str | None = None
+    managed_by: str | None = Field(default=None, max_length=255)
+    document_number: str | None = Field(default=None, max_length=128)
+    document_date: date | None = None
     # Chỉ Super Admin — tạo kèm quyết định phê duyệt (approved ngay)
     decision_number: str | None = Field(default=None, max_length=255)
     decision_date: datetime | None = None
@@ -1822,6 +1824,9 @@ class SystemProfileUpdate(BaseModel):
     user_accounts: int | None = Field(default=None, ge=0)
     data_volume: str | None = None
     service_audience: str | None = Field(default=None, max_length=32)
+    managed_by: str | None = Field(default=None, max_length=255)
+    document_number: str | None = Field(default=None, max_length=128)
+    document_date: date | None = None
 
 
 # ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ──
@@ -1917,6 +1922,26 @@ class SystemProfileReview(BaseModel):
     review_note: str | None = None
 
 
+class SystemProfileReportImplementation(BaseModel):
+    """Đơn vị khai báo đã triển khai hệ thống theo hồ sơ (approved → implemented)."""
+
+    note: str | None = None
+
+
+class SystemProfileConfirmImplementation(BaseModel):
+    """Super Admin xác nhận đơn vị đáp ứng hồ sơ (implemented → fulfilled)."""
+
+    review_note: str | None = None
+
+
+class SystemProfileStats(BaseModel):
+    """Thống kê hồ sơ cấp độ (scoped theo đơn vị người dùng)."""
+
+    total: int = 0
+    by_status: dict[str, int] = {}
+    by_level: dict[str, int] = {}  # "1" | "2" | "3" (khóa string cho JSON ổn định)
+
+
 class SystemProfileOut(BaseModel):
     id: uuid.UUID
     org_id: uuid.UUID
@@ -1929,6 +1954,9 @@ class SystemProfileOut(BaseModel):
     decision_number: str | None = None
     decision_date: datetime | None = None
     decision_agency: str | None = None
+    managed_by: str | None = None
+    document_number: str | None = None
+    document_date: date | None = None
     review_note: str | None = None
     reviewed_at: datetime | None = None
     diagram_mermaid: str | None = None

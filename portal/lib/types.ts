@@ -1073,7 +1073,13 @@ export interface AnnouncementUpdatePayload {
 
 /* ── Hồ sơ cấp độ hệ thống thông tin ───────────────────────── */
 
-export type SystemProfileStatus = "drafted" | "pending_review" | "approved" | "rejected";
+export type SystemProfileStatus =
+  | "drafted"
+  | "pending_review"
+  | "approved"
+  | "implemented"
+  | "fulfilled"
+  | "rejected";
 
 export type DeviceKind =
   | "firewall"
@@ -1131,6 +1137,9 @@ export interface SystemProfile {
   decision_number: string | null;
   decision_date: string | null;
   decision_agency: string | null;
+  managed_by: string | null;
+  document_number: string | null;
+  document_date: string | null;
   review_note: string | null;
   reviewed_at: string | null;
   diagram_mermaid: string | null;
@@ -1161,14 +1170,22 @@ export interface SystemProfileDevicePayload {
 
 export interface SystemProfileCreatePayload {
   org_id: string;
-  code: string;
   name: string;
   level: 1 | 2 | 3;
   description?: string | null;
   diagram_mermaid?: string | null;
+  managed_by?: string | null;
+  document_number?: string | null;
+  document_date?: string | null;
   decision_number?: string | null;
   decision_date?: string | null;
   decision_agency?: string | null;
+}
+
+export interface SystemProfileStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_level: Record<string, number>;
 }
 
 export interface SystemProfileReviewPayload {

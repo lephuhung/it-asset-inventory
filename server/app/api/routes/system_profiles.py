@@ -1,16 +1,21 @@
 """Route hồ sơ cấp độ hệ thống thông tin (cấp 1–3).
 
 - `GET /api/system-profiles`                 — danh sách (scope theo org của user).
-- `POST /api/system-profiles`                — tạo hồ sơ (Admin/Super Admin).
+- `POST /api/system-profiles`                — tạo hồ sơ (Admin/Super Admin, mã hồ sơ tự sinh).
+- `GET /api/system-profiles/stats`           — thống kê theo trạng thái + cấp độ.
 - `GET /api/system-profiles/{id}`            — chi tiết (kèm devices + machines).
 - `PATCH /api/system-profiles/{id}`          — sửa thông tin / sơ đồ mermaid.
 - `DELETE /api/system-profiles/{id}`         — xóa (Super Admin, hoặc Admin khi chưa trình).
 - `POST /api/system-profiles/{id}/submit`    — trình duyệt (Admin → pending_review).
 - `POST /api/system-profiles/{id}/review`    — Super Admin approve/reject.
+- `POST /api/system-profiles/{id}/report-implementation`     — đơn vị khai báo đã triển khai.
+- `POST /api/system-profiles/{id}/confirm-implementation`    — Super Admin xác nhận đáp ứng hồ sơ.
 - `POST/PUT/DELETE .../devices[...]`         — CRUD thiết bị khai báo.
 - `POST/DELETE .../machines`                 — gắn/gỡ Machine đã enroll.
 
-Luồng phê duyệt: `drafted` → `pending_review` → `approved`/`rejected`.
+Luồng phê duyệt: `drafted` → `pending_review` → `approved`/`rejected`;
+sau approved: đơn vị khai báo đã triển khai (`implemented`) → Super Admin
+xác nhận đáp ứng (`fulfilled`).
 Super Admin tạo/sửa được approve trực tiếp (kèm số quyết định).
 """
 from __future__ import annotations
@@ -58,13 +63,16 @@ from app.schemas import (
     ProfileRequirementOut,
     ProfileRequirementRequest,
     ProfileRequirementReview,
+    SystemProfileConfirmImplementation,
     SystemProfileCreate,
     SystemProfileDeviceIn,
     SystemProfileDeviceOut,
     SystemProfileDetailOut,
     SystemProfileMachineOut,
     SystemProfileOut,
+    SystemProfileReportImplementation,
     SystemProfileReview,
+    SystemProfileStats,
     SystemProfileUpdate,
 )
 
@@ -116,6 +124,9 @@ def _to_out(profile: SystemProfile, org_name: str | None = None) -> SystemProfil
         decision_number=profile.decision_number,
         decision_date=profile.decision_date,
         decision_agency=profile.decision_agency,
+        managed_by=profile.managed_by,
+        document_number=profile.document_number,
+        document_date=profile.document_date,
         review_note=profile.review_note,
         reviewed_at=profile.reviewed_at,
         diagram_mermaid=profile.diagram_mermaid,
@@ -262,7 +273,8 @@ async def list_profiles(
     if profile_status is not None:
         conds.append(SystemProfile.status == profile_status)
     if q:
-        conds.append(SystemProfile.name.ilike(f"%{q}%"))
+        like = f"%{q}%"
+        conds.append(SystemProfile.name.ilike(like) | SystemProfile.code.ilike(like) | SystemProfile.document_number.ilike(like))
 
     base = select(SystemProfile).options(
         selectinload(SystemProfile.devices),
@@ -296,6 +308,45 @@ async def list_profiles(
     )
 
 
+async def _generate_profile_code(db: AsyncSession, org_id: uuid.UUID) -> str:
+    """Sinh mã hồ sơ `HS-{năm}-{seq 3 chữ số}` — seq đếm theo đơn vị + năm."""
+    year = datetime.now(UTC).year
+    prefix = f"HS-{year}-"
+    rows = (
+        await db.execute(
+            select(SystemProfile.code).where(
+                SystemProfile.org_id == org_id, SystemProfile.code.like(f"{prefix}%")
+            )
+        )
+    ).scalars().all()
+    seq = 0
+    for code in rows:
+        try:
+            seq = max(seq, int(code[len(prefix):]))
+        except ValueError:
+            continue
+    return f"{prefix}{seq + 1:03d}"
+
+
+@router.get("/stats", response_model=SystemProfileStats)
+async def profile_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Thống kê hồ sơ cấp độ theo trạng thái + cấp độ (scope theo đơn vị)."""
+    conds = []
+    if not is_super_admin(user):
+        conds.append(SystemProfile.org_id.in_(await visible_org_ids(db, user)))
+    status_q = select(SystemProfile.status, func.count()).group_by(SystemProfile.status)
+    level_q = select(SystemProfile.level, func.count()).group_by(SystemProfile.level)
+    if conds:
+        status_q = status_q.where(*conds)
+        level_q = level_q.where(*conds)
+    by_status = {s: c for s, c in (await db.execute(status_q)).all()}
+    by_level = {str(l): c for l, c in (await db.execute(level_q)).all()}
+    return SystemProfileStats(total=sum(by_status.values()), by_status=by_status, by_level=by_level)
+
+
 @router.post("", response_model=SystemProfileDetailOut, status_code=status.HTTP_201_CREATED)
 async def create_profile(
     body: SystemProfileCreate,
@@ -306,22 +357,18 @@ async def create_profile(
     if not is_super_admin(admin):
         if str(admin.org_id) != str(body.org_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Chỉ tạo hồ sơ cho đơn vị của bạn")
-    dup = (
-        await db.execute(
-            select(SystemProfile).where(SystemProfile.org_id == body.org_id, SystemProfile.code == body.code)
-        )
-    ).scalar_one_or_none()
-    if dup is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"Mã hồ sơ '{body.code}' đã tồn tại tại đơn vị này")
 
     approved_directly = is_super_admin(admin) and bool(body.decision_number)
     profile = SystemProfile(
         org_id=body.org_id,
-        code=body.code.strip(),
+        code=await _generate_profile_code(db, body.org_id),
         name=body.name.strip(),
         level=body.level,
         description=body.description,
         diagram_mermaid=body.diagram_mermaid,
+        managed_by=body.managed_by,
+        document_number=body.document_number,
+        document_date=body.document_date,
         status=SystemProfileStatus.APPROVED.value if approved_directly else SystemProfileStatus.DRAFTED.value,
         decision_number=body.decision_number if approved_directly else None,
         decision_date=body.decision_date if approved_directly else None,
@@ -335,7 +382,7 @@ async def create_profile(
         db,
         action="system_profile.create",
         actor=str(admin.id),
-        target=f"{body.org_id}:{body.code}",
+        target=f"{body.org_id}:{profile.code}",
         ip=get_client_ip(request),
     )
     await db.commit()
@@ -369,16 +416,19 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
 ):
     profile = await _get_profile_scoped(db, profile_id, admin)
-    if profile.status == SystemProfileStatus.APPROVED.value and not is_super_admin(admin):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="Hồ sơ đã được phê duyệt — không sửa được, liên hệ quản trị viên hệ thống",
-        )
     changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    # Số văn bản đề nghị + ngày văn bản có thể bổ sung sau, kể cả khi đã duyệt
+    doc_fields = {f: changes.pop(f) for f in ("document_number", "document_date") if f in changes}
+    if profile.status in (SystemProfileStatus.APPROVED.value, SystemProfileStatus.IMPLEMENTED.value, SystemProfileStatus.FULFILLED.value) and not is_super_admin(admin):
+        if set(changes) - {"managed_by"}:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Hồ sơ đã được phê duyệt — chỉ sửa được tên chủ quản và số văn bản, liên hệ quản trị viên hệ thống để sửa nội dung khác",
+            )
     if "service_audience" in changes and changes["service_audience"] not in {a.value for a in ServiceAudience}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="service_audience không hợp lệ")
     level_changed = "level" in changes and changes["level"] != profile.level
-    for field, value in changes.items():
+    for field, value in {**changes, **doc_fields}.items():
         setattr(profile, field, value)
     # Sửa lại hồ sơ sau khi bị từ chối → về drafted để trình lại
     if profile.status == SystemProfileStatus.REJECTED.value:
@@ -480,6 +530,56 @@ async def review_profile(
     )
     await db.commit()
     await db.refresh(profile)
+    return _to_detail(profile, None)
+
+
+@router.post("/{profile_id}/report-implementation", response_model=SystemProfileDetailOut)
+async def report_implementation(
+    profile_id: uuid.UUID,
+    body: SystemProfileReportImplementation,
+    request: Request,
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Đơn vị khai báo đã triển khai hệ thống theo hồ sơ (approved → implemented).
+
+    Hồ sơ là căn cứ để đơn vị triển khai hệ thống đảm bảo cấp độ đã được duyệt;
+    khi triển khai xong, đơn vị khai báo để Super Admin xác nhận đáp ứng.
+    """
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    if profile.status != SystemProfileStatus.APPROVED.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ khai báo được với hồ sơ đã được phê duyệt")
+    if not is_super_admin(admin) and str(admin.org_id) != str(profile.org_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Chỉ đơn vị của hồ sơ được khai báo triển khai")
+    profile.status = SystemProfileStatus.IMPLEMENTED.value
+    if body.note:
+        profile.review_note = body.note.strip()
+    await append_audit(db, action="system_profile.report_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    return _to_detail(profile, None)
+
+
+@router.post("/{profile_id}/confirm-implementation", response_model=SystemProfileDetailOut)
+async def confirm_implementation(
+    profile_id: uuid.UUID,
+    body: SystemProfileConfirmImplementation,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Super Admin xác nhận đơn vị đã đáp ứng hồ sơ (implemented → fulfilled)."""
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    if profile.status != SystemProfileStatus.IMPLEMENTED.value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ xác nhận được hồ sơ đang ở trạng thái đã khai báo triển khai")
+    if body.review_note:
+        profile.review_note = body.review_note.strip()
+    profile.status = SystemProfileStatus.FULFILLED.value
+    profile.reviewed_by = admin.id
+    profile.reviewed_at = datetime.now(UTC)
+    await append_audit(db, action="system_profile.confirm_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
     return _to_detail(profile, None)
 
 

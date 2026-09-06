@@ -42,7 +42,7 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/components/auth-context";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
-import { generateDevicesMermaid, labelFor } from "@/lib/system-profile-diagram";
+import { generateDevicesMermaid, labelFor, validateDevicesMermaid } from "@/lib/system-profile-diagram";
 import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
 
 type Tab = "info" | "devices" | "machines" | "requirements" | "applications" | "ip-ranges" | "diagram";
@@ -90,6 +90,12 @@ export default function SystemProfileDetailPage() {
   const [rName, setRName] = useState("");
   const [rDesc, setRDesc] = useState("");
 
+  // Số văn bản đề nghị + ngày văn bản + tên chủ quản (bổ sung sau được)
+  const [docModal, setDocModal] = useState(false);
+  const [dcNumber, setDcNumber] = useState("");
+  const [dcDate, setDcDate] = useState("");
+  const [dcManaged, setDcManaged] = useState("");
+
   // Thiết bị — form modal
   const [deviceModal, setDeviceModal] = useState<"new" | SystemProfileDevice | null>(null);
   const [dName, setDName] = useState("");
@@ -102,15 +108,8 @@ export default function SystemProfileDetailPage() {
   const [dPurpose, setDPurpose] = useState("");
   const [dSort, setDSort] = useState(0);
 
-  // Catalog loại thiết bị động (Super Admin quản trị)
+  // Catalog loại thiết bị động (Super Admin quản trị ở trang cấu hình)
   const [devTypes, setDevTypes] = useState<DeviceType[]>([]);
-  const [typeMgmtModal, setTypeMgmtModal] = useState(false);
-  const [tModal, setTModal] = useState<DeviceType | "new" | null>(null);
-  const [tCode, setTCode] = useState("");
-  const [tLabel, setTLabel] = useState("");
-  const [tIcon, setTIcon] = useState("");
-  const [tSort, setTSort] = useState(0);
-  const [tActive, setTActive] = useState(true);
 
   // Gắn máy
   const [machines, setMachines] = useState<MachineListItem[]>([]);
@@ -175,14 +174,6 @@ export default function SystemProfileDetailPage() {
       .catch(() => setDevTypes([]));
   }, [isSuperAdmin]);
 
-  const reloadDevTypes = useCallback(async () => {
-    try {
-      setDevTypes(await api.get<DeviceType[]>("/device-types", { active_only: isSuperAdmin ? false : true }));
-    } catch {
-      /* giữ danh sách cũ */
-    }
-  }, [isSuperAdmin]);
-
   const activeDevTypes = devTypes.filter((t) => t.is_active);
   const typeMeta = {
     icons: Object.fromEntries(devTypes.map((t) => [t.code, t.icon ?? "📦"])),
@@ -203,7 +194,7 @@ export default function SystemProfileDetailPage() {
   }, [profile]);
 
   useEffect(() => {
-    if (tab === "machines") void loadMachines();
+    if (tab === "machines" || tab === "applications") void loadMachines();
   }, [tab, loadMachines]);
 
   const act = async (fn: () => Promise<unknown>) => {
@@ -300,30 +291,6 @@ export default function SystemProfileDetailPage() {
   const openIpEdit = (x: SystemProfileIpRange) => {
     setIpZone(x.zone); setIpZoneDesc(x.zone_description ?? ""); setIpCidr(x.cidr); setIpKind(x.ip_kind); setIpGateway(x.gateway ?? "");
   };
-  const openTypeEdit = (t: DeviceType) => {
-    setTCode(t.code); setTLabel(t.label); setTIcon(t.icon ?? ""); setTSort(t.sort_order); setTActive(t.is_active);
-    setTModal(t);
-  };
-  const openTypeNew = () => {
-    setTCode(""); setTLabel(""); setTIcon(""); setTSort(0); setTActive(true);
-    setTModal("new");
-  };
-  const saveType = async () => {
-    if (!tLabel.trim()) return;
-    const payload = {
-      label: tLabel.trim(),
-      icon: tIcon.trim() || null,
-      sort_order: tSort,
-      is_active: tActive,
-    };
-    setTModal(null);
-    await act(() =>
-      tModal === "new"
-        ? api.post("/device-types", { ...payload, code: tCode.trim() })
-        : api.patch(`/device-types/${(tModal as DeviceType).id}`, payload),
-    );
-    await reloadDevTypes();
-  };
   const ipPayload = () => ({
     zone: ipZone.trim(),
     zone_description: ipZoneDesc.trim() || null,
@@ -339,6 +306,11 @@ export default function SystemProfileDetailPage() {
   const canSubmit = isAdmin && (profile.status === "drafted" || profile.status === "rejected");
   const canReview = isSuperAdmin && profile.status === "pending_review";
   const canDelete = isSuperAdmin || (isAdmin && (profile.status === "drafted" || profile.status === "rejected"));
+  // Khai báo đã triển khai: đơn vị của hồ sơ (Super Admin cũng được) khi đã approved
+  const canReportImplementation =
+    isAdmin && profile.status === "approved" && (isSuperAdmin || profile.org_id === user?.org_id);
+  // Super Admin xác nhận đáp ứng hồ sơ
+  const canConfirmImplementation = isSuperAdmin && profile.status === "implemented";
 
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: "info", label: "Thông tin" },
@@ -368,6 +340,22 @@ export default function SystemProfileDetailPage() {
               )}
               {canReview && (
                 <Button variant="secondary" onClick={() => setReviewModal("reject")}>Từ chối</Button>
+              )}
+              {canReportImplementation && (
+                <Button
+                  loading={busy}
+                  onClick={() => void act(() => api.post(`/system-profiles/${profile.id}/report-implementation`, {}))}
+                >
+                  Khai báo đã triển khai
+                </Button>
+              )}
+              {canConfirmImplementation && (
+                <Button
+                  loading={busy}
+                  onClick={() => void act(() => api.post(`/system-profiles/${profile.id}/confirm-implementation`, {}))}
+                >
+                  Xác nhận đáp ứng hồ sơ
+                </Button>
               )}
               {canDelete && (
                 <Button variant="danger" onClick={() => setConfirmDelete(true)}>
@@ -421,6 +409,19 @@ export default function SystemProfileDetailPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div><span className="text-xs text-slate-500">Mã hồ sơ</span><div className="font-medium">{profile.code}</div></div>
             <div><span className="text-xs text-slate-500">Cấp độ</span><div><LevelBadge level={profile.level} /></div></div>
+            <div><span className="text-xs text-slate-500">Tên chủ quản</span><div className="font-medium">{profile.managed_by ?? "—"}</div></div>
+            <div><span className="text-xs text-slate-500">Đơn vị</span><div>{profile.org_name ?? profile.org_id}</div></div>
+            <div>
+              <span className="text-xs text-slate-500">Số văn bản đề nghị</span>
+              <div className="font-medium">
+                {profile.document_number ?? "—"}
+                {profile.document_date && (
+                  <span className="ml-1 text-xs font-normal text-slate-500">
+                    (ngày {new Date(profile.document_date).toLocaleDateString("vi-VN")})
+                  </span>
+                )}
+              </div>
+            </div>
             <div><span className="text-xs text-slate-500">Số quyết định</span><div className="font-medium">{profile.decision_number ?? "—"}</div></div>
             <div><span className="text-xs text-slate-500">Ngày quyết định</span><div>{profile.decision_date ? new Date(profile.decision_date).toLocaleDateString("vi-VN") : "—"}</div></div>
             <div><span className="text-xs text-slate-500">Cơ quan ban hành</span><div>{profile.decision_agency ?? "—"}</div></div>
@@ -500,18 +501,34 @@ export default function SystemProfileDetailPage() {
               </div>
             )}
           </div>
-          {canEdit && (
-            <div className="flex gap-2 border-t border-slate-100 pt-4">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setRName(profile.name);
-                  setRDesc(profile.description ?? "");
-                  setRenameModal(true);
-                }}
-              >
-                Sửa tên & mô tả
-              </Button>
+          {(canEdit || isAdmin) && (
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+              {canEdit && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setRName(profile.name);
+                    setRDesc(profile.description ?? "");
+                    setRenameModal(true);
+                  }}
+                >
+                  Sửa tên & mô tả
+                </Button>
+              )}
+              {/* Số văn bản + tên chủ quản bổ sung sau được, kể cả khi đã duyệt */}
+              {isAdmin && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setDcNumber(profile.document_number ?? "");
+                    setDcDate(profile.document_date ?? "");
+                    setDcManaged(profile.managed_by ?? "");
+                    setDocModal(true);
+                  }}
+                >
+                  Sửa số văn bản & tên chủ quản
+                </Button>
+              )}
             </div>
           )}
         </Card>
@@ -522,7 +539,9 @@ export default function SystemProfileDetailPage() {
           {canEdit && (
             <div className="flex justify-end gap-2">
               {isSuperAdmin && (
-                <Button variant="secondary" onClick={() => setTypeMgmtModal(true)}>Quản lý loại thiết bị</Button>
+                <Link href="/system-profiles/config">
+                  <Button variant="secondary">Cấu hình loại thiết bị</Button>
+                </Link>
               )}
               <Button onClick={openNewDevice}><Plus className="size-4" /> Thêm thiết bị</Button>
             </div>
@@ -570,7 +589,8 @@ export default function SystemProfileDetailPage() {
                   <Select value={machinePick} onChange={(e) => setMachinePick(e.target.value)}>
                     <option value="">— chọn máy thuộc đơn vị —</option>
                     {machines
-                      .filter((m) => !profile.machines.some((pm) => pm.machine_id === m.id))
+                      // Chỉ máy thuộc đúng đơn vị của hồ sơ (chặn máy đơn vị khác)
+                      .filter((m) => m.org_id === profile.org_id && !profile.machines.some((pm) => pm.machine_id === m.id))
                       .map((m) => (
                         <option key={m.id} value={m.id}>{m.hostname ?? m.machine_uuid}</option>
                       ))}
@@ -772,26 +792,24 @@ export default function SystemProfileDetailPage() {
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Sơ đồ mô hình lô-gic</h3>
             <MermaidDiagram
               code={profile.diagram_mermaid}
+              fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}
+              autoLabel="Sơ đồ tự sinh từ danh mục thiết bị đã khai — bấm Chỉnh sửa để tự vẽ."
               editable={canEdit}
               saving={busy}
               onSave={(code) => act(() => api.patch(`/system-profiles/${profile.id}`, { diagram_mermaid: code }))}
-              starterButton={{
-                label: "Gợi ý từ danh mục thiết bị",
-                generate: () => generateDevicesMermaid(profile.devices, typeMeta),
-              }}
+              validate={(c) => validateDevicesMermaid(c, profile.devices)}
             />
           </Card>
           <Card className="p-6">
             <h3 className="mb-3 text-sm font-semibold text-slate-700">Sơ đồ mô hình vật lý</h3>
             <MermaidDiagram
               code={profile.physical_diagram_mermaid}
+              fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}
+              autoLabel="Sơ đồ tự sinh từ danh mục thiết bị đã khai — bấm Chỉnh sửa để tự vẽ."
               editable={canEdit}
               saving={busy}
               onSave={(code) => act(() => api.patch(`/system-profiles/${profile.id}`, { physical_diagram_mermaid: code }))}
-              starterButton={{
-                label: "Gợi ý từ danh mục thiết bị",
-                generate: () => generateDevicesMermaid(profile.devices, typeMeta),
-              }}
+              validate={(c) => validateDevicesMermaid(c, profile.devices)}
             />
           </Card>
         </div>
@@ -1078,7 +1096,7 @@ export default function SystemProfileDetailPage() {
           <Field label="Máy chủ cài đặt" hint="Chọn máy đã enroll (tự lấy hostname), hoặc nhập tay bên dưới nếu máy chưa được quản lý">
             <Select value={aMachine} onChange={(e) => setAMachine(e.target.value)}>
               <option value="">— nhập tay —</option>
-              {machines.map((m) => <option key={m.id} value={m.id}>{m.hostname ?? m.machine_uuid}</option>)}
+              {machines.filter((m) => m.org_id === profile.org_id).map((m) => <option key={m.id} value={m.id}>{m.hostname ?? m.machine_uuid}</option>)}
             </Select>
           </Field>
           {!aMachine && (
@@ -1137,89 +1155,40 @@ export default function SystemProfileDetailPage() {
         </div>
       </Modal>
 
-      {/* Modal quản lý loại thiết bị (Super Admin) */}
+      {/* Modal sửa số văn bản đề nghị & tên chủ quản — bổ sung sau được */}
       <Modal
-        open={typeMgmtModal}
-        onClose={() => setTypeMgmtModal(false)}
-        title="Quản lý loại thiết bị"
-        width="md"
-        dense
-        footer={
-          <Button onClick={openTypeNew}><Plus className="size-4" /> Thêm loại mới</Button>
-        }
-      >
-        <table className={TABLE}>
-          <thead className={THEAD}>
-            <tr><th className={TH}>Loại</th><th className={TH}>Mã</th><th className={TH}>Icon</th><th className={TH}>Trạng thái</th><th className={TH}></th></tr>
-          </thead>
-          <tbody>
-            {devTypes.map((t) => (
-              <tr key={t.id} className={TR_HOVER}>
-                <td className={`${TD} font-medium`}>{t.label}</td>
-                <td className={`${TD} font-mono text-xs`}>{t.code}</td>
-                <td className={`${TD} text-lg`}>{t.icon ?? "—"}</td>
-                <td className={TD}>
-                  <Badge className={t.is_active ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/20"}>
-                    {t.is_active ? "Đang dùng" : "Đã tắt"}
-                  </Badge>
-                </td>
-                <td className={TD}>
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="secondary" onClick={() => openTypeEdit(t)}>Sửa</Button>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      loading={busy}
-                      onClick={() => void act(async () => {
-                        await api.delete(`/device-types/${t.id}`);
-                        await reloadDevTypes();
-                      })}
-                    >
-                      Xóa
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Modal>
-
-      {/* Modal thêm/sửa loại thiết bị */}
-      <Modal
-        open={tModal !== null}
-        onClose={() => setTModal(null)}
-        title={tModal === "new" ? "Thêm loại thiết bị" : "Sửa loại thiết bị"}
+        open={docModal}
+        onClose={() => setDocModal(false)}
+        title="Số văn bản đề nghị & tên chủ quản"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setTModal(null)}>Hủy</Button>
-            <Button loading={busy} onClick={() => void saveType()}>Lưu</Button>
+            <Button variant="secondary" onClick={() => setDocModal(false)} disabled={busy}>Hủy</Button>
+            <Button
+              loading={busy}
+              onClick={() => {
+                setDocModal(false);
+                void act(() => api.patch(`/system-profiles/${profile.id}`, {
+                  document_number: dcNumber.trim() || null,
+                  document_date: dcDate || null,
+                  managed_by: dcManaged.trim() || null,
+                }));
+              }}
+            >
+              Lưu
+            </Button>
           </>
         }
       >
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Mã loại" required hint={tModal === "new" ? "Chữ thường, không dấu (vd: camera)" : "Không đổi được sau khi tạo"}>
-              <Input value={tCode} onChange={(e) => setTCode(e.target.value)} disabled={tModal !== "new"} placeholder="camera" />
-            </Field>
-            <Field label="Icon (emoji)" hint="Hiển thị kèm node trên sơ đồ Mermaid">
-              <Input value={tIcon} onChange={(e) => setTIcon(e.target.value)} placeholder="📷" />
-            </Field>
-          </div>
-          <Field label="Tên loại" required>
-            <Input value={tLabel} onChange={(e) => setTLabel(e.target.value)} placeholder="Camera giám sát" />
+          <Field label="Số văn bản đề nghị" hint="Văn bản đơn vị gửi kèm hồ sơ thẩm định — có thể bổ sung sau.">
+            <Input value={dcNumber} onChange={(e) => setDcNumber(e.target.value)} placeholder="VD: 125/BC-XX" />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Thứ tự hiển thị">
-              <Input type="number" value={tSort} onChange={(e) => setTSort(Number(e.target.value))} />
-            </Field>
-            <Field label="Trạng thái">
-              <Select value={tActive ? "1" : "0"} onChange={(e) => setTActive(e.target.value === "1")}>
-                <option value="1">Đang dùng</option>
-                <option value="0">Tắt (ẩn khỏi form nhập)</option>
-              </Select>
-            </Field>
-          </div>
+          <Field label="Ngày văn bản">
+            <Input type="date" value={dcDate} onChange={(e) => setDcDate(e.target.value)} />
+          </Field>
+          <Field label="Tên chủ quản hệ thống thông tin">
+            <Input value={dcManaged} onChange={(e) => setDcManaged(e.target.value)} />
+          </Field>
         </div>
       </Modal>
 

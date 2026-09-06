@@ -8,6 +8,8 @@ const STATUS_META: Record<SystemProfileStatus, { label: string; cls: string }> =
   drafted: { label: "Nháp", cls: "bg-slate-100 text-slate-600 ring-slate-500/20" },
   pending_review: { label: "Chờ duyệt", cls: "bg-amber-50 text-amber-700 ring-amber-600/20" },
   approved: { label: "Đã phê duyệt", cls: "bg-emerald-50 text-emerald-700 ring-emerald-600/20" },
+  implemented: { label: "Đã khai báo triển khai", cls: "bg-blue-50 text-blue-700 ring-blue-600/20" },
+  fulfilled: { label: "Đáp ứng hồ sơ", cls: "bg-teal-50 text-teal-700 ring-teal-600/20" },
   rejected: { label: "Bị từ chối", cls: "bg-rose-50 text-rose-700 ring-rose-600/20" },
 };
 

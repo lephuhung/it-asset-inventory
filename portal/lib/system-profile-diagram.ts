@@ -106,3 +106,61 @@ export function generateDevicesMermaid(
   }
   return lines.join("\n");
 }
+
+/**
+ * Kiểm tra sơ đồ Mermaid do người dùng nhập có khớp với thiết bị đã khai báo.
+ *
+ * Parse các label node dạng `id["..."]` (bỏ node Internet/cụm `((...))`), so
+ * với danh sách thiết bị theo tên. Trả về danh sách cảnh báo (rỗng = khớp):
+ * số node khác số thiết bị, thiết bị chưa xuất hiện trên sơ đồ, node lạ.
+ */
+export function validateDevicesMermaid(
+  code: string,
+  devices: SystemProfileDevice[],
+): string[] {
+  const warnings: string[] = [];
+  // Node định nghĩa: `ID["label"]` hoặc `ID(label)` — bỏ edge `-->`
+  const nodeDefs = [...code.matchAll(/(^|\n)\s*([A-Za-z0-9_]+)\s*(?:\["([^"]*)"?\]|\["([^"]*)"|"([^"]*)"\]|\(([^)]*)\))/g)];
+  const labels = nodeDefs
+    .map((m) => (m[3] ?? m[4] ?? m[5] ?? m[6] ?? "").trim())
+    .filter((l) => l && !/^internet$/i.test(l) && !/🌐/.test(l));
+  // Loại node khai báo không nhãn (vd `A --> B` cuối) — đếm cả dạng trần
+  const bareNodes = [...code.matchAll(/(^|\n)\s*([A-Za-z0-9_]+)\s*$/g)].map((m) => m[2]);
+  const nodeCount = labels.length + bareNodes.length;
+
+  if (devices.length === 0) return warnings;
+  if (nodeCount === 0) {
+    warnings.push("Không tìm thấy node thiết bị nào trong sơ đồ.");
+    return warnings;
+  }
+  if (nodeCount !== devices.length) {
+    warnings.push(
+      `Sơ đồ có ${nodeCount} node thiết bị nhưng hồ sơ đã khai ${devices.length} thiết bị.`,
+    );
+  }
+  const lower = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
+  const missing = devices.filter((d) => {
+    const codeNorm = lower(d.device_code ?? "");
+    const nameNorm = lower(d.name);
+    return !labels.some((l) => {
+      const ll = lower(l);
+      return ll.includes(nameNorm) || nameNorm.includes(ll) ||
+        (!!codeNorm && (ll.includes(codeNorm) || codeNorm.includes(ll)));
+    });
+  });
+  if (missing.length > 0) {
+    warnings.push(
+      `Thiết bị đã khai nhưng chưa thấy trên sơ đồ: ${missing.map((d) => d.name).join(", ")}.`,
+    );
+  }
+  const knownLabels = devices.map((d) => lower(d.name)).concat(devices.map((d) => lower(d.device_code ?? "")));
+  const unknown = labels.filter(
+    (l) => !knownLabels.some((k) => k && (lower(l).includes(k) || k.includes(lower(l)))),
+  );
+  if (unknown.length > 0) {
+    warnings.push(
+      `Có node trên sơ đồ không trùng thiết bị nào đã khai: ${unknown.join(", ")} (có thể là node nhóm — bỏ qua nếu cố ý).`,
+    );
+  }
+  return warnings;
+}

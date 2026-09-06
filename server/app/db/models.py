@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Date,
     Float,
     ForeignKey,
     Index,
@@ -1065,12 +1066,16 @@ class SystemProfileStatus(str, enum.Enum):
     - `drafted`        — đang soạn thảo (Admin/Super Admin tạo).
     - `pending_review` — đã trình, chờ Super Admin duyệt.
     - `approved`       — đã có quyết định phê duyệt.
+    - `implemented`    — đơn vị khai báo đã triển khai hệ thống theo hồ sơ, chờ Super Admin xác nhận.
+    - `fulfilled`      — Super Admin xác nhận đơn vị đã đáp ứng hồ sơ.
     - `rejected`       — bị từ chối (kèm review_note).
     """
 
     DRAFTED = "drafted"
     PENDING_REVIEW = "pending_review"
     APPROVED = "approved"
+    IMPLEMENTED = "implemented"
+    FULFILLED = "fulfilled"
     REJECTED = "rejected"
 
 
@@ -1137,6 +1142,11 @@ class SystemProfile(Base):
     decision_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
     decision_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_agency: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Số văn bản đề nghị thẩm định (đơn vị gửi kèm hồ sơ) + ngày ban hành — tùy chọn
+    document_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    document_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Tên chủ quản hệ thống thông tin (mặc định gợi ý theo tổ chức của tài khoản, có thể khác)
+    managed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)

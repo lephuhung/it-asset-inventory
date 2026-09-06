@@ -86,6 +86,7 @@ export default function SystemProfilesPage() {
     total: items.length,
     approved: items.filter((p) => p.status === "approved").length,
     pending: items.filter((p) => p.status === "pending_review").length,
+    fulfilled: items.filter((p) => p.status === "fulfilled").length,
     l1: items.filter((p) => p.level === 1).length,
     l2: items.filter((p) => p.level === 2).length,
     l3: items.filter((p) => p.level === 3).length,
@@ -105,7 +106,7 @@ export default function SystemProfilesPage() {
         }
       />
 
-      <div className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <KpiCard
           label="Tổng hồ sơ"
           value={stats.total}
@@ -123,6 +124,12 @@ export default function SystemProfilesPage() {
           value={stats.pending}
           icon={<Clock className="size-4 text-amber-600" />}
           accent="bg-amber-50"
+        />
+        <KpiCard
+          label="Đáp ứng hồ sơ"
+          value={stats.fulfilled}
+          icon={<ShieldCheck className="size-4 text-teal-600" />}
+          accent="bg-teal-50"
         />
         <KpiCard
           label="Theo cấp độ"
@@ -159,11 +166,13 @@ export default function SystemProfilesPage() {
               <option value="drafted">Nháp</option>
               <option value="pending_review">Chờ duyệt</option>
               <option value="approved">Đã phê duyệt</option>
+              <option value="implemented">Đã khai báo triển khai</option>
+              <option value="fulfilled">Đáp ứng hồ sơ</option>
               <option value="rejected">Bị từ chối</option>
             </Select>
           </Field>
-          <Field label="Tìm theo tên">
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hệ thống…" />
+          <Field label="Tìm theo tên / số văn bản">
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tên hệ thống, mã hồ sơ, số văn bản…" />
           </Field>
           <div className="flex items-end self-end">
             <Button variant="secondary" onClick={() => setApplied({ org_id: orgId, level, status, q })}>
@@ -187,14 +196,15 @@ export default function SystemProfilesPage() {
         <div className={TABLE_WRAP}>
           <table className={TABLE}>
             <thead className={THEAD}>
-              <tr>
-                <th className={TH}>Hồ sơ</th>
-                <th className={TH}>Đơn vị</th>
-                <th className={TH}>Cấp độ</th>
-                <th className={TH}>Trạng thái</th>
-                <th className={TH}>Quyết định</th>
-                <th className={TH}>Thiết bị / Máy</th>
-              </tr>
+                <tr>
+                  <th className={TH}>Hồ sơ</th>
+                  <th className={TH}>Đơn vị</th>
+                  <th className={TH}>Cấp độ</th>
+                  <th className={TH}>Trạng thái</th>
+                  <th className={TH}>Văn bản đề nghị</th>
+                  <th className={TH}>Quyết định</th>
+                  <th className={TH}>Thiết bị / Máy</th>
+                </tr>
             </thead>
             <tbody>
               {items.map((p) => (
@@ -214,6 +224,18 @@ export default function SystemProfilesPage() {
                         <span className="text-xs text-rose-600">{p.review_note}</span>
                       )}
                     </div>
+                  </td>
+                  <td className={`${TD} text-sm`}>
+                    {p.document_number ? (
+                      <>
+                        <div className="font-medium">{p.document_number}</div>
+                        {p.document_date && (
+                          <div className="text-xs text-slate-500">ngày {new Date(p.document_date).toLocaleDateString("vi-VN")}</div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
                   </td>
                   <td className={`${TD} text-sm`}>
                     {p.decision_number ? (

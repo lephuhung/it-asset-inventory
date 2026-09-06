@@ -81,7 +81,7 @@ async def test_full_approval_flow(client, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-01", "name": "Hệ thống 1", "level": 2},
+        json={"org_id": org_env["org_id"], "name": "Hệ thống 1", "level": 2},
     )
     assert r.status_code == 201, r.text
     pid = r.json()["id"]
@@ -130,7 +130,7 @@ async def test_reject_and_resubmit(client, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-02", "name": "Hệ thống 2", "level": 1},
+        json={"org_id": org_env["org_id"], "name": "Hệ thống 2", "level": 1},
     )
     pid = r.json()["id"]
     await client.post(f"/api/system-profiles/{pid}/submit", headers=oa)
@@ -156,7 +156,7 @@ async def test_super_admin_create_approved_directly(client, org_env):
         headers=sa,
         json={
             "org_id": org_env["org_id"],
-            "code": "HTTT-03",
+        
             "name": "Hệ thống 3",
             "level": 3,
             "decision_number": "20/QĐ-ATTT",
@@ -169,11 +169,17 @@ async def test_super_admin_create_approved_directly(client, org_env):
     assert body["decision_number"] == "20/QĐ-ATTT"
 
 
-async def test_duplicate_code_conflict(client, org_env):
+async def test_auto_generated_code(client, org_env):
+    """Mã hồ sơ tự sinh HS-{năm}-{stt:03d}, tăng dần theo đơn vị + năm."""
     oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
-    payload = {"org_id": org_env["org_id"], "code": "HTTT-DUP", "name": "Trùng", "level": 1}
-    assert (await client.post("/api/system-profiles", headers=oa, json=payload)).status_code == 201
-    assert (await client.post("/api/system-profiles", headers=oa, json=payload)).status_code == 409
+    payload = {"org_id": org_env["org_id"], "name": "Trùng tên cũng được", "level": 1}
+    r1 = await client.post("/api/system-profiles", headers=oa, json=payload)
+    r2 = await client.post("/api/system-profiles", headers=oa, json=payload)
+    assert r1.status_code == 201 and r2.status_code == 201, r1.text
+    from datetime import datetime
+    year = datetime.now().year
+    assert r1.json()["code"] == f"HS-{year}-001"
+    assert r2.json()["code"] == f"HS-{year}-002"
 
 
 async def test_org_admin_scoping(client, session_factory, org_env):
@@ -183,7 +189,7 @@ async def test_org_admin_scoping(client, session_factory, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": other_org, "code": "HTTT-X", "name": "Ngoài phạm vi", "level": 1},
+        json={"org_id": other_org, "name": "Ngoài phạm vi", "level": 1},
     )
     assert r.status_code == 403
 
@@ -192,7 +198,7 @@ async def test_org_admin_scoping(client, session_factory, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=sa,
-        json={"org_id": other_org, "code": "HTTT-B", "name": "Hồ sơ đơn vị B", "level": 2},
+        json={"org_id": other_org, "name": "Hồ sơ đơn vị B", "level": 2},
     )
     other_pid = r.json()["id"]
     r = await client.get(f"/api/system-profiles/{other_pid}", headers=oa)
@@ -208,7 +214,7 @@ async def test_devices_and_machines(client, session_factory, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-04", "name": "Hệ thống 4", "level": 2},
+        json={"org_id": org_env["org_id"], "name": "Hệ thống 4", "level": 2},
     )
     pid = r.json()["id"]
 
@@ -314,7 +320,7 @@ async def test_requirements_autocreate_and_compliance(client, session_factory, o
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-R1", "name": "Hồ sơ yêu cầu", "level": 1},
+        json={"org_id": org_env["org_id"], "name": "Hồ sơ yêu cầu", "level": 1},
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -375,7 +381,7 @@ async def test_requirement_reject_then_resubmit(client, session_factory, org_env
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-R2", "name": "Hồ sơ R2", "level": 1},
+        json={"org_id": org_env["org_id"], "name": "Hồ sơ R2", "level": 1},
     )
     pid = r.json()["id"]
     row = r.json()["requirements"][0]["id"]
@@ -405,7 +411,7 @@ async def test_level_change_resyncs_requirements(client, session_factory, org_en
     r = await client.post(
         "/api/system-profiles",
         headers=oa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-R3", "name": "Hồ sơ R3", "level": 1},
+        json={"org_id": org_env["org_id"], "name": "Hồ sơ R3", "level": 1},
     )
     pid = r.json()["id"]
     assert {x["code"] for x in r.json()["requirements"]} == {"L1-X"}
@@ -447,7 +453,7 @@ async def test_level_requirement_catalog_crud(client, session_factory, org_env):
     r = await client.post(
         "/api/system-profiles",
         headers=sa,
-        json={"org_id": org_env["org_id"], "code": "HTTT-R4", "name": "Hồ sơ R4", "level": 1},
+        json={"org_id": org_env["org_id"], "name": "Hồ sơ R4", "level": 1},
     )
     assert all(x["code"] != "L1-Z" for x in r.json()["requirements"])
 
@@ -463,7 +469,7 @@ async def _make_profile(client, headers, org_id, code):
     r = await client.post(
         "/api/system-profiles",
         headers=headers,
-        json={"org_id": org_id, "code": code, "name": f"Hồ sơ {code}", "level": 2},
+        json={"org_id": org_id, "name": f"Hồ sơ {code}", "level": 2},
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]
@@ -679,3 +685,82 @@ async def test_device_type_catalog_crud(client, session_factory, org_env):
     rid = r.json()["id"]
     r = await client.delete(f"/api/device-types/{rid}", headers=sa)
     assert r.status_code == 204
+
+
+# ── Số văn bản đề nghị + triển khai/đáp ứng + stats ─────────
+
+
+async def _approved_profile(client, org_env, oa_headers, sa_headers):
+    r = await client.post(
+        "/api/system-profiles",
+        headers=oa_headers,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống triển khai", "level": 1},
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    await client.post(f"/api/system-profiles/{pid}/submit", headers=oa_headers)
+    r = await client.post(
+        f"/api/system-profiles/{pid}/review",
+        headers=sa_headers,
+        json={"action": "approve", "decision_number": "01/QĐ-ATTT"},
+    )
+    assert r.json()["status"] == "approved"
+    return pid
+
+
+async def test_document_fields_optional_and_editable_after_approval(client, org_env):
+    """Số văn bản + ngày văn bản không bắt buộc; sửa được sau khi hồ sơ đã duyệt."""
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    pid = await _approved_profile(client, org_env, oa, sa)
+
+    # Không nhập số văn bản khi tạo → vẫn tạo được
+    r = await client.get(f"/api/system-profiles/{pid}", headers=oa)
+    assert r.json()["document_number"] is None
+
+    # org_admin bổ sung số văn bản sau khi hồ sơ đã approved
+    r = await client.patch(
+        f"/api/system-profiles/{pid}",
+        headers=oa,
+        json={"document_number": "125/BC-XX", "document_date": "2026-08-20"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["document_number"] == "125/BC-XX"
+    assert r.json()["document_date"].startswith("2026-08-20")
+
+    # Nhưng vẫn không sửa được nội dung khác (name) khi đã approved
+    r = await client.patch(f"/api/system-profiles/{pid}", headers=oa, json={"name": "Đổi tên"})
+    assert r.status_code == 400
+
+
+async def test_implementation_flow_and_stats(client, org_env):
+    """approved → (đơn vị khai báo) implemented → (super admin) fulfilled; stats đúng."""
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    pid = await _approved_profile(client, org_env, oa, sa)
+
+    # Super admin không confirm được khi hồ sơ còn approved
+    r = await client.post(f"/api/system-profiles/{pid}/confirm-implementation", headers=sa, json={})
+    assert r.status_code == 400
+
+    # Đơn vị khai báo đã triển khai
+    r = await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={"note": "Đã triển khai xong"})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "implemented"
+
+    # Khai báo lần nữa → 400 (đã implemented)
+    r = await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={})
+    assert r.status_code == 400
+
+    # Super admin xác nhận đáp ứng
+    r = await client.post(f"/api/system-profiles/{pid}/confirm-implementation", headers=sa, json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "fulfilled"
+
+    # Stats có trạng thái fulfilled
+    r = await client.get("/api/system-profiles/stats", headers=sa)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] >= 1
+    assert body["by_status"]["fulfilled"] >= 1
+    assert set(body["by_level"]) <= {"1", "2", "3"}
