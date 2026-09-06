@@ -102,11 +102,15 @@ services:
     ports:
       - "${PORTAL_PORT:-3003}:3003"
     volumes:
-      - ./portal:/app
+      - ./portal:/app:ro
       - portal_node_modules:/app/node_modules
       - portal_next:/app/.next
     working_dir: /app
-    command: pnpm dev
+    # Production mode: build lần đầu (cache vào portal_next volume), restart sau dùng cache.
+    # Source :ro vì production không ghi file gì cả — Next.js chỉ đọc + serve.
+    # Dockerfile.dev set NODE_ENV=development; phải override =production để Next.js dùng
+    # production-mode prerendering (dev-mode sẽ fail ở /_global-error do useContext null).
+    command: sh -c "if [ ! -f .next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && NODE_ENV=production pnpm start"
     depends_on:
       - api
     networks: [inventory-net]
