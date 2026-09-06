@@ -442,10 +442,12 @@ export default function SystemProfileDetailPage() {
         {tabs.map((t) => (
           <button
             key={t.key}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+            role="tab"
+            aria-selected={tab === t.key}
+            className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
               tab === t.key
-                ? "border-brand-600 text-brand-700"
-                : "border-transparent text-slate-500 hover:text-slate-700"
+                ? "border-brand-600 text-slate-900"
+                : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
             }`}
             onClick={() => setTab(t.key)}
           >
@@ -455,7 +457,7 @@ export default function SystemProfileDetailPage() {
       </div>
 
       {tab === "info" && (
-        <Card className="space-y-4 p-6">
+        <Card bodyClass="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div><span className="text-xs text-slate-500">Mã hồ sơ</span><div className="font-medium">{profile.code}</div></div>
             <div><span className="text-xs text-slate-500">Cấp độ</span><div><LevelBadge level={profile.level} /></div></div>
@@ -585,8 +587,7 @@ export default function SystemProfileDetailPage() {
       )}
 
       {tab === "history" && (
-        <Card className="p-6">
-          <h3 className="mb-4 text-sm font-semibold text-slate-700">Timeline hồ sơ</h3>
+        <Card title="Timeline hồ sơ">
           {profile.events.length === 0 ? (
             <p className="text-sm text-slate-400">Chưa có sự kiện nào được ghi nhận.</p>
           ) : (
@@ -701,7 +702,7 @@ export default function SystemProfileDetailPage() {
                   {profile.machines.map((m) => (
                     <tr key={m.machine_id} className={TR_HOVER}>
                       <td className={TD}>
-                        <Link href={`/machines/${m.machine_id}`} className="font-medium text-brand-700 hover:underline">
+                        <Link href={`/machines/${m.machine_id}`} className="font-medium text-brand-600 hover:underline">
                           {m.hostname ?? "—"}
                         </Link>
                       </td>
@@ -954,8 +955,7 @@ export default function SystemProfileDetailPage() {
 
       {tab === "diagram" && (
         <div className="space-y-4">
-          <Card className="p-6">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700">Sơ đồ mô hình lô-gic</h3>
+          <Card title="Sơ đồ mô hình lô-gic">
             <MermaidDiagram
               code={profile.diagram_mermaid}
               fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}
@@ -966,8 +966,7 @@ export default function SystemProfileDetailPage() {
               validate={(c) => validateDevicesMermaid(c, profile.devices)}
             />
           </Card>
-          <Card className="p-6">
-            <h3 className="mb-3 text-sm font-semibold text-slate-700">Sơ đồ mô hình vật lý</h3>
+          <Card title="Sơ đồ mô hình vật lý">
             <MermaidDiagram
               code={profile.physical_diagram_mermaid}
               fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}

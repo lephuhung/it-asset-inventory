@@ -164,8 +164,10 @@ export default function SystemProfileConfigPage() {
         ] as Array<[Tab, string]>).map(([key, label]) => (
           <button
             key={key}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              tab === key ? "border-brand-600 text-brand-700" : "border-transparent text-slate-500 hover:text-slate-700"
+            role="tab"
+            aria-selected={tab === key}
+            className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
+              tab === key ? "border-brand-600 text-slate-900" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
             }`}
             onClick={() => setTab(key)}
           >

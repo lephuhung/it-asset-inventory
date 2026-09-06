@@ -87,7 +87,7 @@ export default function NewSystemProfilePage() {
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Tạo hồ sơ cấp độ" description="Khai báo thông tin hệ thống thông tin và cấp độ đề xuất. Mã hồ sơ được sinh tự động." />
       {error && <ErrorBanner message={error} />}
-      <Card className="space-y-4 p-6">
+      <Card bodyClass="space-y-4">
         {isSuperAdmin && (
           <Field label="Đơn vị">
             <Select value={orgId} onChange={(e) => setOrgId(e.target.value)}>

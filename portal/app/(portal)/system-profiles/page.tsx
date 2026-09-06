@@ -210,7 +210,7 @@ export default function SystemProfilesPage() {
               {items.map((p) => (
                 <tr key={p.id} className={TR_HOVER}>
                   <td className={TD}>
-                    <Link href={`/system-profiles/${p.id}`} className="font-medium text-brand-700 hover:underline">
+                    <Link href={`/system-profiles/${p.id}`} className="font-medium text-brand-600 hover:underline">
                       {p.name}
                     </Link>
                     <div className="text-xs text-slate-500">{p.code}</div>

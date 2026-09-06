@@ -124,6 +124,7 @@ export function MermaidDiagram({
             <label className="mt-2 flex items-center gap-2 font-medium">
               <input
                 type="checkbox"
+                className="size-4 cursor-pointer accent-brand-600"
                 checked={acknowledged}
                 onChange={(e) => setAcknowledged(e.target.checked)}
               />
