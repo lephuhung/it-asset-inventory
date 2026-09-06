@@ -102,7 +102,7 @@ services:
     ports:
       - "${PORTAL_PORT:-3003}:3003"
     volumes:
-      - ./portal:/app:ro
+      - ./portal:/app
       - portal_node_modules:/app/node_modules
       - portal_next:/app/.next
     working_dir: /app
