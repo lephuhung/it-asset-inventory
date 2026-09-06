@@ -1735,3 +1735,249 @@ class AnnouncementResponse(BaseModel):
     creator_name: str | None = None
     created_at: datetime
 
+
+
+
+# ── Yêu cầu an toàn theo cấp độ + thẩm định ─────────────────
+
+
+class LevelRequirementIn(BaseModel):
+    """Tạo/sửa yêu cầu an toàn trong catalog theo cấp độ (Super Admin)."""
+
+    level: int = Field(ge=1, le=3)
+    code: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class LevelRequirementOut(LevelRequirementIn):
+    id: uuid.UUID
+
+
+class LevelRequirementUpdate(BaseModel):
+    """Cập nhật một phần yêu cầu trong catalog (Super Admin)."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class ProfileRequirementRequest(BaseModel):
+    """Đơn vị khai báo hoàn thành yêu cầu, trình Super Admin thẩm định."""
+
+    evidence: str = Field(min_length=1)
+
+
+class ProfileRequirementReview(BaseModel):
+    """Super Admin thẩm định yêu cầu: verify (đạt) / reject (không đạt)."""
+
+    action: str = Field(pattern="^(verify|reject)$")
+    review_note: str | None = None
+
+
+class ProfileRequirementOut(BaseModel):
+    id: uuid.UUID
+    requirement_id: uuid.UUID
+    code: str
+    title: str
+    description: str | None = None
+    sort_order: int = 0
+    status: str
+    evidence: str | None = None
+    review_note: str | None = None
+    requested_at: datetime | None = None
+    reviewed_at: datetime | None = None
+
+# ── Hồ sơ cấp độ hệ thống thông tin ─────────────────────────
+
+
+class SystemProfileCreate(BaseModel):
+    """Tạo hồ sơ cấp độ — Super Admin có thể approve trực tiếp (duyệt sẵn)."""
+
+    org_id: uuid.UUID
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
+    level: int = Field(ge=1, le=3)
+    description: str | None = None
+    diagram_mermaid: str | None = None
+    # Chỉ Super Admin — tạo kèm quyết định phê duyệt (approved ngay)
+    decision_number: str | None = Field(default=None, max_length=255)
+    decision_date: datetime | None = None
+    decision_agency: str | None = Field(default=None, max_length=255)
+
+
+class SystemProfileUpdate(BaseModel):
+    """Cập nhật hồ sơ — không cho sửa qua endpoint này khi đã approved
+    (trừ Super Admin, xử lý ở router)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    level: int | None = Field(default=None, ge=1, le=3)
+    description: str | None = None
+    diagram_mermaid: str | None = None
+    physical_diagram_mermaid: str | None = None
+    physical_location: str | None = None
+    user_accounts: int | None = Field(default=None, ge=0)
+    data_volume: str | None = None
+    service_audience: str | None = Field(default=None, max_length=32)
+
+
+# ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ──
+
+
+class SystemProfilePartyIn(BaseModel):
+    """Thông tin chủ quản / đơn vị vận hành (1 hồ sơ có tối đa 2 bản ghi)."""
+
+    role: str = Field(default="owner", pattern="^(owner|operator)$")
+    name: str = Field(min_length=1, max_length=255)
+    mandate_document: str | None = None
+    legal_representative: str | None = Field(default=None, max_length=255)
+    representative_title: str | None = Field(default=None, max_length=128)
+    address: str | None = None
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+
+
+class SystemProfilePartyOut(SystemProfilePartyIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileApplicationIn(BaseModel):
+    """Ứng dụng/dịch vụ: máy chủ cài đặt (Machine hoặc nhập tay) + vai trò."""
+
+    name: str = Field(min_length=1, max_length=255)
+    machine_id: uuid.UUID | None = None
+    server_name: str | None = Field(default=None, max_length=255)
+    os_name: str | None = Field(default=None, max_length=255)
+    role: str | None = None
+    url: str | None = Field(default=None, max_length=255)
+    note: str | None = None
+
+
+class SystemProfileApplicationOut(SystemProfileApplicationIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileIpRangeIn(BaseModel):
+    """Dải IP trong quy hoạch vùng mạng."""
+
+    zone: str = Field(min_length=1, max_length=128)
+    zone_description: str | None = None
+    cidr: str = Field(min_length=1, max_length=64)
+    ip_kind: str = Field(default="private", pattern="^(private|public)$")
+    gateway: str | None = Field(default=None, max_length=45)
+    note: str | None = None
+
+
+class SystemProfileIpRangeOut(SystemProfileIpRangeIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileDeviceIn(BaseModel):
+    """Thêm/sửa thiết bị khai báo trong hồ sơ (nhập tay)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    device_code: str | None = Field(default=None, max_length=128)
+    tag: str | None = Field(default=None, max_length=128)
+    device_type: str = Field(default="other", max_length=32)
+    ip: str | None = Field(default=None, max_length=45)
+    model: str | None = Field(default=None, max_length=255)
+    machine_id: uuid.UUID | None = None
+    sort_order: int = 0
+    location: str | None = Field(default=None, max_length=255)
+    purpose: str | None = None
+
+
+class SystemProfileDeviceOut(SystemProfileDeviceIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileMachineOut(BaseModel):
+    machine_id: uuid.UUID
+    hostname: str | None = None
+    machine_uuid: str | None = None
+    status: str | None = None
+    note: str | None = None
+    added_at: datetime
+
+
+class SystemProfileReview(BaseModel):
+    """Super Admin duyệt / từ chối hồ sơ."""
+
+    action: str = Field(pattern="^(approve|reject)$")
+    decision_number: str | None = Field(default=None, max_length=255)
+    decision_date: datetime | None = None
+    decision_agency: str | None = Field(default=None, max_length=255)
+    review_note: str | None = None
+
+
+class SystemProfileOut(BaseModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    org_name: str | None = None
+    code: str
+    name: str
+    level: int
+    description: str | None = None
+    status: str
+    decision_number: str | None = None
+    decision_date: datetime | None = None
+    decision_agency: str | None = None
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
+    diagram_mermaid: str | None = None
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+    device_count: int = 0
+    machine_count: int = 0
+
+
+class SystemProfileDetailOut(SystemProfileOut):
+    devices: list[SystemProfileDeviceOut] = []
+    machines: list[SystemProfileMachineOut] = []
+    requirements: list[ProfileRequirementOut] = []
+    parties: list[SystemProfilePartyOut] = []
+    applications: list[SystemProfileApplicationOut] = []
+    ip_ranges: list[SystemProfileIpRangeOut] = []
+    # Đáp ứng cấp độ: đủ n yêu cầu của cấp độ hồ sơ được thẩm định đạt
+    requirements_total: int = 0
+    requirements_verified: int = 0
+    level_compliant: bool = False
+    physical_diagram_mermaid: str | None = None
+    physical_location: str | None = None
+    user_accounts: int | None = None
+    data_volume: str | None = None
+    service_audience: str | None = None
+
+
+# ── Catalog loại thiết bị (quản trị động) ───────────────────
+
+
+class DeviceTypeIn(BaseModel):
+    """Tạo/cập nhật loại thiết bị (Super Admin). `icon` là emoji cho sơ đồ Mermaid."""
+
+    code: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=128)
+    icon: str | None = Field(default=None, max_length=16)
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class DeviceTypeOut(DeviceTypeIn):
+    id: uuid.UUID
+
+
+class DeviceTypeUpdate(BaseModel):
+    """Cập nhật một phần loại thiết bị. `code` không cho đổi (được tham chiếu bởi hồ sơ)."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=128)
+    icon: str | None = Field(default=None, max_length=16)
+    sort_order: int | None = None
+    is_active: bool | None = None

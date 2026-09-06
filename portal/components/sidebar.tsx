@@ -81,6 +81,12 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     group: "Tổ chức",
     items: [
       {
+        href: "/system-profiles",
+        label: "Hồ sơ cấp độ HTTT",
+        icon: ShieldCheck,
+        roles: ADMIN_ROLES,
+      },
+      {
         href: "/organizations",
         label: "Cây tổ chức",
         icon: Building2,

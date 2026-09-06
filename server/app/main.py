@@ -25,6 +25,7 @@ from app.api.routes import (
     compliance,
     dfir_requests,
     downloads,
+    device_types,
     drifts,
     enroll,
     heartbeat,
@@ -40,6 +41,7 @@ from app.api.routes import (
     reports,
     self_service,
     stats,
+    system_profiles,
     tags,
     telegram_bot_admin,
     tokens,
@@ -161,6 +163,9 @@ app.include_router(tokens.router)
 app.include_router(machines.router)
 app.include_router(stats.router)
 app.include_router(tags.router)
+app.include_router(system_profiles.router)
+app.include_router(system_profiles.catalog_router)
+app.include_router(device_types.router)
 app.include_router(orgs.router)
 app.include_router(alert_rules.router)
 app.include_router(self_service.router)

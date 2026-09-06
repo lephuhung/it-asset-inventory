@@ -1070,3 +1070,198 @@ export interface AnnouncementUpdatePayload {
   is_active?: boolean;
 }
 
+
+/* ── Hồ sơ cấp độ hệ thống thông tin ───────────────────────── */
+
+export type SystemProfileStatus = "drafted" | "pending_review" | "approved" | "rejected";
+
+export type DeviceKind =
+  | "firewall"
+  | "router"
+  | "switch"
+  | "server"
+  | "workstation"
+  | "storage"
+  | "ups"
+  | "other";
+
+/** Loại thiết bị trong catalog động (`/api/device-types`). */
+export interface DeviceType {
+  id: string;
+  code: string;
+  label: string;
+  icon: string | null;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface SystemProfileDevice {
+  id: string;
+  profile_id: string;
+  name: string;
+  device_code: string | null;
+  tag: string | null;
+  device_type: string;
+  ip: string | null;
+  model: string | null;
+  machine_id: string | null;
+  sort_order: number;
+  location: string | null;
+  purpose: string | null;
+}
+
+export interface SystemProfileMachine {
+  machine_id: string;
+  hostname: string | null;
+  machine_uuid: string | null;
+  status: string | null;
+  note: string | null;
+  added_at: string;
+}
+
+export interface SystemProfile {
+  id: string;
+  org_id: string;
+  org_name: string | null;
+  code: string;
+  name: string;
+  level: 1 | 2 | 3;
+  description: string | null;
+  status: SystemProfileStatus;
+  decision_number: string | null;
+  decision_date: string | null;
+  decision_agency: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
+  diagram_mermaid: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  device_count: number;
+  machine_count: number;
+}
+
+export interface SystemProfileDetail extends SystemProfile {
+  devices: SystemProfileDevice[];
+  machines: SystemProfileMachine[];
+}
+
+export interface SystemProfileDevicePayload {
+  name: string;
+  device_code?: string | null;
+  tag?: string | null;
+  device_type: string;
+  ip?: string | null;
+  model?: string | null;
+  machine_id?: string | null;
+  sort_order?: number;
+  location?: string | null;
+  purpose?: string | null;
+}
+
+export interface SystemProfileCreatePayload {
+  org_id: string;
+  code: string;
+  name: string;
+  level: 1 | 2 | 3;
+  description?: string | null;
+  diagram_mermaid?: string | null;
+  decision_number?: string | null;
+  decision_date?: string | null;
+  decision_agency?: string | null;
+}
+
+export interface SystemProfileReviewPayload {
+  action: "approve" | "reject";
+  decision_number?: string | null;
+  decision_date?: string | null;
+  decision_agency?: string | null;
+  review_note?: string | null;
+}
+
+/* ── Yêu cầu an toàn theo cấp độ + thẩm định ───────────────── */
+
+export type ProfileRequirementStatus = "pending" | "requested" | "verified" | "rejected";
+
+export interface ProfileRequirement {
+  id: string;
+  requirement_id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  sort_order: number;
+  status: ProfileRequirementStatus;
+  evidence: string | null;
+  review_note: string | null;
+  requested_at: string | null;
+  reviewed_at: string | null;
+}
+
+export interface LevelRequirement {
+  id: string;
+  level: 1 | 2 | 3;
+  code: string;
+  title: string;
+  description: string | null;
+  sort_order: number;
+  is_active: boolean;
+}
+
+export interface SystemProfileDetail {
+  requirements: ProfileRequirement[];
+  requirements_total: number;
+  requirements_verified: number;
+  level_compliant: boolean;
+}
+
+/* ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ── */
+
+export type PartyRole = "owner" | "operator";
+
+export interface SystemProfileParty {
+  id: string;
+  profile_id: string;
+  role: PartyRole;
+  name: string;
+  mandate_document: string | null;
+  legal_representative: string | null;
+  representative_title: string | null;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+}
+
+export interface SystemProfileApplication {
+  id: string;
+  profile_id: string;
+  name: string;
+  machine_id: string | null;
+  server_name: string | null;
+  os_name: string | null;
+  role: string | null;
+  url: string | null;
+  note: string | null;
+}
+
+export interface SystemProfileIpRange {
+  id: string;
+  profile_id: string;
+  zone: string;
+  zone_description: string | null;
+  cidr: string;
+  ip_kind: "private" | "public";
+  gateway: string | null;
+  note: string | null;
+}
+
+// Bổ sung trường dossier cho chi tiết hồ sơ (declaration merge)
+export interface SystemProfileDetail {
+  parties: SystemProfileParty[];
+  applications: SystemProfileApplication[];
+  ip_ranges: SystemProfileIpRange[];
+  physical_diagram_mermaid: string | null;
+  physical_location: string | null;
+  user_accounts: number | null;
+  data_volume: string | null;
+  service_audience: string | null;
+}
