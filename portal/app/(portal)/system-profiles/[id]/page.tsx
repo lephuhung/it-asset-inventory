@@ -17,6 +17,8 @@ import type {
   SystemProfileApplication,
   SystemProfileIpRange,
   SystemProfileParty,
+  SystemProfileStatus,
+  SystemProfileContact,
   PartyRole,
   ItContact,
 } from "@/lib/types";
@@ -97,6 +99,296 @@ const REQ_STATUS_META: Record<string, { label: string; cls: string }> = {
 function ReqStatusBadge({ status }: { status: string }) {
   const meta = REQ_STATUS_META[status] ?? REQ_STATUS_META.pending;
   return <Badge className={meta.cls}>{meta.label}</Badge>;
+}
+
+/* ── Tiến trình trạng thái hồ sơ (5 mốc: Nháp → Chờ duyệt → Phê duyệt → Triển khai → Hoàn thành) ── */
+
+const STATUS_FLOW: Array<{ key: SystemProfileStatus; label: string }> = [
+  { key: "drafted", label: "Nháp" },
+  { key: "pending_review", label: "Chờ duyệt" },
+  { key: "approved", label: "Phê duyệt" },
+  { key: "implemented", label: "Triển khai" },
+  { key: "fulfilled", label: "Hoàn thành" },
+];
+
+function StatusStepper({ status }: { status: SystemProfileStatus }) {
+  // Rejected là luồng nhánh — không hiển thị stepper, thay bằng banner cảnh báo
+  if (status === "rejected") {
+    return (
+      <div className="flex items-start gap-3 rounded-md bg-rose-50 p-3 ring-1 ring-inset ring-rose-200">
+        <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-base text-rose-600">
+          ❌
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-rose-700">Hồ sơ bị từ chối</p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Đơn vị cần sửa theo ghi chú duyệt và trình lại để tiếp tục quy trình.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  const currentIdx = STATUS_FLOW.findIndex((s) => s.key === status);
+  const safeIdx = currentIdx < 0 ? 0 : currentIdx;
+  return (
+    <ol className="flex items-start" aria-label="Tiến trình trạng thái hồ sơ">
+      {STATUS_FLOW.map((s, i) => {
+        const isPast = i < safeIdx;
+        const isCurrent = i === safeIdx;
+        return (
+          <li
+            key={s.key}
+            aria-current={isCurrent ? "step" : undefined}
+            className="flex min-w-0 flex-1 flex-col"
+          >
+            <div className="flex items-center">
+              <span
+                className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ring-2 ring-white ${
+                  isCurrent
+                    ? "bg-brand-600 text-white shadow-sm"
+                    : isPast
+                      ? "bg-brand-100 text-brand-700"
+                      : "bg-slate-100 text-slate-400"
+                }`}
+              >
+                {isPast ? "✓" : i + 1}
+              </span>
+              {i < STATUS_FLOW.length - 1 && (
+                <span
+                  aria-hidden
+                  className={`mx-1 h-0.5 flex-1 rounded-full ${
+                    isPast ? "bg-brand-300" : "bg-slate-200"
+                  }`}
+                />
+              )}
+            </div>
+            <p
+              title={s.label}
+              className={`mt-1.5 truncate text-[11px] font-medium uppercase tracking-wider ${
+                isCurrent ? "text-brand-700" : isPast ? "text-slate-600" : "text-slate-400"
+              }`}
+            >
+              {s.label}
+            </p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/* ── Cột liên hệ trong hero (chuyên trách CNTT / tổ chức vận hành) ── */
+
+function HeroContactColumn({
+  icon,
+  title,
+  items,
+  total,
+  emptyLabel,
+  onSeeAll,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  items: SystemProfileContact[];
+  total: number;
+  emptyLabel: string;
+  onSeeAll: () => void;
+}) {
+  return (
+    <div className="bg-white p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <span aria-hidden>{icon}</span>
+          <span className="truncate">{title}</span>
+        </p>
+        {total > 0 && (
+          <button
+            type="button"
+            onClick={onSeeAll}
+            className="shrink-0 text-xs font-medium text-brand-600 hover:underline focus-visible:underline focus-visible:outline-none"
+          >
+            Xem tất cả ({total})
+          </button>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <p className="mt-3 text-sm italic text-slate-400">{emptyLabel}</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {items.map((c) => {
+            const subParts: string[] = [];
+            if (c.position) subParts.push(c.position);
+            if (c.kind === "org" && c.contact_person) subParts.push(`Đầu mối: ${c.contact_person}`);
+            return (
+              <li key={c.contact_id} className="min-w-0 text-sm">
+                <p className="truncate font-medium text-slate-800" title={c.name}>
+                  {c.name}
+                </p>
+                <p className="truncate text-xs text-slate-500">
+                  {subParts.length > 0 ? subParts.join(" · ") : "Chưa nhập chức vụ"}
+                </p>
+                {(c.phone || c.email) && (
+                  <p className="mt-0.5 truncate text-xs text-slate-400">
+                    {[c.phone, c.email].filter(Boolean).join(" · ")}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ── Hero "Tổng quan hồ sơ" — hiển thị cứng phía trên hàng tab ──
+   Tóm tắt các trường cốt lõi từ tab Thông tin + danh sách Chuyên trách/tổ chức.
+   Trường rỗng hiển thị "Chưa nhập" / "Chưa có quyết định" / "Chưa gắn …". */
+
+function ProfileOverview({
+  profile,
+  onJumpToContacts,
+}: {
+  profile: SystemProfileDetail;
+  onJumpToContacts: () => void;
+}) {
+  /** Fallback cho text ngắn rỗng — giữ nhất quán pattern "Chưa nhập". */
+  const v = (val: string | number | null | undefined): string =>
+    val === null || val === undefined || val === "" ? "Chưa nhập" : String(val);
+
+  const itPeople = profile.contacts.filter((c) => c.kind === "person");
+  const orgContacts = profile.contacts.filter((c) => c.kind === "org");
+  const ownerParty = profile.parties.find((p) => p.role === "owner") ?? null;
+  const missingReqs = Math.max(0, profile.requirements_total - profile.requirements_verified);
+
+  return (
+    <Card className="mb-4 overflow-hidden" padded={false}>
+      {/* Hàng 1 — Tiến trình trạng thái */}
+      <div className="border-b border-slate-100 bg-slate-50/40 px-5 py-4">
+        <StatusStepper status={profile.status} />
+      </div>
+
+      {/* Hàng 2 — Lưới 4 ô: Thông tin / Cấp độ / Chủ quản / Tuân thủ */}
+      <div className="grid gap-px bg-slate-100 sm:grid-cols-2 lg:grid-cols-4">
+        {/* 1. Thông tin hệ thống */}
+        <div className="bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Thông tin hệ thống
+          </p>
+          <p className="mt-2 truncate text-sm font-semibold text-slate-900" title={profile.name}>
+            {profile.name}
+          </p>
+          <p className="truncate text-xs text-slate-500">
+            {v(profile.code)} · {v(profile.org_name ?? profile.org_id)}
+          </p>
+          <p className="mt-2 line-clamp-3 text-xs leading-snug text-slate-600">
+            {profile.description ? profile.description : <span className="italic text-slate-400">Chưa nhập mô tả</span>}
+          </p>
+          <p className="mt-2 truncate text-xs text-slate-500">
+            <span className="text-slate-400">Văn bản đề nghị:</span>{" "}
+            {profile.document_number ? (
+              <>
+                {profile.document_number}
+                {profile.document_date && (
+                  <span className="ml-1 text-slate-400">
+                    ({new Date(profile.document_date).toLocaleDateString("vi-VN")})
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="italic text-slate-400">Chưa nhập</span>
+            )}
+          </p>
+        </div>
+
+        {/* 2. Cấp độ */}
+        <div className="bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Cấp độ hệ thống
+          </p>
+          <div className="mt-2">
+            <LevelBadge level={profile.level} />
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            Yêu cầu ATTT đã thẩm định đạt:{" "}
+            <span className="font-semibold tabular-nums text-slate-700">
+              {profile.requirements_verified}/{profile.requirements_total}
+            </span>
+          </p>
+        </div>
+
+        {/* 3. Chủ quản HTTT */}
+        <div className="bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Chủ quản hệ thống thông tin
+          </p>
+          <p
+            className={`mt-2 truncate text-sm font-semibold ${
+              profile.managed_by ? "text-slate-900" : "italic text-slate-400"
+            }`}
+            title={profile.managed_by ?? undefined}
+          >
+            {v(profile.managed_by)}
+          </p>
+          <p className="mt-1 truncate text-xs text-slate-500">
+            <span className="text-slate-400">Đơn vị chủ quản:</span>{" "}
+            {ownerParty ? ownerParty.name : <span className="italic text-slate-400">Chưa khai báo</span>}
+          </p>
+          <p className="mt-1 truncate text-xs text-slate-500">
+            <span className="text-slate-400">Quyết định:</span>{" "}
+            {profile.decision_number ? (
+              profile.decision_number
+            ) : (
+              <span className="italic text-slate-400">Chưa có quyết định</span>
+            )}
+          </p>
+        </div>
+
+        {/* 4. Tuân thủ cấp độ */}
+        <div className="bg-white p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Tuân thủ cấp độ
+          </p>
+          <p className="mt-2">
+            {profile.level_compliant ? (
+              <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
+                Đáp ứng đủ yêu cầu
+              </Badge>
+            ) : (
+              <Badge className="bg-amber-50 text-amber-700 ring-amber-600/20">
+                Chưa đủ yêu cầu
+              </Badge>
+            )}
+          </p>
+          <p className="mt-2 text-xs leading-snug text-slate-500">
+            {profile.level_compliant
+              ? `Hồ sơ đã đáp ứng đủ ${profile.requirements_total} yêu cầu ATTT cấp độ ${profile.level}.`
+              : `Còn thiếu ${missingReqs} yêu cầu ATTT cấp độ ${profile.level}.`}
+          </p>
+        </div>
+      </div>
+
+      {/* Hàng 3 — Lưới 2 ô: Chuyên trách CNTT / Tổ chức vận hành */}
+      <div className="grid gap-px border-t border-slate-100 bg-slate-100 sm:grid-cols-2">
+        <HeroContactColumn
+          icon="👤"
+          title="Chuyên trách CNTT"
+          items={itPeople.slice(0, 2)}
+          total={itPeople.length}
+          emptyLabel="Chưa gắn chuyên trách CNTT"
+          onSeeAll={onJumpToContacts}
+        />
+        <HeroContactColumn
+          icon="🏢"
+          title="Tổ chức vận hành"
+          items={orgContacts.slice(0, 2)}
+          total={orgContacts.length}
+          emptyLabel="Chưa gắn tổ chức vận hành"
+          onSeeAll={onJumpToContacts}
+        />
+      </div>
+    </Card>
+  );
 }
 
 export default function SystemProfileDetailPage() {
@@ -419,24 +711,7 @@ export default function SystemProfileDetailPage() {
 
       {actionError && <ErrorBanner message={actionError} />}
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <LevelBadge level={profile.level} />
-        <StatusBadge status={profile.status} />
-        {profile.decision_number && (
-          <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">
-            QĐ: {profile.decision_number}
-            {profile.decision_agency ? ` — ${profile.decision_agency}` : ""}
-          </Badge>
-        )}
-        {profile.status !== "approved" && (
-          <span className="text-xs text-slate-500">Chưa đáp ứng cấp độ — chưa có quyết định phê duyệt</span>
-        )}
-        <Badge className={profile.level_compliant ? "bg-emerald-50 text-emerald-700 ring-emerald-600/20" : "bg-slate-100 text-slate-600 ring-slate-500/20"}>
-          {profile.level_compliant
-            ? `Đáp ứng cấp độ ${profile.level}`
-            : `Chưa đủ yêu cầu cấp độ ${profile.level} (${profile.requirements_verified}/${profile.requirements_total})`}
-        </Badge>
-      </div>
+      <ProfileOverview profile={profile} onJumpToContacts={() => setTab("contacts")} />
 
       <div className="mb-4 flex gap-1 border-b border-slate-200">
         {tabs.map((t) => (
@@ -618,11 +893,6 @@ export default function SystemProfileDetailPage() {
         <div className="space-y-3">
           {canEdit && (
             <div className="flex justify-end gap-2">
-              {isSuperAdmin && (
-                <Link href="/system-profiles/config">
-                  <Button variant="secondary">Cấu hình loại thiết bị</Button>
-                </Link>
-              )}
               <Button onClick={openNewDevice}><Plus className="size-4" /> Thêm thiết bị</Button>
             </div>
           )}
@@ -725,39 +995,46 @@ export default function SystemProfileDetailPage() {
       {tab === "contacts" && (
         <div className="space-y-3">
           {canEdit && (
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <Field label="Gắn chuyên trách CNTT / tổ chức vận hành" hint="Danh bạ của đơn vị — quản lý thêm ở trang Chuyên trách CNTT.">
-                  <Select value={contactPick} onChange={(e) => setContactPick(e.target.value)}>
-                    <option value="">— chọn từ danh bạ đơn vị —</option>
-                    {contactsDir
-                      .filter((c) => !profile.contacts.some((pc) => pc.contact_id === c.id))
-                      .map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {`${c.kind === "org" ? "🏢" : "👤"} ${c.name}${c.position ? ` — ${c.position}` : ""}`}
-                        </option>
-                      ))}
-                  </Select>
-                </Field>
+            <div>
+              <div className="flex items-start gap-2">
+                <div className="flex-1">
+                  <Field label="Gắn chuyên trách CNTT / tổ chức vận hành">
+                    <Select value={contactPick} onChange={(e) => setContactPick(e.target.value)}>
+                      <option value="">— chọn từ danh bạ đơn vị —</option>
+                      {contactsDir
+                        .filter((c) => !profile.contacts.some((pc) => pc.contact_id === c.id))
+                        .map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {`${c.kind === "org" ? "🏢" : "👤"} ${c.name}${c.position ? ` — ${c.position}` : ""}`}
+                          </option>
+                        ))}
+                    </Select>
+                  </Field>
+                </div>
+                <div className="w-56">
+                  <Field label="Vai trò trong hồ sơ (tùy chọn)">
+                    <Input value={contactNote} onChange={(e) => setContactNote(e.target.value)} placeholder="Phụ trách vận hành…" />
+                  </Field>
+                </div>
+                <div className="pt-[26px]">
+                  <Button
+                    disabled={!contactPick || busy}
+                    loading={busy}
+                    onClick={() => {
+                      const cid = contactPick;
+                      const note = contactNote.trim();
+                      setContactPick("");
+                      setContactNote("");
+                      void act(() => api.post(`/system-profiles/${profile.id}/contacts/${cid}${note ? `?note=${encodeURIComponent(note)}` : ""}`));
+                    }}
+                  >
+                    Gắn
+                  </Button>
+                </div>
               </div>
-              <div className="w-56">
-                <Field label="Vai trò trong hồ sơ (tùy chọn)">
-                  <Input value={contactNote} onChange={(e) => setContactNote(e.target.value)} placeholder="Phụ trách vận hành…" />
-                </Field>
-              </div>
-              <Button
-                disabled={!contactPick || busy}
-                loading={busy}
-                onClick={() => {
-                  const cid = contactPick;
-                  const note = contactNote.trim();
-                  setContactPick("");
-                  setContactNote("");
-                  void act(() => api.post(`/system-profiles/${profile.id}/contacts/${cid}${note ? `?note=${encodeURIComponent(note)}` : ""}`));
-                }}
-              >
-                Gắn
-              </Button>
+              <p className="mt-1 text-xs leading-snug text-slate-400">
+                Danh bạ của đơn vị — quản lý thêm ở trang Chuyên trách CNTT.
+              </p>
             </div>
           )}
           {profile.contacts.length === 0 ? (
