@@ -45,7 +45,37 @@ import { MermaidDiagram } from "@/components/mermaid-diagram";
 import { generateDevicesMermaid, labelFor, validateDevicesMermaid } from "@/lib/system-profile-diagram";
 import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
 
-type Tab = "info" | "devices" | "machines" | "requirements" | "applications" | "ip-ranges" | "diagram";
+type Tab = "info" | "history" | "devices" | "machines" | "requirements" | "applications" | "ip-ranges" | "diagram";
+
+/** Icon + màu hiển thị từng loại sự kiện trên timeline lịch sử. */
+const EVENT_META: Record<string, { icon: string; cls: string }> = {
+  created: { icon: "📝", cls: "bg-brand-50 ring-brand-600/20" },
+  updated: { icon: "✏️", cls: "bg-slate-100 ring-slate-500/20" },
+  level_changed: { icon: "🎚️", cls: "bg-indigo-50 ring-indigo-600/20" },
+  document_updated: { icon: "📄", cls: "bg-slate-100 ring-slate-500/20" },
+  submitted: { icon: "📤", cls: "bg-amber-50 ring-amber-600/20" },
+  approved: { icon: "✅", cls: "bg-emerald-50 ring-emerald-600/20" },
+  rejected: { icon: "❌", cls: "bg-rose-50 ring-rose-600/20" },
+  implementation_reported: { icon: "🚀", cls: "bg-blue-50 ring-blue-600/20" },
+  fulfilled: { icon: "🏁", cls: "bg-teal-50 ring-teal-600/20" },
+  device_added: { icon: "➕", cls: "bg-slate-100 ring-slate-500/20" },
+  device_updated: { icon: "🔧", cls: "bg-slate-100 ring-slate-500/20" },
+  device_removed: { icon: "➖", cls: "bg-slate-100 ring-slate-500/20" },
+  machine_attached: { icon: "💻", cls: "bg-slate-100 ring-slate-500/20" },
+  machine_detached: { icon: "🔌", cls: "bg-slate-100 ring-slate-500/20" },
+  requirement_requested: { icon: "🛡️", cls: "bg-amber-50 ring-amber-600/20" },
+  requirement_verified: { icon: "🛡️", cls: "bg-emerald-50 ring-emerald-600/20" },
+  requirement_rejected: { icon: "🛡️", cls: "bg-rose-50 ring-rose-600/20" },
+  party_added: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
+  party_updated: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
+  party_removed: { icon: "🏢", cls: "bg-slate-100 ring-slate-500/20" },
+  application_added: { icon: "🧩", cls: "bg-slate-100 ring-slate-500/20" },
+  application_updated: { icon: "🧩", cls: "bg-slate-100 ring-slate-500/20" },
+  application_removed: { icon: "🧩", cls: "bg-slate-100 ring-slate-500/20" },
+  ip_range_added: { icon: "🌐", cls: "bg-slate-100 ring-slate-500/20" },
+  ip_range_updated: { icon: "🌐", cls: "bg-slate-100 ring-slate-500/20" },
+  ip_range_removed: { icon: "🌐", cls: "bg-slate-100 ring-slate-500/20" },
+};
 
 const AUDIENCE_LABELS: Record<string, string> = {
   internal: "Nội bộ",
@@ -314,6 +344,7 @@ export default function SystemProfileDetailPage() {
 
   const tabs: Array<{ key: Tab; label: string }> = [
     { key: "info", label: "Thông tin" },
+    { key: "history", label: "Lịch sử" },
     { key: "devices", label: `Thiết bị (${profile.device_count})` },
     { key: "machines", label: `Máy tính (${profile.machine_count})` },
     { key: "requirements", label: `Yêu cầu ATTT (${profile.requirements_verified}/${profile.requirements_total})` },
@@ -530,6 +561,35 @@ export default function SystemProfileDetailPage() {
                 </Button>
               )}
             </div>
+          )}
+        </Card>
+      )}
+
+      {tab === "history" && (
+        <Card className="p-6">
+          <h3 className="mb-4 text-sm font-semibold text-slate-700">Timeline hồ sơ</h3>
+          {profile.events.length === 0 ? (
+            <p className="text-sm text-slate-400">Chưa có sự kiện nào được ghi nhận.</p>
+          ) : (
+            <ol className="relative space-y-0 border-l-2 border-slate-100 pl-5 ml-2">
+              {profile.events.map((ev) => {
+                const meta = EVENT_META[ev.event] ?? { icon: "•", cls: "bg-slate-100 ring-slate-500/20" };
+                return (
+                  <li key={ev.id} className="relative pb-5 last:pb-0">
+                    <span
+                      className={`absolute -left-[31px] flex size-6 items-center justify-center rounded-full text-[11px] ring-2 ring-white ${meta.cls}`}
+                      aria-hidden
+                    >
+                      {meta.icon}
+                    </span>
+                    <p className="text-sm font-medium text-slate-800">{ev.message}</p>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      {ev.actor_name ?? "Hệ thống"} · {new Date(ev.created_at).toLocaleString("vi-VN")}
+                    </p>
+                  </li>
+                );
+              })}
+            </ol>
           )}
         </Card>
       )}

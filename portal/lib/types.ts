@@ -1276,9 +1276,21 @@ export interface SystemProfileDetail {
   parties: SystemProfileParty[];
   applications: SystemProfileApplication[];
   ip_ranges: SystemProfileIpRange[];
+  /** Timeline lịch sử hồ sơ — mới nhất trước. */
+  events: SystemProfileEvent[];
   physical_diagram_mermaid: string | null;
   physical_location: string | null;
   user_accounts: number | null;
   data_volume: string | null;
   service_audience: string | null;
+}
+
+/** Một mốc trên timeline hồ sơ (append-only, server tự ghi). */
+export interface SystemProfileEvent {
+  id: string;
+  event: string;
+  message: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  created_at: string;
 }

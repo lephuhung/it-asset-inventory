@@ -1187,6 +1187,10 @@ class SystemProfile(Base):
     ip_ranges: Mapped[list[SystemProfileIpRange]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
     )
+    events: Mapped[list[SystemProfileEvent]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+        order_by="SystemProfileEvent.created_at.desc()",
+    )
 
 
 class SystemDevice(Base):
@@ -1350,6 +1354,30 @@ class SystemProfileIpRange(Base):
     ip_kind: Mapped[str] = mapped_column(String(16), default="private")  # private | public
     gateway: Mapped[str | None] = mapped_column(String(45), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SystemProfileEvent(Base):
+    """Sự kiện timeline của hồ sơ (append-only).
+
+    Ghi tại mọi mutation của hồ sơ để quản trị theo dõi quá trình hoàn thiện:
+    tạo, trình duyệt, phê duyệt, thiết bị, máy tính, thẩm định yêu cầu ATTT,
+    khai báo triển khai, xác nhận đáp ứng… `message` là mô tả tiếng Việt đã
+    render sẵn để hiển thị trực tiếp trên timeline.
+    """
+
+    __tablename__ = "system_profile_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    event: Mapped[str] = mapped_column(String(64), nullable=False)  # mã sự kiện, vd "approved"
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # chụp lại full_name lúc ghi
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
 
 
 class DeviceType(Base):

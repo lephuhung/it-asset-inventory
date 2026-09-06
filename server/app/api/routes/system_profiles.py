@@ -41,6 +41,7 @@ from app.db.models import (
     SystemDevice,
     SystemProfile,
     SystemProfileApplication,
+    SystemProfileEvent,
     SystemProfileIpRange,
     SystemProfileParty,
     SystemProfileMachine,
@@ -68,6 +69,7 @@ from app.schemas import (
     SystemProfileDeviceIn,
     SystemProfileDeviceOut,
     SystemProfileDetailOut,
+    SystemProfileEventOut,
     SystemProfileMachineOut,
     SystemProfileOut,
     SystemProfileReportImplementation,
@@ -77,6 +79,19 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/system-profiles", tags=["system-profiles"])
+
+def _log_event(db: AsyncSession, profile: SystemProfile, event: str, message: str, actor: User | None) -> None:
+    """Ghi 1 mốc timeline của hồ sơ (gọi trước commit, cùng transaction)."""
+    db.add(
+        SystemProfileEvent(
+            profile_id=profile.id,
+            event=event,
+            message=message,
+            actor_id=actor.id if actor else None,
+            actor_name=actor.full_name if actor else None,
+        )
+    )
+
 
 async def _valid_device_type(db: AsyncSession, device_type: str) -> bool:
     """Validate `device_type` tra catalog `device_types` (quản trị động)."""
@@ -97,6 +112,7 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
                 selectinload(SystemProfile.parties),
                 selectinload(SystemProfile.applications).selectinload(SystemProfileApplication.machine),
                 selectinload(SystemProfile.ip_ranges),
+                selectinload(SystemProfile.events),
             )
             .where(SystemProfile.id == profile_id)
             # populate_existing: nạp lại collections (session dùng
@@ -217,6 +233,14 @@ def _to_detail(profile: SystemProfile, org_name: str | None) -> SystemProfileDet
                 cidr=ip.cidr, ip_kind=ip.ip_kind, gateway=ip.gateway, note=ip.note,
             )
             for ip in profile.ip_ranges
+        ],
+        events=[
+            SystemProfileEventOut(
+                id=e.id, event=e.event, message=e.message,
+                actor_id=e.actor_id, actor_name=e.actor_name, created_at=e.created_at,
+            )
+            # sort phòng khi selectinload không áp order_by của relationship
+            for e in sorted(profile.events or [], key=lambda x: x.created_at, reverse=True)
         ],
         requirements_total=len(reqs),
         requirements_verified=verified,
@@ -378,6 +402,8 @@ async def create_profile(
         created_by=admin.id,
     )
     db.add(profile)
+    await db.flush()  # cần profile.id để ghi event
+    _log_event(db, profile, "created", f"Tạo hồ sơ (cấp độ {body.level})" + (f" — số văn bản đề nghị {body.document_number}" if body.document_number else ""), admin)
     await append_audit(
         db,
         action="system_profile.create",
@@ -430,6 +456,14 @@ async def update_profile(
     level_changed = "level" in changes and changes["level"] != profile.level
     for field, value in {**changes, **doc_fields}.items():
         setattr(profile, field, value)
+    # Ghi timeline: đổi cấp độ / sửa nội dung / bổ sung số văn bản
+    if level_changed:
+        _log_event(db, profile, "level_changed", f"Đổi cấp độ đề xuất sang cấp độ {profile.level}", admin)
+    if doc_fields:
+        parts = [f"{'Số văn bản' if f == 'document_number' else 'Ngày văn bản'}: {v}" for f, v in doc_fields.items()]
+        _log_event(db, profile, "document_updated", "Cập nhật văn bản đề nghị — " + "; ".join(parts), admin)
+    if "name" in changes or "description" in changes:
+        _log_event(db, profile, "updated", "Cập nhật thông tin hồ sơ", admin)
     # Sửa lại hồ sơ sau khi bị từ chối → về drafted để trình lại
     if profile.status == SystemProfileStatus.REJECTED.value:
         profile.status = SystemProfileStatus.DRAFTED.value
@@ -485,6 +519,7 @@ async def submit_profile(
     if profile.status not in (SystemProfileStatus.DRAFTED.value, SystemProfileStatus.REJECTED.value):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Hồ sơ đã được trình hoặc đã duyệt")
     profile.status = SystemProfileStatus.PENDING_REVIEW.value
+    _log_event(db, profile, "submitted", "Trình hồ sơ để thẩm định", admin)
     await append_audit(
         db,
         action="system_profile.submit",
@@ -516,9 +551,11 @@ async def review_profile(
         profile.decision_date = body.decision_date or datetime.now(UTC)
         profile.decision_agency = body.decision_agency
         profile.review_note = body.review_note
+        _log_event(db, profile, "approved", f"Phê duyệt hồ sơ — quyết định {body.decision_number.strip()}", admin)
     else:
         profile.status = SystemProfileStatus.REJECTED.value
         profile.review_note = body.review_note
+        _log_event(db, profile, "rejected", "Từ chối hồ sơ" + (f": {body.review_note}" if body.review_note else ""), admin)
     profile.reviewed_by = admin.id
     profile.reviewed_at = datetime.now(UTC)
     await append_audit(
@@ -554,6 +591,7 @@ async def report_implementation(
     profile.status = SystemProfileStatus.IMPLEMENTED.value
     if body.note:
         profile.review_note = body.note.strip()
+    _log_event(db, profile, "implementation_reported", "Đơn vị khai báo đã triển khai hệ thống theo hồ sơ", admin)
     await append_audit(db, action="system_profile.report_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -577,6 +615,7 @@ async def confirm_implementation(
     profile.status = SystemProfileStatus.FULFILLED.value
     profile.reviewed_by = admin.id
     profile.reviewed_at = datetime.now(UTC)
+    _log_event(db, profile, "fulfilled", "Xác nhận đơn vị đã đáp ứng hồ sơ", admin)
     await append_audit(db, action="system_profile.confirm_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -609,6 +648,7 @@ async def add_device(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Loại thiết bị không hợp lệ: {body.device_type}")
     await _validate_machine(db, body.machine_id, profile)
     db.add(SystemDevice(profile_id=profile.id, **body.model_dump()))
+    _log_event(db, profile, "device_added", f"Thêm thiết bị: {body.name} ({body.device_type})", admin)
     await append_audit(
         db,
         action="system_profile.device.add",
@@ -643,6 +683,7 @@ async def update_device(
     await _validate_machine(db, body.machine_id, profile)
     for field, value in body.model_dump().items():
         setattr(device, field, value)
+    _log_event(db, profile, "device_updated", f"Cập nhật thiết bị: {body.name}", admin)
     await append_audit(
         db,
         action="system_profile.device.update",
@@ -672,6 +713,7 @@ async def delete_device(
     if device is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy thiết bị")
     await db.delete(device)
+    _log_event(db, profile, "device_removed", f"Xóa thiết bị: {device.name}", admin)
     await append_audit(
         db,
         action="system_profile.device.delete",
@@ -709,6 +751,8 @@ async def attach_machine(
     if exists is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Máy đã nằm trong hồ sơ")
     db.add(SystemProfileMachine(profile_id=profile.id, machine_id=machine_id, note=note))
+    hostname = (await db.execute(select(Machine.hostname).where(Machine.id == machine_id))).scalar_one_or_none()
+    _log_event(db, profile, "machine_attached", f"Gắn máy tính: {hostname or machine_id}", admin)
     await append_audit(
         db,
         action="system_profile.machine.attach",
@@ -740,7 +784,9 @@ async def detach_machine(
     ).scalar_one_or_none()
     if link is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Máy không nằm trong hồ sơ")
+    hostname = link.machine.hostname if link.machine else None
     await db.delete(link)
+    _log_event(db, profile, "machine_detached", f"Gỡ máy tính: {hostname or machine_id}", admin)
     await append_audit(
         db,
         action="system_profile.machine.detach",
@@ -874,6 +920,8 @@ async def request_requirement_review(
     row.requested_by = admin.id
     row.requested_at = datetime.now(UTC)
     row.review_note = None
+    req_title = (await db.execute(select(LevelRequirement.title).where(LevelRequirement.id == row.requirement_id))).scalar_one_or_none() or ""
+    _log_event(db, profile, "requirement_requested", f"Trình thẩm định yêu cầu ATTT: {req_title}", admin)
     await append_audit(db, action="system_profile.requirement.request", actor=str(admin.id), target=f"{profile.id}:{row_id}", ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -909,6 +957,11 @@ async def review_requirement(
     row.reviewed_by = admin.id
     row.reviewed_at = datetime.now(UTC)
     row.review_note = body.review_note
+    req_title = (await db.execute(select(LevelRequirement.title).where(LevelRequirement.id == row.requirement_id))).scalar_one_or_none() or ""
+    if body.action == "verify":
+        _log_event(db, profile, "requirement_verified", f"Thẩm định ĐẠT yêu cầu ATTT: {req_title}", admin)
+    else:
+        _log_event(db, profile, "requirement_rejected", f"Thẩm định KHÔNG ĐẠT yêu cầu ATTT: {req_title}" + (f" — {body.review_note}" if body.review_note else ""), admin)
     await append_audit(db, action=f"system_profile.requirement.{body.action}", actor=str(admin.id), target=f"{profile.id}:{row_id}", ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -937,6 +990,7 @@ async def add_party(
     if dup is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Đã có bản ghi cho vai trò này — hãy sửa thay vì thêm")
     db.add(SystemProfileParty(profile_id=profile.id, **body.model_dump()))
+    _log_event(db, profile, "party_added", f"Khai báo {'đơn vị chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
     await append_audit(db, action="system_profile.party.add", actor=str(admin.id), target=f"{profile.id}:{body.role}", ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -962,6 +1016,7 @@ async def update_party(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy bản ghi")
     for field, value in body.model_dump().items():
         setattr(party, field, value)
+    _log_event(db, profile, "party_updated", f"Cập nhật thông tin {'chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
     await append_audit(db, action="system_profile.party.update", actor=str(admin.id), target=str(party_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -984,7 +1039,9 @@ async def delete_party(
     ).scalar_one_or_none()
     if party is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy bản ghi")
+    party_name = party.name
     await db.delete(party)
+    _log_event(db, profile, "party_removed", f"Xóa thông tin chủ quản/vận hành: {party_name}", admin)
     await append_audit(db, action="system_profile.party.delete", actor=str(admin.id), target=str(party_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1005,6 +1062,7 @@ async def add_application(
     profile = await _get_profile_scoped(db, profile_id, admin)
     await _validate_machine(db, body.machine_id, profile)
     db.add(SystemProfileApplication(profile_id=profile.id, **body.model_dump()))
+    _log_event(db, profile, "application_added", f"Khai báo ứng dụng/dịch vụ: {body.name}", admin)
     await append_audit(db, action="system_profile.application.add", actor=str(admin.id), target=f"{profile.id}:{body.name}", ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1031,6 +1089,7 @@ async def update_application(
     await _validate_machine(db, body.machine_id, profile)
     for field, value in body.model_dump().items():
         setattr(app, field, value)
+    _log_event(db, profile, "application_updated", f"Cập nhật ứng dụng/dịch vụ: {body.name}", admin)
     await append_audit(db, action="system_profile.application.update", actor=str(admin.id), target=str(app_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1053,7 +1112,9 @@ async def delete_application(
     ).scalar_one_or_none()
     if app is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy ứng dụng")
+    app_name = app.name
     await db.delete(app)
+    _log_event(db, profile, "application_removed", f"Xóa ứng dụng/dịch vụ: {app_name}", admin)
     await append_audit(db, action="system_profile.application.delete", actor=str(admin.id), target=str(app_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1073,6 +1134,7 @@ async def add_ip_range(
 ):
     profile = await _get_profile_scoped(db, profile_id, admin)
     db.add(SystemProfileIpRange(profile_id=profile.id, **body.model_dump()))
+    _log_event(db, profile, "ip_range_added", f"Khai báo vùng mạng {body.zone} ({body.cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.add", actor=str(admin.id), target=f"{profile.id}:{body.zone}", ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1098,6 +1160,7 @@ async def update_ip_range(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy dải IP")
     for field, value in body.model_dump().items():
         setattr(ip, field, value)
+    _log_event(db, profile, "ip_range_updated", f"Cập nhật vùng mạng {body.zone} ({body.cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.update", actor=str(admin.id), target=str(range_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)
@@ -1120,7 +1183,9 @@ async def delete_ip_range(
     ).scalar_one_or_none()
     if ip is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy dải IP")
+    ip_zone, ip_cidr = ip.zone, ip.cidr
     await db.delete(ip)
+    _log_event(db, profile, "ip_range_removed", f"Xóa vùng mạng {ip_zone} ({ip_cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.delete", actor=str(admin.id), target=str(range_id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_scoped(db, profile_id, admin)

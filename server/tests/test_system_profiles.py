@@ -764,3 +764,42 @@ async def test_implementation_flow_and_stats(client, org_env):
     assert body["total"] >= 1
     assert body["by_status"]["fulfilled"] >= 1
     assert set(body["by_level"]) <= {"1", "2", "3"}
+
+
+async def test_timeline_events(client, org_env):
+    """Mọi mutation ghi mốc timeline đúng thứ tự, kèm người thao tác."""
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+
+    r = await client.post(
+        "/api/system-profiles",
+        headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống timeline", "level": 2},
+    )
+    pid = r.json()["id"]
+    # Tạo hồ sơ → có event "created"
+    assert r.json()["events"][0]["event"] == "created", r.text
+
+    # Thêm thiết bị → event device_added
+    await client.post(
+        f"/api/system-profiles/{pid}/devices",
+        headers=oa,
+        json={"name": "Firewall biên", "device_type": "firewall"},
+    )
+
+    # submit → duyệt → khai báo triển khai → confirm
+    await client.post(f"/api/system-profiles/{pid}/submit", headers=oa)
+    await client.post(f"/api/system-profiles/{pid}/review", headers=sa, json={"action": "approve", "decision_number": "09/QĐ"})
+    await client.post(f"/api/system-profiles/{pid}/report-implementation", headers=oa, json={})
+    r = await client.post(f"/api/system-profiles/{pid}/confirm-implementation", headers=sa, json={})
+    events = r.json()["events"]
+
+    codes = [e["event"] for e in events]
+    # events mới nhất trước → thứ tự ngược mốc thời gian
+    assert codes == [
+        "fulfilled", "implementation_reported", "approved", "submitted", "device_added", "created",
+    ]
+    assert all(e["message"] for e in events)
+    assert all(e["actor_name"] for e in events)
+    # device_added có tên thiết bị trong message
+    assert "Firewall biên" in next(e["message"] for e in events if e["event"] == "device_added")

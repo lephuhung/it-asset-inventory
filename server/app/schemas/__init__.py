@@ -1934,6 +1934,17 @@ class SystemProfileConfirmImplementation(BaseModel):
     review_note: str | None = None
 
 
+class SystemProfileEventOut(BaseModel):
+    """Một mốc trên timeline hồ sơ (mới nhất trước)."""
+
+    id: uuid.UUID
+    event: str
+    message: str
+    actor_id: uuid.UUID | None = None
+    actor_name: str | None = None
+    created_at: datetime
+
+
 class SystemProfileStats(BaseModel):
     """Thống kê hồ sơ cấp độ (scoped theo đơn vị người dùng)."""
 
@@ -1974,6 +1985,7 @@ class SystemProfileDetailOut(SystemProfileOut):
     parties: list[SystemProfilePartyOut] = []
     applications: list[SystemProfileApplicationOut] = []
     ip_ranges: list[SystemProfileIpRangeOut] = []
+    events: list[SystemProfileEventOut] = []
     # Đáp ứng cấp độ: đủ n yêu cầu của cấp độ hồ sơ được thẩm định đạt
     requirements_total: int = 0
     requirements_verified: int = 0
