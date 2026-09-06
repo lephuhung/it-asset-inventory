@@ -111,7 +111,7 @@ services:
     # của `.next/` đầy đủ). Restart sau dùng cache build đã có.
     # Dockerfile.dev set NODE_ENV=development; phải override =production để Next.js dùng
     # production-mode prerendering (dev-mode sẽ fail ở /_global-error do useContext null).
-    command: sh -c "if [ ! -f .next/standalone/.next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && cd .next/standalone && NODE_ENV=production node server.js"
+    command: sh -c "if [ ! -f .next/standalone/.next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && mkdir -p .next/standalone/.next && rm -rf .next/standalone/.next/static && cp -R .next/static .next/standalone/.next/static && cd .next/standalone && NODE_ENV=production node server.js"
     depends_on:
       - api
     networks: [inventory-net]
