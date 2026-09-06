@@ -106,11 +106,12 @@ services:
       - portal_node_modules:/app/node_modules
       - portal_next:/app/.next
     working_dir: /app
-    # Production mode: build lần đầu (cache vào portal_next volume), restart sau dùng cache.
-    # Source :ro vì production không ghi file gì cả — Next.js chỉ đọc + serve.
+    # Production standalone server (Next.js 16 + output:"standalone" trong next.config.ts).
+    # Build tạo `.next/standalone/` chứa server.js + node_modules đã trace sẵn (44M thay vì 134M
+    # của `.next/` đầy đủ). Restart sau dùng cache build đã có.
     # Dockerfile.dev set NODE_ENV=development; phải override =production để Next.js dùng
     # production-mode prerendering (dev-mode sẽ fail ở /_global-error do useContext null).
-    command: sh -c "if [ ! -f .next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && NODE_ENV=production pnpm start"
+    command: sh -c "if [ ! -f .next/standalone/.next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && cd .next/standalone && NODE_ENV=production node server.js"
     depends_on:
       - api
     networks: [inventory-net]
