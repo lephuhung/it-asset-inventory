@@ -4,6 +4,9 @@
  * Trang cấu hình hồ sơ cấp độ (chỉ Super Admin):
  * - Tab "Loại thiết bị": CRUD catalog `/api/device-types` (icon emoji dùng trên sơ đồ Mermaid).
  * - Tab "Yêu cầu ATTT": CRUD catalog `/api/level-requirements` theo cấp độ 1–3.
+ *
+ * Sidebar đặt trong nhóm "Vận hành" — đây là trang cấu hình hệ thống, không thuộc nhóm
+ * "Tổ chức" (dù có quan hệ với hồ sơ cấp độ).
  */
 import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
