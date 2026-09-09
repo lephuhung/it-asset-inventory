@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     Numeric,
     String,
     Text,
@@ -696,6 +697,13 @@ class VelociraptorArtifact(Base):
         JSONB, nullable=False, default=lambda: ["windows"]
     )
     selection_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    # Tier classification for DeepAgent:
+    #   tier=1 — artifact eligible for initial collection (chạy ngay đầu investigation)
+    #   tier=2 — artifact eligible for Tier 2 expansion (chỉ chạy khi có evidence trigger)
+    # Default = 2 để Tier 1 là opt-in rõ ràng (chống promote nhầm).
+    tier: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=2
+    )
     last_push_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # pushed | failed
     last_push_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # safe message only
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -1145,8 +1153,14 @@ class SystemProfile(Base):
     # Số văn bản đề nghị thẩm định (đơn vị gửi kèm hồ sơ) + ngày ban hành — tùy chọn
     document_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
     document_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    # Tên chủ quản hệ thống thông tin (mặc định gợi ý theo tổ chức của tài khoản, có thể khác)
     managed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cán bộ phụ trách (đầu mối SuperAdmin) — FK sang bảng `officers` (toàn cục,
+    # 1 cán bộ có thể phụ trách nhiều hồ sơ). Mỗi hồ sơ tối đa 1 cán bộ; chỉ
+    # Super Admin có quyền tạo/sửa/gỡ officer + gán cho hồ sơ.
+    officer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("officers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    officer: Mapped["Officer | None"] = relationship()
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -1411,6 +1425,30 @@ class ItContact(Base):
     )
 
     org: Mapped[Organization] = relationship()
+
+
+class Officer(Base):
+    """Cán bộ phụ trách (đầu mối SuperAdmin) — toàn cục, không gắn org.
+
+    1 cán bộ có thể được chỉ định cho nhiều hồ sơ cấp độ (qua FK
+    `system_profiles.officer_id`). Mỗi hồ sơ tối đa 1 cán bộ. Chỉ Super Admin
+    CRUD — đại diện tổ chức bên ngoài hệ thống (Sở TT&TT, đơn vị tư vấn...).
+    """
+
+    __tablename__ = "officers"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
 
 
 class SystemProfileContact(Base):

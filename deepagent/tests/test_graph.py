@@ -41,14 +41,20 @@ def tiered_request() -> InvestigationRequest:
         {
             "name": "Custom.DFIR.Windows.Triage",
             "description": "Tier 1 Windows triage wrapper",
+            "tier": 1,
+            "supported_platforms": ["windows"],
         },
         {
             "name": "Custom.DFIR.Windows.Execution",
             "description": "Tier 2 Windows execution wrapper",
+            "tier": 2,
+            "supported_platforms": ["windows"],
         },
         {
             "name": "Custom.DFIR.Windows.Persistence",
             "description": "Tier 2 Windows persistence wrapper",
+            "tier": 2,
+            "supported_platforms": ["windows"],
         },
     ]
     return InvestigationRequest.model_validate(payload)

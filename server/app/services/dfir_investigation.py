@@ -54,6 +54,10 @@ async def _load_custom_artifact_refs(db: AsyncSession, target_platform: str) -> 
 
     Description parse từ YAML đã lưu, cắt 300 ký tự — đúng hợp đồng
     CustomArtifactRef của DeepAgent. Tối đa 20 artifact.
+
+    Tier (1 hoặc 2) được đính kèm để DeepAgent tier classification là dynamic
+    từ DB — admin có thể promote Custom.* mới lên Tier 1 / Tier 2 qua cột
+    `tier` trong bảng `velociraptor_artifacts` mà không cần ship image mới.
     """
     rows = (
         (
@@ -81,7 +85,26 @@ async def _load_custom_artifact_refs(db: AsyncSession, target_platform: str) -> 
                 description = str(doc.get("description") or "")[:300]
         except yaml.YAMLError:
             description = ""
-        refs.append({"name": row.name, "description": description})
+        # Tier từ DB; clamp về 1 hoặc 2 để an toàn nếu data cũ vi phạm check
+        # constraint (DB đã CHECK tier IN (1,2) nhưng defensive ở đây).
+        tier_value = 1 if int(row.tier) == 1 else 2
+        # supported_platforms từ DB; nếu row cũ (trước migration) có giá trị
+        # NULL hoặc rỗng → fallback về ['windows'] để giữ behavior cũ (custom
+        # artifact trước đây mặc định chỉ dùng cho Windows).
+        platforms = list(row.supported_platforms) if row.supported_platforms else ["windows"]
+        # Normalize về canonical strings; drop unknowns để schema validate
+        # sạch (CustomArtifactRef chỉ chấp nhận windows/linux/macos).
+        valid_platforms = [p for p in platforms if p in ("windows", "linux", "macos")]
+        if not valid_platforms:
+            valid_platforms = ["windows"]  # safer default khi data hỏng
+        refs.append(
+            {
+                "name": row.name,
+                "description": description,
+                "tier": tier_value,
+                "supported_platforms": valid_platforms,
+            }
+        )
     return refs
 
 

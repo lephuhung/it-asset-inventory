@@ -52,7 +52,11 @@ REQUEST_RANGE = TimeRange(**{"from": FROM, "to": TO})
 def test_custom_artifact_ref_validates_namespace() -> None:
     from deepagent.models import CustomArtifactRef
 
-    ref = CustomArtifactRef(name="Custom.Inventory.SmokeTest", description="mô tả")
+    ref = CustomArtifactRef(
+        name="Custom.Inventory.SmokeTest",
+        description="mô tả",
+        supported_platforms=["windows"],
+    )
     assert ref.name.startswith("Custom.")
 
     with pytest.raises(ValidationError):
@@ -77,14 +81,23 @@ def test_investigation_request_caps_custom_artifacts() -> None:
     ok = [f"Custom.A{i}" for i in range(20)]
     request = InvestigationRequest(
         **base,
-        custom_artifacts=[{"name": n, "description": ""} for n in ok],
+        custom_artifacts=[
+            {"name": n, "description": "", "supported_platforms": ["windows"]} for n in ok
+        ],
     )
     assert len(request.custom_artifacts) == 20
 
     with pytest.raises(ValidationError):
         InvestigationRequest(
             **base,
-            custom_artifacts=[{"name": n, "description": ""} for n in [*ok, "Custom.Overflow"]],
+            custom_artifacts=[
+                {
+                    "name": n,
+                    "description": "",
+                    "supported_platforms": ["windows"],
+                }
+                for n in [*ok, "Custom.Overflow"]
+            ],
         )
 
 

@@ -86,11 +86,21 @@ async def test_seed_is_idempotent_and_preserves_active_catalog_policy(db) -> Non
         "Custom.DFIR.Windows.Execution",
         "Custom.DFIR.Windows.Persistence",
     ]
+    assert {item["name"]: item["tier"] for item in windows} == {
+        "Custom.DFIR.Windows.Triage": 1,
+        "Custom.DFIR.Windows.Execution": 2,
+        "Custom.DFIR.Windows.Persistence": 2,
+    }
     assert [item["name"] for item in linux] == [
         "Custom.DFIR.Linux.Triage",
         "Custom.DFIR.Linux.Persistence",
         "Custom.DFIR.Linux.SSH",
     ]
+    assert {item["name"]: item["tier"] for item in linux} == {
+        "Custom.DFIR.Linux.Triage": 1,
+        "Custom.DFIR.Linux.Persistence": 2,
+        "Custom.DFIR.Linux.SSH": 2,
+    }
     assert macos == []
 
     rows = (await db.execute(select(VelociraptorArtifact))).scalars().all()
