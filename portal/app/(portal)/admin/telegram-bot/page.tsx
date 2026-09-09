@@ -643,7 +643,7 @@ export default function TelegramBotConfigPage() {
                 {linkedUsers.map((u) => (
                   <tr key={u.id} className="text-slate-700">
                     <td className="px-3 py-2">
-                      <div className="flex flex-col gap-0.5">
+                      <div className="flex flex-col items-start gap-0.5">
                         <span className="font-medium text-slate-900">
                           {u.full_name}
                         </span>

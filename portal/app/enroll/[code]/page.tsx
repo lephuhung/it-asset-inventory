@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { Check, Copy, KeyRound, ShieldCheck, Terminal } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import type { SelfServiceInfo, TokenCreateResponse } from "@/lib/types";
-import { Button, Card, Field, Input, Spinner } from "@/components/ui";
+import { Button, Card, EmailInput, Field, Input, PhoneInput, Spinner } from "@/components/ui";
 import { LogoMark } from "@/components/logo";
 import { OsPicker, type OsId } from "@/components/os-picker";
 
@@ -53,6 +54,7 @@ export default function EnrollPage() {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [touched, setTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [result, setResult] = useState<TokenCreateResponse | null>(null);
   const [resultOs, setResultOs] = useState<OsId>("windows");
 
@@ -72,10 +74,14 @@ export default function EnrollPage() {
     void loadInfo();
   }, [loadInfo]);
 
+  const emailError = validateEmail(email);
+  const phoneError = validatePhoneVN(phone);
   const claim = async (e: FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
     setFormError(null);
+    setTouched({ email: true, phone: true });
+    if (emailError || phoneError) return;
+    setSubmitting(true);
     try {
       const res = await api.post<TokenCreateResponse>(`/self-service/${code}/claim`, {
         full_name: fullName,
@@ -198,18 +204,29 @@ export default function EnrollPage() {
                 <Field label="Họ tên" required>
                   <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nguyễn Văn A" required />
                 </Field>
-                <Field label="Phòng ban">
-                  <Input value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="Kế toán" />
-                </Field>
-                <Field label="Chức vụ">
-                  <Input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Chuyên viên" />
-                </Field>
-                <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa khi lưu, mặc định mask">
-                  <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0983…" />
+                <Field
+                  label="Số điện thoại (tùy chọn)"
+                  hint={touched.phone && !phoneError ? "Mã hóa khi lưu, mặc định mask" : undefined}
+                  error={touched.phone ? phoneError : undefined}
+                >
+                  <PhoneInput
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
+                    placeholder="0983…"
+                  />
                 </Field>
               </div>
-              <Field label="Email">
-                <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="a@example.gov.vn" />
+              <Field
+                label="Email"
+                error={touched.email ? emailError : undefined}
+              >
+                <EmailInput
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  onBlur={() => setTouched((t) => ({ ...t, email: true }))}
+                  placeholder="a@example.gov.vn"
+                />
               </Field>
               <Field label="Ghi chú">
                 <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Vị trí đặt máy…" />

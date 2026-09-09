@@ -30,6 +30,7 @@ import {
   Modal,
   PageHeader,
   Select,
+  Textarea,
 } from "@/components/ui";
 import { useAuth } from "@/components/auth-context";
 import { useNotifications, SEVERITY_BADGES } from "@/components/notification-bell";
@@ -433,12 +434,11 @@ export default function NotificationsAlertsPage() {
             label="Nội dung"
             hint="Hiển thị trong dropdown chuông thông báo và trang này."
           >
-            <textarea
+            <Textarea
               rows={3}
               value={notifBody}
               onChange={(e) => setNotifBody(e.target.value)}
               placeholder="Chi tiết thông báo…"
-              className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm transition-colors placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/30"
             />
           </Field>
 
