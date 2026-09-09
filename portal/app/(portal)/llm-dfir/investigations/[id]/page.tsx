@@ -26,13 +26,12 @@ import {
 } from "@/components/ui";
 import type {
   DfirInvestigation,
-  DfirInvestigationMessage,
   InvestigationSeverity,
   InvestigationStatus,
 } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
 import { InvestigationMarkdown } from "@/components/investigation-markdown";
-import { InvestigationChatPanel } from "@/components/investigation-chat-panel";
+import { InvestigationFindings } from "@/components/investigation-findings";
 
 /* Badge pill tinted theo Design.md — màu đã remap trong globals.css */
 const STATUS_META: Record<InvestigationStatus, { label: string; badge: string; icon: any }> = {
@@ -63,7 +62,6 @@ export default function InvestigationDetailPage({
   // Lưu URL trang trước (từ máy hoặc từ stats/list) để "Quay lại" thông minh
   const fromPath = searchParams.get("from");
   const [inv, setInv] = useState<DfirInvestigation | null>(null);
-  const [messages, setMessages] = useState<DfirInvestigationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -74,12 +72,6 @@ export default function InvestigationDetailPage({
       const data = await api.get<DfirInvestigation>(`/admin/llm-dfir/investigations/${id}`);
       setInv(data);
       setNotFound(false);
-      if (data.status === "completed" || data.status === "failed") {
-        const msgs = await api.get<DfirInvestigationMessage[]>(
-          `/admin/llm-dfir/investigations/${id}/messages`,
-        );
-        setMessages(msgs);
-      }
       setError(null);
     } catch (e: any) {
       // 404: investigation không tồn tại — hiển thị trang not-found thay vì error
@@ -104,42 +96,6 @@ export default function InvestigationDetailPage({
     const t = setInterval(() => void load(), 5000);
     return () => clearInterval(t);
   }, [inv, load]);
-
-  /** Gửi chat qua panel — parent chịu trách nhiệm optimistic add + endpoint.
-   *  Panel giữ `chatInput`/`chatting` local; panel đã clear input trước khi gọi
-   *  callback nên ta chỉ push 2 message tạm vào state messages. */
-  const sendChat = async (msg: string) => {
-    if (!msg || !inv) return;
-    // Optimistic add user message
-    setMessages((m) => [
-      ...m,
-      {
-        id: `tmp-${Date.now()}`,
-        role: "user",
-        content: msg,
-        tokens: null,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    try {
-      const res = await api.post<{ response: string; model: string }>(
-        `/admin/llm-dfir/investigations/${id}/chat`,
-        { message: msg },
-      );
-      setMessages((m) => [
-        ...m,
-        {
-          id: `tmp-${Date.now()}-r`,
-          role: "assistant",
-          content: res.response,
-          tokens: null,
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Chat lỗi");
-    }
-  };
 
   const onDelete = async () => {
     setDeleting(true);
@@ -300,8 +256,55 @@ export default function InvestigationDetailPage({
           )}
         </div>
       </Card>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="Báo cáo" bodyClass="flex flex-col min-h-0" className="min-h-[400px] max-h-[600px] flex flex-col">
+      {inv.findings && inv.findings.length > 0 ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card
+            title="Báo cáo"
+            className="lg:col-span-2"
+            bodyClass="flex flex-col min-h-0"
+          >
+            <div className="lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:pr-2">
+              {inv.status === "pending" && (
+                <p className="text-sm text-slate-500">⏳ Đang chờ trong hàng đợi FIFO…</p>
+              )}
+              {inv.status === "running" && (
+                <p className="text-sm text-blue-700">🔄 Đang gọi Velociraptor thu thập dữ liệu…</p>
+              )}
+              {inv.status === "collecting" && (
+                <p className="text-sm text-sky-700">📥 Đang thu thập dữ liệu từ endpoint…</p>
+              )}
+              {inv.status === "analyzing" && (
+                <div className="flex items-center gap-2 text-sm text-violet-700">
+                  <Loader2 className="size-4 animate-spin" />
+                  AI đang phân tích log (có thể mất 30-60 giây)…
+                </div>
+              )}
+              {inv.status === "failed" && (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-rose-700">❌ Điều tra thất bại</div>
+                  {inv.error && (
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-rose-200 bg-rose-50 p-3 font-mono text-xs leading-relaxed text-rose-700">
+                      {inv.error}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {inv.status === "completed" && inv.report_markdown && (
+                <InvestigationMarkdown content={inv.report_markdown} />
+              )}
+            </div>
+          </Card>
+          <Card
+            title={`Phát hiện (${inv.findings.length})`}
+            subtitle="Đối chiếu chính sách doanh nghiệp trước khi hành động."
+            className="lg:sticky lg:top-6 lg:self-start"
+            bodyClass="lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:pr-2"
+          >
+            <InvestigationFindings findings={inv.findings as any} />
+          </Card>
+        </div>
+      ) : (
+        <Card title="Báo cáo">
           {inv.status === "pending" && (
             <p className="text-sm text-slate-500">⏳ Đang chờ trong hàng đợi FIFO…</p>
           )}
@@ -328,26 +331,16 @@ export default function InvestigationDetailPage({
             </div>
           )}
           {inv.status === "completed" && inv.report_markdown && (
-            <div className="flex-1 overflow-y-auto rounded-md border border-slate-200 p-3">
-              <InvestigationMarkdown content={inv.report_markdown} />
-            </div>
+            <InvestigationMarkdown content={inv.report_markdown} />
           )}
         </Card>
-
-        {/* Chat panel — input state local trong component con */}
-        <InvestigationChatPanel
-          investigationId={id}
-          status={inv.status}
-          messages={messages}
-          onSend={sendChat}
-        />
-      </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         title="Xoá cuộc điều tra?"
-        message="Báo cáo và toàn bộ lịch sử chat sẽ bị xoá vĩnh viễn. Không thể hoàn tác."
+        message="Báo cáo điều tra sẽ bị xoá vĩnh viễn. Không thể hoàn tác."
         confirmLabel="Xoá"
         danger
         loading={deleting}

@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Loader2, X } from "lucide-react";
+import { normalizePhoneVN } from "@/lib/validators";
 
 /* ── Badge ─────────────────────────────────────────────────── */
 
@@ -309,23 +310,60 @@ export function Field({
   label,
   required,
   hint,
+  error,
   children,
   className = "",
 }: {
   label: string;
   required?: boolean;
   hint?: string;
+  /** Inline error message — render đỏ phía dưới input, đồng thời set
+   *  `aria-invalid` + `aria-describedby` cho input con. */
+  error?: string;
   children: ReactNode;
   className?: string;
 }) {
+  const hintId = useId();
+  const errorId = useId();
+  // Gắn aria-* cho ReactElement con (Input/PhoneInput/EmailInput/Textarea).
+  // Bỏ qua nếu children là string/array/fragment — aria sẽ thiếu ở multi-child.
+  const describedBy = [hint ? hintId : null, error ? errorId : null]
+    .filter(Boolean)
+    .join(" ") || undefined;
+  const childWithA11y =
+    typeof children === "object" && children !== null && "props" in children && !Array.isArray(children)
+      ? (() => {
+          const child = children as React.ReactElement<{
+            "aria-invalid"?: boolean;
+            "aria-describedby"?: string;
+          }>;
+          return (
+            <child.type
+              {...(child.props as object)}
+              key="field-child"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={describedBy}
+            />
+          );
+        })()
+      : children;
   return (
     <label className={`block ${className}`}>
       <span className="mb-1.5 flex items-center gap-1 text-[13px] font-medium text-slate-700">
         {label}
         {required && <span className="text-rose-500">*</span>}
       </span>
-      {children}
-      {hint && <span className="mt-1 block text-xs leading-snug text-slate-400">{hint}</span>}
+      {childWithA11y}
+      {hint && !error && (
+        <span id={hintId} className="mt-1 block text-xs leading-snug text-slate-400">
+          {hint}
+        </span>
+      )}
+      {error && (
+        <span id={errorId} className="mt-1 block text-xs font-medium text-rose-600">
+          {error}
+        </span>
+      )}
     </label>
   );
 }
@@ -333,12 +371,95 @@ export function Field({
 /* text-input: bo tròn xs 4px — cố ý khác hẳn pill CTA (Design.md §Inputs).
    KHÔNG kèm h-* ở đây — Input/Select thêm `h-9.5` cố định 38px; Textarea
    giữ auto-height để `rows` quyết định chiều cao tự nhiên. */
+/* State invalid: viền đỏ + ring đỏ nhạt — Tailwind v4 dùng aria-invalid selector. */
 const CONTROL_CLASS =
-  "w-full rounded-xs border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 transition-shadow focus:border-brand-600 focus:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600/15 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
+  "w-full rounded-xs border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 transition-shadow focus:border-brand-600 focus:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-600/15 aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:border-rose-500 aria-[invalid=true]:focus:ring-rose-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400";
 const INPUT_FIXED_H = "h-9.5";  // height cố định cho Input 1 dòng (Design.md text-input)
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${CONTROL_CLASS} ${INPUT_FIXED_H} ${props.className ?? ""}`} />;
+}
+
+/* ── PhoneInput — input chuyên cho SĐT VN ────────────────────
+   - type="tel" + inputMode="tel" để mobile bàn phím số.
+   - maxLength 20 (khớp server Field max_length).
+   - Khi blur, tự chuẩn hoá về dạng "0XXXXXXXXX" (10 số) nếu user nhập
+     "84…" hoặc có dấu chấm/gạch/khoảng trắng. Không validate ở đây —
+     để cha truyền `error` qua Field hoặc tự dùng validatePhoneVN(). */
+export function PhoneInput({
+  onBlur,
+  onChange,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "onBlur" | "onChange"> & {
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <input
+      {...props}
+      type="tel"
+      inputMode="tel"
+      autoComplete="tel"
+      maxLength={props.maxLength ?? 20}
+      onChange={(e) => {
+        // Chỉ cho phép chữ số, space, +, -, ., (, ).
+        // User nhập "+84" / "0983.123.456" → giữ nguyên để Field báo lỗi
+        // nếu cần; blur sẽ normalize.
+        const cleaned = e.target.value.replace(/[^\d+\-.\s()]/g, "");
+        if (cleaned !== e.target.value) {
+          e.target.value = cleaned;
+        }
+        onChange?.(e);
+      }}
+      onBlur={(e) => {
+        const normalized = normalizePhoneVN(e.target.value);
+        if (normalized && normalized !== e.target.value) {
+          // Tạo event giả với value đã chuẩn hoá để state cha cập nhật.
+          e.target.value = normalized;
+          onChange?.({
+            ...e,
+            target: { ...e.target, value: normalized },
+          } as React.ChangeEvent<HTMLInputElement>);
+        }
+        onBlur?.(e);
+      }}
+      className={`${CONTROL_CLASS} ${INPUT_FIXED_H} ${props.className ?? ""}`}
+    />
+  );
+}
+
+/* ── EmailInput — input chuyên cho email ─────────────────────
+   - type="email" + inputMode="email" + autoComplete="email".
+   - Trim khoảng trắng ở onBlur trước khi báo cáo lên cha. */
+export function EmailInput({
+  onBlur,
+  onChange,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, "type" | "onBlur" | "onChange"> & {
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <input
+      {...props}
+      type="email"
+      inputMode="email"
+      autoComplete="email"
+      onBlur={(e) => {
+        const trimmed = e.target.value.trim();
+        if (trimmed && trimmed !== e.target.value) {
+          e.target.value = trimmed;
+          onChange?.({
+            ...e,
+            target: { ...e.target, value: trimmed },
+          } as React.ChangeEvent<HTMLInputElement>);
+        }
+        onBlur?.(e);
+      }}
+      onChange={onChange}
+      className={`${CONTROL_CLASS} ${INPUT_FIXED_H} ${props.className ?? ""}`}
+    />
+  );
 }
 
 /* Select — thả xuống đồng bộ design (Design.md §Inputs): bo xs 4px, chevron
