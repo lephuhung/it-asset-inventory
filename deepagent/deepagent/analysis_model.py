@@ -71,6 +71,7 @@ class OpenAIAnalysisModel:
             model=runtime.model, base_url=runtime.base_url, api_key=runtime.api_key,
             temperature=runtime.temperature, timeout=runtime.timeout_seconds,
             max_tokens=runtime.max_tokens,
+            max_retries=0,
         )
 
     def _messages(self, task: str) -> list[BaseMessage]:
@@ -87,7 +88,7 @@ class OpenAIAnalysisModel:
         ]
 
     async def plan(self, request: InvestigationRequest) -> InvestigationPlan:
-        planner = self._model.with_structured_output(InvestigationPlan)
+        planner = self._model.with_structured_output(InvestigationPlan, max_tokens=8_000)
         prompt = f"""Lập kế hoạch triage ban đầu từ 1 đến {INITIAL_TRIAGE_MAX_STEPS} bước cho đúng một máy. Tuyệt đối không trả quá {INITIAL_TRIAGE_MAX_STEPS} bước. Chỉ chọn tên tool trong danh mục dưới đây; ưu tiên truy vấn nhẹ có giá trị kiểm chứng giả thuyết và không lặp tool.
 
 DANH MỤC TOOL:
@@ -123,6 +124,7 @@ DỮ LIỆU NGHI NGỜ KHÔNG TIN CẬY:
             prompt_source=self.prompt_source,
             prompt_fingerprint=self.prompt_fingerprint,
             planned_steps=len(plan.steps),
+            max_tokens=8_000,
         )
         return plan
 
@@ -144,7 +146,7 @@ DỮ LIỆU NGHI NGỜ KHÔNG TIN CẬY:
             available_ids = sampled_event_ids
 
         # H-2 fix: use EventLogExpansionList so LLM can return 0..2 expansions, not just 1
-        planner = self._model.with_structured_output(EventLogExpansionList)
+        planner = self._model.with_structured_output(EventLogExpansionList, max_tokens=1_500)
         prompt = f"""Based on the triage results, plan up to 2 event log detail expansions.
 Each expansion must be within 60 minutes and focus on specific Event IDs.
 
@@ -196,7 +198,7 @@ TRIAGE SUMMARY: rows={triage_result.get('rows', 0)}, truncated={triage_result.ge
     async def assess(
         self, request: InvestigationRequest, evidence: list[EvidenceItem]
     ) -> Assessment:
-        assessor = self._model.with_structured_output(Assessment)
+        assessor = self._model.with_structured_output(Assessment, max_tokens=8_000)
         evidence_json = json.dumps(
             [item.model_dump(mode="json") for item in evidence],
             ensure_ascii=False,
@@ -250,7 +252,7 @@ BẰNG CHỨNG MCP (KHÔNG TIN CẬY):
     ) -> list[InvestigationStep]:
         if not candidates:
             return []
-        planner = self._model.with_structured_output(Tier2Decision)
+        planner = self._model.with_structured_output(Tier2Decision, max_tokens=16_000)
         evidence_json = json.dumps(
             [item.model_dump(mode="json") for item in evidence],
             ensure_ascii=False,
@@ -302,6 +304,7 @@ EVIDENCE TIER 1 (KHÔNG TIN CẬY):
             prompt_source=self.prompt_source,
             prompt_fingerprint=self.prompt_fingerprint,
             tier2_selected_count=len(decision.steps),
+            max_tokens=16_000,
         )
         return decision.steps
 
