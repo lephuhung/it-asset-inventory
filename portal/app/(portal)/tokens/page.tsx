@@ -20,6 +20,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import type {
   BulkTokenItem,
   BulkTokenResponse,
@@ -34,26 +35,29 @@ import { useAuth } from "@/components/auth-context";
 import { DeleteButton } from "@/components/delete-button";
 import { OsPicker, type OsId } from "@/components/os-picker";
 import {
+  Badge,
   Button,
   Card,
   ConfirmDialog,
   CopyButton,
+  EmailInput,
   EmptyState,
   ErrorBanner,
   Field,
   IconButton,
   Input,
   Modal,
-  Badge,
   PageHeader,
   Pagination,
   PageResponse,
+  PhoneInput,
   Select,
   Spinner,
   StatusBadge,
   TABLE,
   TABLE_WRAP,
   TD,
+  Textarea,
   TH,
   THEAD,
   TR_HOVER,
@@ -110,6 +114,7 @@ export default function TokensPage() {
   const [ttl, setTtl] = useState(72);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [touched, setTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [submitted, setSubmitted] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
@@ -183,9 +188,13 @@ export default function TokensPage() {
     setNote("");
     setTtl(72);
     setFormError(null);
+    setTouched({});
     setSubmitted(false);
     setShowCreate(true);
   };
+  const emailError = validateEmail(email);
+  const phoneError = validatePhoneVN(phone);
+
 
   const loadTokens = useCallback(async (silent = false, overrideOffset?: number): Promise<TokenListItem[]> => {
     const useOffset = overrideOffset ?? offset;
@@ -323,11 +332,12 @@ export default function TokensPage() {
       setBulkBusy(false);
     }
   };
-
   const create = async (e: FormEvent) => {
     e.preventDefault();
     setFormError(null);
     setSubmitted(false);
+    setTouched({ email: true, phone: true });
+    if (emailError || phoneError) return;
     setSubmitting(true);
     try {
       const res = await api.post<TokenCreateResponse>("/tokens", {
@@ -731,12 +741,12 @@ export default function TokensPage() {
             )}
           </div>
           <Field label="Dữ liệu (mỗi dòng: Họ tên, Phòng ban, Chức vụ, Email, Điện thoại, Ghi chú)" className="mt-3">
-            <textarea
+            <Textarea
               value={csvText}
               onChange={(e) => setCsvText(e.target.value)}
               rows={6}
               placeholder={"Nguyễn Văn A, Kế toán, Chuyên viên, a@example.gov.vn, 0983…\nTrần Thị B, Nhân sự, Trưởng phòng, b@example.gov.vn"}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-600/15"
+              className="font-mono text-xs"
             />
           </Field>
           {bulkError && <p className="mt-2 text-sm text-rose-600">{bulkError}</p>}
@@ -974,13 +984,30 @@ export default function TokensPage() {
             <Field label="Chức vụ">
               <Input value={position} onChange={(e) => setPosition(e.target.value)} placeholder="Chuyên viên" />
             </Field>
-            <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa AES-256-GCM khi lưu; UI mặc định mask">
-              <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="0983…" />
+            <Field
+              label="Số điện thoại (tùy chọn)"
+              hint={touched.phone && !phoneError ? "Mã hóa AES-256-GCM khi lưu; UI mặc định mask" : undefined}
+              error={touched.phone ? phoneError : undefined}
+            >
+              <PhoneInput
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
+                placeholder="0983…"
+              />
             </Field>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Email">
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="a@example.gov.vn" />
+            <Field
+              label="Email"
+              error={touched.email ? emailError : undefined}
+            >
+              <EmailInput
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, email: true }))}
+                placeholder="a@example.gov.vn"
+              />
             </Field>
             <Field label="Thời hạn token">
               <Select value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>

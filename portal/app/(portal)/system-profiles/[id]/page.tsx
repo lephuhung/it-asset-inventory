@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Plus, Trash2, Building2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import type {
   DeviceType,
   MachineListItem,
@@ -21,17 +22,21 @@ import type {
   SystemProfileContact,
   PartyRole,
   ItContact,
+  Officer,
 } from "@/lib/types";
 import {
   Badge,
   Button,
   Card,
   ConfirmDialog,
+  EmailInput,
+  EmptyState,
   ErrorBanner,
   Field,
   Input,
   Modal,
   PageHeader,
+  PhoneInput,
   Select,
   Spinner,
   TABLE,
@@ -41,7 +46,6 @@ import {
   THEAD,
   TR_HOVER,
   Textarea,
-  EmptyState,
 } from "@/components/ui";
 import { useAuth } from "@/components/auth-context";
 import { MermaidDiagram } from "@/components/mermaid-diagram";
@@ -128,20 +132,62 @@ function StatusStepper({ status }: { status: SystemProfileStatus }) {
       </div>
     );
   }
+  return <StatusStepperTrack status={status} />;
+}
+
+function StatusStepperTrack({ status }: { status: SystemProfileStatus }) {
+  const olRef = useRef<HTMLOListElement | null>(null);
+  const [trackInset, setTrackInset] = useState<{ left: number; right: number } | null>(null);
+  // Measure tâm circle 1 & circle cuối sau khi layout ổn định để track chạy
+  // chính xác từ tâm → tâm, không "thừa" ở 2 đầu.
+  useLayoutEffect(() => {
+    const ol = olRef.current;
+    if (!ol) return;
+    const measure = () => {
+      const lis = Array.from(ol.querySelectorAll<HTMLLIElement>("li > span.rounded-full"));
+      if (lis.length < 2) return;
+      const first = lis[0].getBoundingClientRect();
+      const last = lis[lis.length - 1].getBoundingClientRect();
+      const root = ol.getBoundingClientRect();
+      setTrackInset({
+        // left = tâm circle 1 − mép trái root
+        left: first.left + first.width / 2 - root.left,
+        right: root.right - (last.left + last.width / 2),
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(ol);
+    return () => ro.disconnect();
+  }, []);
   const currentIdx = STATUS_FLOW.findIndex((s) => s.key === status);
   const safeIdx = currentIdx < 0 ? 0 : currentIdx;
+  const total = STATUS_FLOW.length;
   return (
-    <ol className="flex items-start" aria-label="Tiến trình trạng thái hồ sơ">
-      {STATUS_FLOW.map((s, i) => {
-        const isPast = i < safeIdx;
-        const isCurrent = i === safeIdx;
-        return (
-          <li
-            key={s.key}
-            aria-current={isCurrent ? "step" : undefined}
-            className="flex min-w-0 flex-1 flex-col"
-          >
-            <div className="flex items-center">
+    <div aria-label="Tiến trình trạng thái hồ sơ" className="relative pt-3 pb-1">
+      <div
+        className="absolute top-[28px] h-0.5 rounded-full bg-slate-200"
+        style={trackInset ? { left: trackInset.left, right: trackInset.right } : { left: "50%", right: "50%" }}
+        aria-hidden
+      />
+      <div
+        className="absolute top-[28px] h-0.5 rounded-full bg-brand-300 transition-all"
+        style={trackInset ? {
+          left: trackInset.left,
+          width: `calc((100% - ${trackInset.left + trackInset.right}px) * ${safeIdx} / ${total - 1})`,
+        } : { display: "none" }}
+        aria-hidden
+      />
+      <ol ref={olRef} className="relative flex justify-between">
+        {STATUS_FLOW.map((s, i) => {
+          const isPast = i < safeIdx;
+          const isCurrent = i === safeIdx;
+          return (
+            <li
+              key={s.key}
+              aria-current={isCurrent ? "step" : undefined}
+              className="flex flex-col items-center gap-1.5"
+            >
               <span
                 className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ring-2 ring-white ${
                   isCurrent
@@ -153,27 +199,19 @@ function StatusStepper({ status }: { status: SystemProfileStatus }) {
               >
                 {isPast ? "✓" : i + 1}
               </span>
-              {i < STATUS_FLOW.length - 1 && (
-                <span
-                  aria-hidden
-                  className={`mx-1 h-0.5 flex-1 rounded-full ${
-                    isPast ? "bg-brand-300" : "bg-slate-200"
-                  }`}
-                />
-              )}
-            </div>
-            <p
-              title={s.label}
-              className={`mt-1.5 truncate text-[11px] font-medium uppercase tracking-wider ${
-                isCurrent ? "text-brand-700" : isPast ? "text-slate-600" : "text-slate-400"
-              }`}
-            >
-              {s.label}
-            </p>
-          </li>
-        );
-      })}
-    </ol>
+              <span
+                className={`whitespace-nowrap text-[11px] font-medium uppercase tracking-wider ${
+                  isCurrent ? "text-brand-700" : isPast ? "text-slate-600" : "text-slate-400"
+                }`}
+                title={s.label}
+              >
+                {s.label}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -241,16 +279,354 @@ function HeroContactColumn({
   );
 }
 
-/* ── Hero "Tổng quan hồ sơ" — hiển thị cứng phía trên hàng tab ──
+/* ── Cán bộ phụ trách (đầu mối SuperAdmin) — ô hero ở hàng 4 ──
+   Cán bộ đại diện tổ chức bên ngoài hệ thống, Super Admin chỉ định.
+   Không gắn vào org; 1 hồ sơ - 1 cán bộ. */
+function OfficerRow({
+  profile,
+  onSaved,
+}: {
+  profile: SystemProfileDetail;
+  onSaved: () => Promise<void>;
+}) {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin_global";
+  const officer = profile.officer;
+
+  // Lấy chữ cái đầu của tên cán bộ để làm avatar fallback.
+  // VD: "Nguyễn Văn Test" → "NV"; bỏ dấu tiếng Việt để render đẹp hơn.
+  const initials = officer
+    ? officer.name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((w) => w[0]!.toUpperCase())
+        .join("")
+    : "";
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-amber-200 bg-gradient-to-br from-amber-50/80 via-orange-50/60 to-rose-50/70 shadow-sm">
+      <div className="grid gap-px bg-amber-200/40 sm:grid-cols-[1fr_auto]">
+        <div className="bg-gradient-to-br from-amber-50/60 via-orange-50/40 to-rose-50/50 p-4">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-amber-700">
+            <span aria-hidden>🧑‍💼</span>
+            <span>Cán bộ phụ trách</span>
+            <span className="ml-1 rounded-full bg-amber-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-sm">
+              Đầu mối SuperAdmin
+            </span>
+          </p>
+
+          {officer ? (
+            <div className="mt-2 flex items-start gap-3">
+              <div
+                className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-500 to-rose-500 text-sm font-bold text-white shadow-sm"
+                aria-hidden
+              >
+                {initials}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-slate-900">{officer.name}</p>
+                  {officer.title && (
+                    <span className="inline-flex items-center rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+                      {officer.title}
+                    </span>
+                  )}
+                </div>
+                {officer.organization && (
+                  <p className="mt-0.5 truncate text-xs font-medium text-rose-700" title={officer.organization}>
+                    🏢 {officer.organization}
+                  </p>
+                )}
+
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {officer.phone && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-white/80 px-2 py-0.5 text-xs text-slate-700 ring-1 ring-amber-200/80">
+                      <span aria-hidden>📞</span>
+                      <span className="font-mono">{officer.phone}</span>
+                    </span>
+                  )}
+                  {officer.email && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-white/80 px-2 py-0.5 text-xs text-slate-700 ring-1 ring-amber-200/80">
+                      <span aria-hidden>✉️</span>
+                      <span>{officer.email}</span>
+                    </span>
+                  )}
+                  {officer.note && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-0.5 text-xs italic text-rose-700 ring-1 ring-rose-200">
+                      <span aria-hidden>📝</span>
+                      <span className="line-clamp-1 max-w-[280px]">{officer.note}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-3 rounded-md border border-dashed border-amber-300 bg-white/50 px-3 py-2">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-base text-amber-500">
+                ?
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-amber-900">
+                  Chưa có cán bộ phụ trách
+                </p>
+                <p className="mt-0.5 text-xs text-amber-700">
+                  {isSuperAdmin
+                    ? "Bấm \"Chỉ định\" để chọn từ danh sách toàn cục hoặc tạo cán bộ mới."
+                    : "Đang chờ Super Admin chỉ định."}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        {isSuperAdmin && (
+          <div className="flex items-center justify-end gap-2 bg-gradient-to-br from-amber-50/60 via-orange-50/40 to-rose-50/50 p-4">
+            <OfficerEditor profile={profile} onSaved={onSaved} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Officer editor — Super Admin chỉ định cán bộ từ danh sách toàn cục ──
+   1 cán bộ có thể phụ trách nhiều hồ sơ; chọn từ dropdown + tạo mới inline. */
+
+function OfficerEditor({
+  profile,
+  onSaved,
+}: {
+  profile: SystemProfileDetail;
+  onSaved: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [pickId, setPickId] = useState("");
+  // Tạo mới inline
+  const [creating, setCreating] = useState(false);
+  const [cName, setCName] = useState("");
+  const [cOrg, setCOrg] = useState("");
+  const [cTitle, setCTitle] = useState("");
+  const [cPhone, setCPhone] = useState("");
+  const [cEmail, setCEmail] = useState("");
+  const [cNote, setCNote] = useState("");
+
+  const hasOfficer = profile.officer !== null;
+
+  const loadOfficers = useCallback(async () => {
+    try {
+      const rows = await api.get<Officer[]>("/officers");
+      setOfficers(rows);
+    } catch {
+      setOfficers([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) void loadOfficers();
+  }, [open, loadOfficers]);
+
+  const reset = () => {
+    setPickId(profile.officer?.id ?? "");
+    setCreating(false);
+    setError(null);
+  };
+
+  const assign = async (officerId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.put(`/system-profiles/${profile.id}/officer`, { officer_id: officerId });
+      setOpen(false);
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Không chỉ định được cán bộ");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createAndAssign = async () => {
+    if (!cName.trim()) {
+      setError("Nhập họ tên cán bộ");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.post<Officer>("/officers", {
+        name: cName.trim(),
+        organization: cOrg.trim() || null,
+        title: cTitle.trim() || null,
+        phone: cPhone.trim() || null,
+        email: cEmail.trim() || null,
+        note: cNote.trim() || null,
+      });
+      await assign(created.id);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Không tạo được cán bộ");
+      setBusy(false);
+    }
+  };
+
+  const clear = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.delete(`/system-profiles/${profile.id}/officer`);
+      setConfirmClear(false);
+      await onSaved();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : "Không gỡ được cán bộ phụ trách");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex gap-2">
+        <Button size="sm" variant="secondary" onClick={() => { reset(); setOpen(true); }}>
+          {hasOfficer ? "Đổi" : "Chỉ định"}
+        </Button>
+        {hasOfficer && (
+          <Button size="sm" variant="danger" onClick={() => setConfirmClear(true)}>
+            Gỡ
+          </Button>
+        )}
+      </div>
+
+      <Modal
+        open={open}
+        onClose={() => !busy && setOpen(false)}
+        title="Chỉ định cán bộ phụ trách"
+        footer={
+          creating ? (
+            <>
+              <Button variant="secondary" onClick={() => setCreating(false)} disabled={busy}>← Quay lại</Button>
+              <Button onClick={() => void createAndAssign()} loading={busy}>Tạo & chỉ định</Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => setOpen(false)} disabled={busy}>Hủy</Button>
+              <Button
+                onClick={() => void assign(pickId)}
+                loading={busy}
+                disabled={!pickId}
+              >
+                Chỉ định
+              </Button>
+            </>
+          )
+        }
+      >
+        <div className="space-y-3">
+          {error && <ErrorBanner message={error} />}
+          {creating ? (
+            <>
+              <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200">
+                Tạo cán bộ mới trong danh sách toàn cục. Sau khi tạo sẽ tự động gán cho hồ sơ này.
+              </p>
+              <Field label="Họ tên cán bộ" required>
+                <Input value={cName} onChange={(e) => setCName(e.target.value)} placeholder="Nguyễn Văn A" />
+              </Field>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Tổ chức">
+                  <Input value={cOrg} onChange={(e) => setCOrg(e.target.value)} placeholder="Sở TT&TT, Công ty ABC…" />
+                </Field>
+                <Field label="Chức vụ">
+                  <Input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="Phó giám đốc…" />
+                </Field>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Điện thoại">
+                  <PhoneInput value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="0912345678" />
+                </Field>
+                <Field label="Email">
+                  <EmailInput value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="ten@donvi.vn" />
+                </Field>
+              </div>
+              <Field label="Ghi chú">
+                <Textarea value={cNote} onChange={(e) => setCNote(e.target.value)} rows={2} />
+              </Field>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-slate-500">
+                Chọn 1 cán bộ từ danh sách toàn cục. 1 cán bộ có thể phụ trách nhiều hồ sơ.
+              </p>
+              <Select
+                value={pickId}
+                onChange={(e) => setPickId(e.target.value)}
+              >
+                <option value="">— chọn cán bộ —</option>
+                {officers
+                  .filter((o) => !profile.officer || o.id !== profile.officer.id)
+                  .map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {`${o.name}${o.organization ? ` — ${o.organization}` : ""}${o.profile_count > 0 ? ` (đang phụ trách ${o.profile_count})` : ""}`}
+                    </option>
+                  ))}
+                {profile.officer && (
+                  <option value={profile.officer.id}>
+                    {`${profile.officer.name} (hiện tại)${profile.officer.organization ? ` — ${profile.officer.organization}` : ""}`}
+                  </option>
+                )}
+              </Select>
+              <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-xs text-slate-500">
+                <span>Chưa có cán bộ phù hợp?</span>
+                <button
+                  type="button"
+                  className="text-brand-600 hover:underline focus-visible:outline-none"
+                  onClick={() => setCreating(true)}
+                >
+                  Tạo cán bộ mới
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Quản lý toàn bộ danh sách ở{" "}
+                <Link href="/admin/officers" className="hover:underline">Cán bộ phụ trách</Link>.
+              </p>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmClear}
+        title="Gỡ cán bộ phụ trách?"
+        message={
+          profile.officer
+            ? `Gỡ cán bộ "${profile.officer.name}" khỏi hồ sơ. Cán bộ vẫn còn trong danh sách toàn cục.`
+            : "Gỡ cán bộ phụ trách khỏi hồ sơ."
+        }
+        danger
+        loading={busy}
+        onClose={() => setConfirmClear(false)}
+        onConfirm={() => void clear()}
+      />
+    </>
+  );
+}
+
+ /* ── Hero "Tổng quan hồ sơ" — hiển thị cứng phía trên hàng tab ──
    Tóm tắt các trường cốt lõi từ tab Thông tin + danh sách Chuyên trách/tổ chức.
    Trường rỗng hiển thị "Chưa nhập" / "Chưa có quyết định" / "Chưa gắn …". */
 
 function ProfileOverview({
   profile,
   onJumpToContacts,
+  onSaved,
 }: {
   profile: SystemProfileDetail;
   onJumpToContacts: () => void;
+  onSaved: () => Promise<void>;
 }) {
   /** Fallback cho text ngắn rỗng — giữ nhất quán pattern "Chưa nhập". */
   const v = (val: string | number | null | undefined): string =>
@@ -387,9 +763,11 @@ function ProfileOverview({
           onSeeAll={onJumpToContacts}
         />
       </div>
-    </Card>
-  );
-}
+
+      <OfficerRow profile={profile} onSaved={onSaved} />
+     </Card>
+   );
+ }
 
 export default function SystemProfileDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -455,6 +833,7 @@ export default function SystemProfileDetailPage() {
   const [pAddress, setPAddress] = useState("");
   const [pPhone, setPPhone] = useState("");
   const [pEmail, setPEmail] = useState("");
+  const [pTouched, setPTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [scopeModal, setScopeModal] = useState(false);
   const [scLocation, setScLocation] = useState("");
   const [scAccounts, setScAccounts] = useState("");
@@ -594,12 +973,16 @@ export default function SystemProfileDetailPage() {
   };
 
   // ── Dossier helpers ──
+  const pEmailError = validateEmail(pEmail);
+  const pPhoneError = validatePhoneVN(pPhone);
   const resetPartyForm = (role: PartyRole) => {
     setPRole(role); setPName(""); setPDoc(""); setPRep(""); setPTitle(""); setPAddress(""); setPPhone(""); setPEmail("");
+    setPTouched({});
   };
   const openPartyEdit = (x: SystemProfileParty) => {
     setPRole(x.role); setPName(x.name); setPDoc(x.mandate_document ?? ""); setPRep(x.legal_representative ?? "");
     setPTitle(x.representative_title ?? ""); setPAddress(x.address ?? ""); setPPhone(x.phone ?? ""); setPEmail(x.email ?? "");
+    setPTouched({});
   };
   const partyPayload = () => ({
     role: pRole,
@@ -711,7 +1094,7 @@ export default function SystemProfileDetailPage() {
 
       {actionError && <ErrorBanner message={actionError} />}
 
-      <ProfileOverview profile={profile} onJumpToContacts={() => setTab("contacts")} />
+      <ProfileOverview profile={profile} onJumpToContacts={() => setTab("contacts")} onSaved={load} />
 
       <div className="mb-4 flex gap-1 border-b border-slate-200">
         {tabs.map((t) => (
@@ -1106,15 +1489,14 @@ export default function SystemProfileDetailPage() {
                         <div className="font-medium">{r.title}</div>
                         {r.description && <div className="text-xs text-slate-500">{r.description}</div>}
                       </td>
-                      <td>
-                        <div className="flex flex-col gap-1">
+                      <td className={TD}>
+                        <div className="flex flex-col items-start gap-1">
                           <ReqStatusBadge status={r.status} />
-                          {r.review_note && <span className="text-xs text-rose-600">{r.review_note}</span>}
                         </div>
                       </td>
                       <td className={`${TD} max-w-xs text-sm`}>{r.evidence ?? <span className="text-slate-400">—</span>}</td>
                       <td className={`${TD} max-w-xs text-sm`}>{r.review_note && r.status === "verified" ? r.review_note : "—"}</td>
-                      <td>
+                      <td className={TD}>
                         <div className="flex gap-1">
                           {isAdmin && (r.status === "pending" || r.status === "rejected") && (
                             <Button
@@ -1444,6 +1826,8 @@ export default function SystemProfileDetailPage() {
               loading={busy}
               onClick={() => {
                 if (!pName.trim()) { setActionError("Nhập tên đơn vị"); return; }
+                setPTouched({ email: true, phone: true });
+                if (pEmailError || pPhoneError) return;
                 const payload = partyPayload();
                 setPartyModal(null);
                 void act(() =>
@@ -1464,9 +1848,26 @@ export default function SystemProfileDetailPage() {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Người đại diện pháp luật"><Input value={pRep} onChange={(e) => setPRep(e.target.value)} /></Field>
             <Field label="Chức vụ"><Input value={pTitle} onChange={(e) => setPTitle(e.target.value)} /></Field>
-            <Field label="Địa chỉ" required={false}><Input value={pAddress} onChange={(e) => setPAddress(e.target.value)} /></Field>
-            <Field label="Số điện thoại"><Input value={pPhone} onChange={(e) => setPPhone(e.target.value)} /></Field>
-            <Field label="Email"><Input value={pEmail} onChange={(e) => setPEmail(e.target.value)} /></Field>
+            <Field
+              label="Số điện thoại"
+              error={pTouched.phone ? pPhoneError : undefined}
+            >
+              <PhoneInput
+                value={pPhone}
+                onChange={(e) => setPPhone(e.target.value)}
+                onBlur={() => setPTouched((t) => ({ ...t, phone: true }))}
+              />
+            </Field>
+            <Field
+              label="Email"
+              error={pTouched.email ? pEmailError : undefined}
+            >
+              <EmailInput
+                value={pEmail}
+                onChange={(e) => setPEmail(e.target.value)}
+                onBlur={() => setPTouched((t) => ({ ...t, email: true }))}
+              />
+            </Field>
           </div>
         </div>
       </Modal>

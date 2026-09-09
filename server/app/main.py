@@ -39,8 +39,9 @@ from app.api.routes import (
     offline_import,
     orgs,
     renew,
-    reports,
     self_service,
+    officers,
+    reports,
     stats,
     system_profiles,
     tags,
@@ -70,15 +71,13 @@ def _configure_logging() -> None:
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
         )
-        root.addHandler(handler)
-    root.setLevel(logging.DEBUG if settings.debug else logging.INFO)
-    _LOGGING_CONFIGURED = True
-
+    root.addHandler(handler)
 
 limiter = Limiter(key_func=get_remote_address)
 
 
 @asynccontextmanager
+
 async def lifespan(app: FastAPI):
     _configure_logging()
 
@@ -169,6 +168,7 @@ app.include_router(system_profiles.catalog_router)
 app.include_router(device_types.router)
 app.include_router(it_contacts.router)
 app.include_router(orgs.router)
+app.include_router(officers.router)
 app.include_router(alert_rules.router)
 app.include_router(self_service.router)
 app.include_router(drifts.router)

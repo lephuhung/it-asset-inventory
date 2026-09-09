@@ -218,7 +218,7 @@ export default function SystemProfilesPage() {
                   <td className={`${TD} text-sm`}>{p.org_name ?? p.org_id}</td>
                   <td className={TD}><LevelBadge level={p.level} /></td>
                   <td className={TD}>
-                    <div className="flex flex-col gap-1">
+                    <div className="flex flex-col items-start gap-1">
                       <StatusBadge status={p.status} />
                       {p.status === "rejected" && p.review_note && (
                         <span className="text-xs text-rose-600">{p.review_note}</span>

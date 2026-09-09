@@ -36,6 +36,7 @@ from app.db.models import (
     ItContact,
     LevelRequirement,
     Machine,
+    Officer,
     Organization,
     ServiceAudience,
     ProfileRequirementStatus,
@@ -69,13 +70,15 @@ from app.schemas import (
     SystemProfileConfirmImplementation,
     SystemProfileCreate,
     SystemProfileDeviceIn,
-    SystemProfileDeviceOut,
+    OfficerOut,
     SystemProfileContactOut,
+    SystemProfileDeviceOut,
+    SystemProfileReportImplementation,
     SystemProfileDetailOut,
     SystemProfileEventOut,
     SystemProfileMachineOut,
     SystemProfileOut,
-    SystemProfileReportImplementation,
+    SystemProfileAssignOfficerIn,
     SystemProfileReview,
     SystemProfileStats,
     SystemProfileUpdate,
@@ -110,14 +113,11 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
             select(SystemProfile)
             .options(
                 selectinload(SystemProfile.devices),
-                selectinload(SystemProfile.machines).selectinload(SystemProfileMachine.machine),
-                selectinload(SystemProfile.requirements).selectinload(SystemProfileRequirement.requirement),
-                selectinload(SystemProfile.parties),
-                selectinload(SystemProfile.applications).selectinload(SystemProfileApplication.machine),
                 selectinload(SystemProfile.ip_ranges),
                 selectinload(SystemProfile.contacts).selectinload(SystemProfileContact.contact),
                 selectinload(SystemProfile.events),
-            )
+                selectinload(SystemProfile.officer),
+             )
             .where(SystemProfile.id == profile_id)
             # populate_existing: nạp lại collections (session dùng
             # expire_on_commit=False nên object cũ giữ collection stale)
@@ -129,6 +129,14 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
     if not is_super_admin(user) and str(profile.org_id) not in await visible_org_ids(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Hồ sơ ngoài phạm vi của bạn")
     return profile
+
+def _officer_out(o: Officer) -> OfficerOut:
+    return OfficerOut(
+        id=o.id, name=o.name, organization=o.organization, title=o.title,
+        phone=o.phone, email=o.email, note=o.note,
+        profile_count=0,  # computed lazily; không cần trong profile response
+        created_at=o.created_at, updated_at=o.updated_at,
+    )
 
 
 def _to_out(profile: SystemProfile, org_name: str | None = None) -> SystemProfileOut:
@@ -145,6 +153,8 @@ def _to_out(profile: SystemProfile, org_name: str | None = None) -> SystemProfil
         decision_date=profile.decision_date,
         decision_agency=profile.decision_agency,
         managed_by=profile.managed_by,
+        officer_id=profile.officer_id,
+        officer=_officer_out(profile.officer) if profile.officer is not None else None,
         document_number=profile.document_number,
         document_date=profile.document_date,
         review_note=profile.review_note,
@@ -316,6 +326,7 @@ async def list_profiles(
         selectinload(SystemProfile.devices),
         selectinload(SystemProfile.machines).selectinload(SystemProfileMachine.machine),
         selectinload(SystemProfile.requirements).selectinload(SystemProfileRequirement.requirement),
+        selectinload(SystemProfile.officer),
     )
     count_q = select(func.count()).select_from(SystemProfile)
     if conds:
@@ -900,6 +911,72 @@ async def detach_contact(
     profile = await _get_profile_scoped(db, profile_id, admin)
     return _to_detail(profile, None)
 
+
+@router.put("/{profile_id}/officer", response_model=SystemProfileDetailOut)
+async def assign_officer(
+    profile_id: uuid.UUID,
+    body: SystemProfileAssignOfficerIn,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gán cán bộ phụ trách (từ bảng officers) cho hồ sơ.
+
+    1 hồ sơ - 1 cán bộ; gọi lại để thay thế. Thông tin cán bộ (tên, tổ chức, …)
+    sống ở bảng `officers` — chỉnh sửa 1 chỗ áp dụng cho mọi hồ sơ đang gán.
+    """
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    officer = (
+        await db.execute(select(Officer).where(Officer.id == body.officer_id))
+    ).scalar_one_or_none()
+    if officer is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy cán bộ")
+    was_existing = profile.officer_id is not None
+    previous_id = profile.officer_id
+    profile.officer_id = officer.id
+    verb = "Đổi" if was_existing else "Chỉ định"
+    if was_existing and previous_id == officer.id:
+        verb = "Cập nhật"
+    _log_event(
+        db, profile, "officer_assigned",
+        f"{verb} cán bộ phụ trách: {officer.name}",
+        admin,
+    )
+    await append_audit(
+        db, action="system_profile.officer.assign", actor=str(admin.id),
+        target=f"{profile.id}:{officer.id}", ip=get_client_ip(request),
+    )
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    return _to_detail(profile, None)
+
+
+@router.delete("/{profile_id}/officer", response_model=SystemProfileDetailOut)
+async def unassign_officer(
+    profile_id: uuid.UUID,
+    request: Request,
+    admin: User = Depends(require_super_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Gỡ cán bộ phụ trách khỏi hồ sơ. Bản ghi officer vẫn còn trong bảng officers."""
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    if profile.officer_id is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hồ sơ chưa có cán bộ phụ trách")
+    removed = profile.officer
+    removed_name = removed.name if removed else str(profile.officer_id)
+    profile.officer_id = None
+    _log_event(
+        db, profile, "officer_cleared",
+        f"Gỡ cán bộ phụ trách: {removed_name}",
+        admin,
+    )
+    await append_audit(
+        db, action="system_profile.officer.unassign", actor=str(admin.id),
+        target=str(profile.id), ip=get_client_ip(request),
+    )
+    await db.commit()
+    profile = await _get_profile_scoped(db, profile_id, admin)
+    return _to_detail(profile, None)
 
 # ── Yêu cầu an toàn theo cấp độ: catalog + thẩm định ────────
 

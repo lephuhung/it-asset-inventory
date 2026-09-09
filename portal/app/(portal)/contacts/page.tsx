@@ -12,18 +12,21 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Building2, Plus, User } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import type { ItContact, ItContactKind, ItContactPayload, Organization } from "@/lib/types";
 import {
   Badge,
   Button,
   Card,
   ConfirmDialog,
+  EmailInput,
   EmptyState,
   ErrorBanner,
   Field,
   Input,
   Modal,
   PageHeader,
+  PhoneInput,
   Select,
   Spinner,
   TABLE,
@@ -64,6 +67,7 @@ export default function ItContactsPage() {
   const [cEmail, setCEmail] = useState("");
   const [cAddress, setCAddress] = useState("");
   const [cNote, setCNote] = useState("");
+  const [cTouched, setCTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [confirmDelete, setConfirmDelete] = useState<ItContact | null>(null);
 
   const load = useCallback(async () => {
@@ -80,16 +84,16 @@ export default function ItContactsPage() {
   }, [orgId, kind, q]);
 
   useEffect(() => {
-    if (isSuperAdmin) void api.get<Organization[]>("/orgs").then(setOrgs).catch(() => setOrgs([]));
-  }, [isSuperAdmin]);
-
-  useEffect(() => {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (isSuperAdmin) void api.get<Organization[]>("/orgs").then(setOrgs).catch(() => setOrgs([]));
+  }, [isSuperAdmin]);
+
   const openModal = (c: ItContact | "new") => {
+    setCTouched({});
     if (c === "new") {
-      setCOrgId(orgId || user?.org_id || "");
       setCKind("person");
       setCName(""); setCPosition(""); setCContactPerson(""); setCPhone(""); setCEmail(""); setCAddress(""); setCNote("");
     } else {
@@ -101,8 +105,12 @@ export default function ItContactsPage() {
     setModal(c);
   };
 
+  const cEmailError = validateEmail(cEmail);
+  const cPhoneError = validatePhoneVN(cPhone);
   const save = async () => {
     if (!modal || !cName.trim()) return;
+    setCTouched({ email: true, phone: true });
+    if (cEmailError || cPhoneError) return;
     const org = cOrgId || user?.org_id;
     if (!org) {
       setError("Chọn đơn vị trước khi thêm contact");
@@ -287,8 +295,28 @@ export default function ItContactsPage() {
             </Field>
           )}
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Điện thoại"><Input value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="0912345678" /></Field>
-            <Field label="Email"><Input value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="cntt@donvi.gov.vn" /></Field>
+            <Field
+              label="Điện thoại"
+              error={cTouched.phone ? cPhoneError : undefined}
+            >
+              <PhoneInput
+                value={cPhone}
+                onChange={(e) => setCPhone(e.target.value)}
+                onBlur={() => setCTouched((t) => ({ ...t, phone: true }))}
+                placeholder="0912345678"
+              />
+            </Field>
+            <Field
+              label="Email"
+              error={cTouched.email ? cEmailError : undefined}
+            >
+              <EmailInput
+                value={cEmail}
+                onChange={(e) => setCEmail(e.target.value)}
+                onBlur={() => setCTouched((t) => ({ ...t, email: true }))}
+                placeholder="cntt@donvi.gov.vn"
+              />
+            </Field>
           </div>
           <Field label="Địa chỉ"><Textarea value={cAddress} onChange={(e) => setCAddress(e.target.value)} rows={2} /></Field>
           <Field label="Ghi chú"><Textarea value={cNote} onChange={(e) => setCNote(e.target.value)} rows={2} /></Field>

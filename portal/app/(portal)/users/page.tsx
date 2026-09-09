@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import {
   KeyRound,
   Lock,
@@ -20,6 +21,7 @@ import {
   Badge,
   Button,
   Card,
+  EmailInput,
   EmptyState,
   ErrorBanner,
   Field,
@@ -28,6 +30,7 @@ import {
   PageHeader,
   Pagination,
   PageResponse,
+  PhoneInput,
   Select,
   Spinner,
   TABLE,
@@ -81,6 +84,9 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  // touched field — chỉ hiển thị error sau khi user blur hoặc submit lần đầu
+  // để tránh đỏ ầm ĩ ngay khi vừa mở modal.
+  const [touched, setTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [form, setForm] = useState<UserCreatePayload>({
     email: "",
     full_name: "",
@@ -89,7 +95,6 @@ export default function UsersPage() {
     password: "",
     phone: "",
   });
-
   // Reset password / khóa
   const [resetUser, setResetUser] = useState<ManagedUser | null>(null);
   const [resetPass, setResetPass] = useState("");
@@ -128,13 +133,19 @@ export default function UsersPage() {
       .catch(() => setOrgs([]));
   }, [load]);
 
+  // Validate cục bộ trước khi POST — tránh round-trip 422 cho email/SĐT sai format.
+  const emailError = validateEmail(form.email, { required: true });
+  const phoneError = validatePhoneVN(form.phone);
   const createUser = async (e: FormEvent) => {
     e?.preventDefault?.();
     setCreateErr(null);
+    setTouched({ email: true, phone: true });
+    if (emailError || phoneError) return;
     setCreateBusy(true);
     try {
       await api.post<ManagedUser>("/users", { ...form, phone: form.phone || undefined });
       setShowCreate(false);
+      setTouched({});
       setForm({ email: "", full_name: "", role: "org_admin", org_id: "", password: "", phone: "" });
       await load(true);
     } catch (err) {
@@ -367,11 +378,15 @@ export default function UsersPage() {
                 required
               />
             </Field>
-            <Field label="Email" required>
-              <Input
-                type="email"
+            <Field
+              label="Email"
+              required
+              error={touched.email ? emailError : undefined}
+            >
+              <EmailInput
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
+                onBlur={() => setTouched((t) => ({ ...t, email: true }))}
                 placeholder="a@example.gov.vn"
                 required
               />
@@ -416,10 +431,15 @@ export default function UsersPage() {
                 required
               />
             </Field>
-            <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa AES-256-GCM">
-              <Input
+            <Field
+              label="Số điện thoại (tùy chọn)"
+              hint={touched.phone && !phoneError ? "Mã hóa AES-256-GCM" : undefined}
+              error={touched.phone ? phoneError : undefined}
+            >
+              <PhoneInput
                 value={form.phone ?? ""}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
                 placeholder="0983…"
               />
             </Field>

@@ -1791,6 +1791,45 @@ class ProfileRequirementOut(BaseModel):
     requested_at: datetime | None = None
     reviewed_at: datetime | None = None
 
+# ── Cán bộ phụ trách (đầu mối SuperAdmin) — đặt TRƯỚC SystemProfileCreate
+# vì SystemProfileOut cần tham chiếu tới OfficerOut (forward ref khi
+# `from __future__ import annotations` không resolve được nếu đặt sau). ──
+
+class OfficerIn(BaseModel):
+    """Tạo cán bộ phụ trách mới (Super Admin)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerUpdate(BaseModel):
+    """Cập nhật một phần cán bộ phụ trách. Tất cả trường đều optional."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerOut(OfficerIn):
+    id: uuid.UUID
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileAssignOfficerIn(BaseModel):
+    """Body gán cán bộ phụ trách vào hồ sơ (PUT /system-profiles/{id}/officer)."""
+
+    officer_id: uuid.UUID
+
+
 # ── Hồ sơ cấp độ hệ thống thông tin ─────────────────────────
 
 
@@ -1945,6 +1984,40 @@ class SystemProfileEventOut(BaseModel):
     created_at: datetime
 
 
+class OfficerIn(BaseModel):
+    """Tạo cán bộ phụ trách mới (Super Admin)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerUpdate(BaseModel):
+    """Cập nhật một phần cán bộ phụ trách. Tất cả trường đều optional."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerOut(OfficerIn):
+    id: uuid.UUID
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileAssignOfficerIn(BaseModel):
+    """Body gán cán bộ phụ trách vào hồ sơ (PUT /system-profiles/{id}/officer)."""
+
+    officer_id: uuid.UUID
+
 class SystemProfileStats(BaseModel):
     """Thống kê hồ sơ cấp độ (scoped theo đơn vị người dùng)."""
 
@@ -1966,6 +2039,11 @@ class SystemProfileOut(BaseModel):
     decision_date: datetime | None = None
     decision_agency: str | None = None
     managed_by: str | None = None
+    # Cán bộ phụ trách (đầu mối SuperAdmin) — FK sang bảng officers (toàn cục,
+    # 1 cán bộ có thể phụ trách nhiều hồ sơ). Nested object khi load; chỉ Super
+    # Admin thay đổi officer_id.
+    officer_id: uuid.UUID | None = None
+    officer: OfficerOut | None = None
     document_number: str | None = None
     document_date: date | None = None
     review_note: str | None = None

@@ -937,3 +937,114 @@ async def test_profile_contacts_attach_detach(client, session_factory, org_env):
     # Timeline ghi gắn/gỡ
     events = [e["event"] for e in r.json()["events"]]
     assert "contact_attached" in events and "contact_detached" in events
+
+
+async def test_officers_crud_and_assign(client, session_factory, org_env):
+    """Officer pool CRUD (Super Admin only) + assign 1 cán bộ cho nhiều hồ sơ."""
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    # org_admin bị chặn CRUD officers
+    r = await client.post(
+        "/api/officers", headers=oa,
+        json={"name": "Nguyễn Văn A"},
+    )
+    assert r.status_code == 403, r.text
+
+    # Super Admin tạo cán bộ
+    r = await client.post(
+        "/api/officers", headers=sa,
+        json={
+            "name": "Trần Văn B",
+            "organization": "Sở TT&TT tỉnh X",
+            "title": "Phó GĐ",
+            "phone": "0912345678",
+            "email": "tranvb@stttt.gov.vn",
+            "note": "Phụ trách hệ thống",
+        },
+    )
+    assert r.status_code == 201, r.text
+    officer_id = r.json()["id"]
+    body = r.json()
+    assert body["name"] == "Trần Văn B"
+    assert body["organization"] == "Sở TT&TT tỉnh X"
+    assert body["profile_count"] == 0
+
+    # Tên rỗng → 400 (route kiểm tra thủ công sau strip)
+    r = await client.post("/api/officers", headers=sa, json={"name": "  "})
+    assert r.status_code == 400
+
+    # Tạo hồ sơ + gán cán bộ
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống A", "level": 1},
+    )
+    pid_a = r.json()["id"]
+    r = await client.put(
+        f"/api/system-profiles/{pid_a}/officer", headers=sa,
+        json={"officer_id": officer_id},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["officer"]["id"] == officer_id
+    assert r.json()["officer"]["name"] == "Trần Văn B"
+
+    # org_admin cố gán → 403
+    r = await client.put(
+        f"/api/system-profiles/{pid_a}/officer", headers=oa,
+        json={"officer_id": officer_id},
+    )
+    assert r.status_code == 403
+
+    # Gán cùng cán bộ cho hồ sơ thứ 2 — key test: 1 cán bộ cho nhiều hồ sơ
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hệ thống B", "level": 1},
+    )
+    pid_b = r.json()["id"]
+    r = await client.put(
+        f"/api/system-profiles/{pid_b}/officer", headers=sa,
+        json={"officer_id": officer_id},
+    )
+    assert r.status_code == 200
+
+    # profile_count tăng lên 2
+    r = await client.get(f"/api/officers/{officer_id}", headers=sa)
+    assert r.json()["profile_count"] == 2
+
+    # Officer_id không tồn tại → 404
+    r = await client.put(
+        f"/api/system-profiles/{pid_a}/officer", headers=sa,
+        json={"officer_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert r.status_code == 404
+
+    # Gỡ khỏi hồ sơ A — chỉ set officer_id=NULL, officer vẫn còn
+    r = await client.delete(f"/api/system-profiles/{pid_a}/officer", headers=sa)
+    assert r.status_code == 200
+    assert r.json()["officer"] is None
+    # Officer vẫn còn + còn đang gán cho profile B
+    r = await client.get(f"/api/officers/{officer_id}", headers=sa)
+    assert r.json()["profile_count"] == 1
+
+    # Gỡ lần 2 khi rỗng → 404
+    r = await client.delete(f"/api/system-profiles/{pid_a}/officer", headers=sa)
+    assert r.status_code == 404
+
+    # Update officer — sửa tên
+    r = await client.patch(
+        f"/api/officers/{officer_id}", headers=sa,
+        json={"name": "Trần Văn B Updated"},
+    )
+    assert r.status_code == 200
+    assert r.json()["name"] == "Trần Văn B Updated"
+
+    # Xóa officer khi còn đang gán → FK SET NULL nên vẫn OK
+    r = await client.delete(f"/api/officers/{officer_id}", headers=oa)  # org_admin bị chặn
+    assert r.status_code == 403
+    r = await client.delete(f"/api/officers/{officer_id}", headers=sa)
+    assert r.status_code == 204
+
+    # Profile B giờ officer=NULL (FK SET NULL)
+    r = await client.get(f"/api/system-profiles/{pid_b}", headers=sa)
+    assert r.json()["officer"] is None
+    assert r.json()["officer_id"] is None

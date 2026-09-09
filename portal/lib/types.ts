@@ -855,14 +855,6 @@ export interface DfirInvestigationCreate {
   custom_instructions?: string | null;
 }
 
-export interface DfirInvestigationMessage {
-  id: string;
-  role: "system" | "user" | "assistant";
-  content: string;
-  tokens: number | null;
-  created_at: string;
-}
-
 // ── Notifications ─────────────────────────────────────────────
 
 export type NotificationSeverity = "info" | "success" | "warning" | "error" | "critical";
@@ -1125,6 +1117,30 @@ export interface SystemProfileMachine {
   added_at: string;
 }
 
+/* ── Cán bộ phụ trách (đầu mối SuperAdmin) — toàn cục ── */
+
+export interface Officer {
+  id: string;
+  name: string;
+  organization: string | null;
+  title: string | null;
+  phone: string | null;
+  email: string | null;
+  note: string | null;
+  profile_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OfficerPayload {
+  name: string;
+  organization?: string | null;
+  title?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  note?: string | null;
+}
+
 export interface SystemProfile {
   id: string;
   org_id: string;
@@ -1138,16 +1154,12 @@ export interface SystemProfile {
   decision_date: string | null;
   decision_agency: string | null;
   managed_by: string | null;
+  // Cán bộ phụ trách (đầu mối SuperAdmin) — FK sang bảng officers (toàn cục,
+  // 1 cán bộ có thể phụ trách nhiều hồ sơ). Nested object khi load; chỉ Super
+  // Admin thay đổi officer_id.
+  officer_id: string | null;
+  officer: Officer | null;
   document_number: string | null;
-  document_date: string | null;
-  review_note: string | null;
-  reviewed_at: string | null;
-  diagram_mermaid: string | null;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-  device_count: number;
-  machine_count: number;
 }
 
 export interface SystemProfileDetail extends SystemProfile {
