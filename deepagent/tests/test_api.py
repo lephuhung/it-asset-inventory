@@ -113,13 +113,10 @@ async def test_failed_job_and_backend_callback_withhold_external_error_bodies(mo
     finally:
         api._jobs.clear()
 
-    expected_error = (
-        "RuntimeError: [REDACTED] External error message withheld to protect sensitive "
-        "investigation data."
-    )
+    expected_error_starts_with = "[internal]"
     assert job.status == "failed"
-    assert job.error == expected_error
-    assert callback_payloads[0].error == expected_error
+    assert job.error.startswith(expected_error_starts_with)
+    assert callback_payloads[0].error.startswith(expected_error_starts_with)
     assert yaml_secret not in job.error
     assert yaml_secret not in callback_payloads[0].model_dump_json()
 
@@ -200,9 +197,7 @@ def test_mcp_test_does_not_return_yaml_from_a_bridge_error(monkeypatch):
         api.app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json()["error"] == (
-        "RuntimeError: [REDACTED] External error message withheld to protect sensitive investigation data."
-    )
+    assert response.json()["error"].startswith("[internal]")
     assert yaml_secret not in response.text
 
 

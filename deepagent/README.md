@@ -34,6 +34,56 @@ sequenceDiagram
 - Log, command line, event message, filename và phần mô tả sự kiện đều được coi là dữ liệu không tin cậy, không phải chỉ dẫn cho agent.
 - Callback chỉ gửi về `DEEPAGENT_BACKEND_URL` cố định với API key `investigation:write`; URL callback không nhận từ người dùng.
 
+### Phân loại Tier 1 / Tier 2 (defense-in-depth)
+
+Custom artifact do backend ký phát qua trường `custom_artifacts[]` của investigation request. Mỗi artifact có 3 field:
+
+| Field | Bắt buộc | Mục đích |
+|---|---|---|
+| `name` | ✓ | Tên artifact Custom.* |
+| `supported_platforms` | ✓ | Danh sách OS hỗ trợ (windows / linux / macos). Bắt buộc để backend khai báo OS coverage. |
+| `tier` | (mặc định 2) | Tier classification |
+
+**Tier 1 (initial collection)** yêu cầu **đồng thời** 3 điều kiện — DB compromise alone không đủ:
+
+1. `ref.tier == 1` (admin phải promote tier trong DB)
+2. `ref.name` thuộc hardcoded `TIER1_CUSTOM_TOOLS[platform]` whitelist — không thể promote Custom.* ngoài whitelist lên Tier 1
+3. `target_platform in ref.supported_platforms` — Linux artifact không chạy trên Windows investigation
+
+Legacy fallback: nếu request không có tier=1 attempt (pre-A2 backend), dùng hardcoded whitelist. Khi DB đã supply tier=1 nhưng fail whitelist → KHÔNG fallback (vì DB đã khẳng định explicit "không có tier=1 hợp lệ").
+
+**Tier 2 (post-Tier-1 expansion)** yêu cầu:
+
+1. `ref.tier == 2`
+2. `target_platform in ref.supported_platforms` — Linux artifact không leak vào Windows investigation
+
+Admin promote Custom.* mới lên Tier 2 qua cột `tier` trong bảng `velociraptor_artifacts` (DB) mà không cần rebuild image. Tier 1 vẫn cần cập nhật code để thêm vào whitelist (Tier 1 chạy ngay đầu investigation, nhạy cảm nhất).
+
+### Phân loại lỗi và an toàn thông tin
+
+Khi investigation fail, error message được phân loại và suppress nội dung raw để tránh leak prompt fragment hoặc evidence. Portal nhận format `[<category>] <hint> [HTTP <code>]`, ví dụ:
+
+```
+[llm_timeout] LLM backend timeout. Kiểm tra kết nối tới LLM endpoint và xem xét tăng `DEEPAGENT_LLM_TIMEOUT_SECONDS`.
+```
+
+| Category | Khi nào | Hướng xử lý (hint) |
+|---|---|---|
+| `llm_timeout` | LLM request hết giờ timeout | Tăng `DEEPAGENT_LLM_TIMEOUT_SECONDS` |
+| `llm_unreachable` | Không kết nối được LLM backend | Kiểm tra base_url và network |
+| `llm_output_truncated` | LLM trả về vượt `max_tokens` | Tăng max_tokens trong `llm_config` |
+| `llm_content_filtered` | LLM từ chối do content filter | Kiểm tra prompt và dữ liệu đầu vào |
+| `llm_rate_limited` | Rate limit (429) | Đợi rồi retry |
+| `llm_bad_request` | 4xx từ LLM | Kiểm tra prompt, schema, context window |
+| `llm_forbidden` | 401/403 | Kiểm tra API key |
+| `llm_server_error` | 5xx từ LLM | Kiểm tra upstream |
+| `mcp_timeout` | Velociraptor MCP tool timeout | Tăng `DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS` |
+| `mcp_policy` | MCP policy violation | Kiểm tra allowlist Tier 1/Tier 2 |
+| `velociraptor_push` | Artifact Custom.* không push được | Kiểm tra artifact definition + push status |
+| `internal` | Các lỗi khác | Xem log chi tiết container |
+
+Raw exception message **không bao giờ** được expose về portal — chỉ exception class name, HTTP status code, và static hint string được phép rò rỉ.
+
 ## Cài đặt
 
 DeepAgent được Docker Compose khởi động cùng Backend và Portal. Image tự đóng gói commit đã khóa của [mcp-velociraptor](https://github.com/lephuhung/mcp-velociraptor) trong Python environment riêng, nên dependencies của bridge không xung đột với LangGraph.
@@ -105,6 +155,15 @@ docker compose -p asset-inventory -f server/deploy/docker-compose.yml up -d --bu
 | Thời gian cửa sổ detail | 60 phút | Giới hạn mỗi expansion |
 | Ngân sách bằng chứng | 120.000 ký tự | Tổng evidence JSON |
 | Timeout tool | 180 giây | MCP bridge deadline |
+| `max_tokens` (Tier 1 plan) | 8.000 | Qwen3.6 reasoning overhead |
+| `max_tokens` (Tier 2 plan) | 16.000 | Tier 2 prompt lớn hơn |
+| `max_tokens` (event log detail) | 1.500 | Output nhỏ, structured |
+| `max_tokens` (assess report) | 8.000 | Markdown report |
+| `max_retries` (OpenAI client) | 0 | Fail fast, không retry ngầm |
+
+**Tại sao per-call `max_tokens`?** Qwen3.6-35B là reasoning model — emit nhiều pre-answer text trước khi ra JSON. `max_tokens=64000` (default cũ) cho phép runaway → timeout 6 phút do retry ngầm. Per-call cap vừa đủ cho structured output, vừa fail-fast khi LLM không stop.
+
+**Tại sao `max_retries=0`?** Langchain-openai default retry 2 lần. Khi timeout → 3× wall-clock (361 giây). Pin `max_retries=0` để fail nhanh và log error_category để operator biết phải xử lý thế nào.
 
 ## Progress callback an toàn
 
