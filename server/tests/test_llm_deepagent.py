@@ -846,8 +846,9 @@ async def _seed_deepagent_investigations(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capacity", [2, 10, 12])
 async def test_deepagent_dispatch_claims_oldest_pending_rows_up_to_capacity(
-    session_factory, seeded_env
+    session_factory, seeded_env, capacity
 ):
     """claim_deepagent_dispatches chọn đúng N rows pending cũ nhất theo FIFO."""
     async with session_factory() as db:
@@ -865,15 +866,15 @@ async def test_deepagent_dispatch_claims_oldest_pending_rows_up_to_capacity(
         db.add(machine)
         await db.flush()
 
-        first, second, third = await _seed_deepagent_investigations(
-            db, machine=machine, requested_by=admin.id, count=3
+        queued = await _seed_deepagent_investigations(
+            db, machine=machine, requested_by=admin.id, count=capacity + 1
         )
         await db.commit()
 
-        claimed = await claim_deepagent_dispatches(db, capacity=2)
-        assert [row.id for row in claimed] == [first.id, second.id]
-        await db.refresh(third)
-        assert third.status == "pending"
+        claimed = await claim_deepagent_dispatches(db, capacity=capacity)
+        assert [row.id for row in claimed] == [row.id for row in queued[:capacity]]
+        await db.refresh(queued[-1])
+        assert queued[-1].status == "pending"
 
 
 @pytest.mark.asyncio
@@ -919,16 +920,16 @@ async def test_deepagent_dispatch_claim_respects_existing_active_slots(
 
 @pytest.mark.asyncio
 async def test_deepagent_max_concurrent_jobs_setting_validation():
-    """Settings deepagent_max_concurrent_jobs phải nằm trong khoảng 1..3."""
+    """Settings deepagent_max_concurrent_jobs phải nằm trong khoảng 1..12."""
     from app.core.config import Settings
 
     # Giá trị hợp lệ
-    for val in (1, 2, 3):
+    for val in (1, 2, 3, 10, 11, 12):
         s = Settings(deepagent_max_concurrent_jobs=val)
         assert s.deepagent_max_concurrent_jobs == val
 
     # Giá trị không hợp lệ
-    for val in (0, 4, -1, 10):
+    for val in (0, -1, 13):
         with pytest.raises(ValidationError):
             Settings(deepagent_max_concurrent_jobs=val)
 

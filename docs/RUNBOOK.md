@@ -169,7 +169,7 @@ mới trong DB (lưu lịch sử), cập nhật bảng `machine_current` (mới 
 
 | Biến môi trường | Phạm vi | Mặc định | Mô tả |
 |---|---|---|---|
-| `DEEPAGENT_MAX_CONCURRENT_JOBS` | 1–3 | 2 | Số investigation chạy đồng thời |
+| `DEEPAGENT_MAX_CONCURRENT_JOBS` | 1–12 | 12 | Số investigation chạy đồng thời |
 
 Investigation vượt dung lượng được xếp FIFO (`created_at ASC`) và giữ trạng thái `queued` cho đến khi có slot trống.
 
@@ -177,10 +177,11 @@ Investigation vượt dung lượng được xếp FIFO (`created_at ASC`) và g
 
 ```bash
 # Chỉnh sửa trong .env hoặc docker-compose.yml
-DEEPAGENT_MAX_CONCURRENT_JOBS=3
+DEEPAGENT_MAX_CONCURRENT_JOBS=12
+# Có thể đặt 10 để giảm tải đồng thời lên LLM.
 
-# Rebuild và recreate DeepAgent service
-docker compose -p asset-inventory -f server/deploy/docker-compose.yml up -d --build deepagent
+# Chạy từ thư mục gốc repo; cập nhật cả API và DeepAgent
+docker compose up -d --build --force-recreate api deepagent
 ```
 
 ### 8.3. Giới hạn vận hành DeepAgent

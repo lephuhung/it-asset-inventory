@@ -147,7 +147,7 @@ async def claim_deepagent_dispatches(
 
     Args:
         db: AsyncSession hiện tại
-        capacity: Tổng số slot có thể chiếm (1..3)
+        capacity: Tổng số slot có thể chiếm (1..12)
 
     Returns:
         Danh sách DfirInvestigation đã được claim (external_job_id đã set)

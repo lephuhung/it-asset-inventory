@@ -308,18 +308,18 @@ def test_mcp_test_uses_request_yaml_and_removes_temporary_file(monkeypatch):
 
 
 def test_deepagent_settings_max_concurrent_jobs_bounds() -> None:
-    """H-3 regression: DeepAgent max_concurrent_jobs must be 1..3 like server."""
+    """H-3 regression: DeepAgent max_concurrent_jobs must be 1..12 like server."""
     from pydantic import ValidationError
 
     from deepagent.config import Settings
 
     # Valid values
-    for val in (1, 2, 3):
+    for val in (1, 2, 3, 10, 11, 12):
         s = Settings(max_concurrent_jobs=val)
         assert s.max_concurrent_jobs == val
 
     # Invalid values must raise
-    for val in (0, 4, -1, 10):
+    for val in (0, -1, 13):
         with pytest.raises(ValidationError):
             Settings(max_concurrent_jobs=val)
 
@@ -410,3 +410,61 @@ async def test_three_jobs_fifo_ordering(monkeypatch) -> None:
     finally:
         api.app.dependency_overrides.clear()
         api._jobs.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capacity", [10, 12])
+async def test_execute_limits_concurrency_and_releases_next_job(monkeypatch, capacity):
+    """Exercise the real semaphore: the overflow job waits for a free slot."""
+    from uuid import UUID
+
+    settings = Settings(max_concurrent_jobs=capacity)
+    started = asyncio.Queue()
+    releases = {str(i): asyncio.Event() for i in range(capacity + 1)}
+
+    class ControlledRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, request, job_id):
+            started.put_nowait(job_id)
+            await releases[job_id].wait()
+
+    monkeypatch.setattr(api, "InvestigationRunner", ControlledRunner)
+    monkeypatch.setattr(api, "VelociraptorMCP", lambda settings: None)
+    monkeypatch.setattr(api, "OpenAIAnalysisModel", lambda runtime: None)
+    monkeypatch.setattr(api, "BackendCallbackClient", lambda settings: None)
+    monkeypatch.setattr(api, "_semaphore", None)
+    monkeypatch.setattr(api, "_jobs", {})
+    tasks = []
+    try:
+        for i in range(capacity + 1):
+            request = InvestigationRequest(
+                investigation_id=UUID(int=i), client_id="C.test", hostname="TEST",
+                target_platform="windows",
+                time_range={"from": "2026-01-01T00:00:00Z", "to": "2026-01-01T01:00:00Z"},
+                suspicious_activity="test",
+                llm_runtime={"base_url": "http://llm.test/v1", "api_key": "test", "model": "test"},
+                velociraptor_api_client_yaml="ca_certificate: test\nclient_cert: test\n",
+            )
+            job_id = str(i)
+            api._jobs[job_id] = JobStatus(
+                job_id=job_id, investigation_id=request.investigation_id,
+                status="queued", created_at=datetime.now(UTC),
+            )
+            tasks.append(asyncio.create_task(api._execute(request, job_id, settings)))
+            if i < capacity:
+                assert await asyncio.wait_for(started.get(), 2) == job_id
+        await asyncio.sleep(0)  # Let the overflow task reach the semaphore.
+        assert api._jobs[str(capacity)].status == "queued"
+        assert started.empty()
+        assert sum(job.status == "running" for job in api._jobs.values()) == capacity
+
+        releases["0"].set()
+        assert await asyncio.wait_for(started.get(), 2) == str(capacity)
+        assert api._jobs["0"].status == "completed"
+        assert api._jobs[str(capacity)].status == "running"
+    finally:
+        for event in releases.values():
+            event.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), 2)
