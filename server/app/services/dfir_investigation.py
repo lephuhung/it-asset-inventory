@@ -384,7 +384,7 @@ async def run_pending_investigations() -> dict:
             try:
                 await _state_dispatch_deepagent(db, inv)
                 processed.append(str(inv.id))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 errors.append(f"{inv.id}: {err}")
                 logger.exception("Investigation %s failed", inv.id)
@@ -413,7 +413,7 @@ async def run_pending_investigations() -> dict:
             try:
                 await _process_one(db, inv)
                 processed.append(str(inv.id))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 errors.append(f"{inv.id}: {err}")
                 logger.exception("Investigation %s failed", inv.id)
@@ -456,11 +456,14 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
 
 
 async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -> None:
-    """Requeue a job lost by a DeepAgent process restart.
+    """Reconcile DeepAgent job state sau khi dispatch có outcome không chắc chắn.
 
-    The backend owns the investigation state, while DeepAgent keeps its short-lived
-    job registry in memory. A missing job is therefore safe to dispatch again;
-    network errors leave the current investigation untouched for a later poll.
+    State machine:
+        `dispatching`    + external_job_id=None + timeout   → `recovery_required`
+        `dispatch_uncertain` + external_job_id (đã set)     → GET /v1/jobs/{id}:
+            * 2xx → `dispatched` (job tồn tại, request đã tới DeepAgent).
+            * 404 → `recovery_required` (job không tồn tại, re-dispatch an toàn).
+            * 5xx / network error → giữ nguyên `dispatch_uncertain`, retry tick sau.
     """
     if not inv.external_job_id:
         dispatch_started_at = inv.started_at
@@ -485,9 +488,34 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
     except Exception as exc:  # noqa: BLE001 - retry on the next worker tick
         logger.warning("DeepAgent job check failed for %s: %s", inv.id, exc)
         return
-    if response.status_code != 404:
+
+    # 2xx → job tồn tại. Request đã tới DeepAgent — chuyển sang dispatched
+    # để orchestrator poll tiếp như bình thường.
+    if 200 <= response.status_code < 300:
+        if inv.hermes_status == "dispatch_uncertain":
+            try:
+                body = response.json()
+            except Exception:  # noqa: BLE001 - body không quan trọng cho reconcile
+                body = {}
+            inv.hermes_status = "dispatched"
+            inv.hermes_response = {
+                "job_id": inv.external_job_id,
+                "status": body.get("status"),
+                "reconciled": True,
+            }
+            await db.commit()
+            logger.info(
+                "Investigation %s reconciled: DeepAgent đang chạy job_id=%s",
+                inv.id, inv.external_job_id,
+            )
         return
 
+    if response.status_code != 404:
+        # 5xx hoặc 4xx lạ từ DeepAgent — chưa rõ job có tồn tại hay không.
+        # Giữ nguyên `dispatch_uncertain`, retry tick sau.
+        return
+
+    # 404 → DeepAgent không có job này. An toàn để re-dispatch.
     inv.status = "pending"
     inv.external_job_id = None
     inv.hermes_status = "recovery_required"
@@ -562,7 +590,63 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         }
         await db.commit()
         logger.info("Investigation %s dispatched to DeepAgent job=%s", inv.id, inv.external_job_id)
+    except httpx.HTTPStatusError as exc:
+        # HTTP error response (4xx/5xx). Cần phân biệt:
+        # - 4xx (trừ 408/429): request không thể tới DeepAgent thành công
+        #   → definitive failure, đánh dấu failed ngay.
+        # - 5xx / 408 / 429: gateway timeout hoặc request có thể đã tới server
+        #   trước khi upstream trả lỗi → AMBIGUOUS, KHÔNG set failed;
+        #   reconcile sẽ GET job_id để quyết định tiếp.
+        status_code = exc.response.status_code if exc.response else 0
+        if 400 <= status_code < 500 and status_code not in (408, 429):
+            inv.status = "failed"
+            inv.hermes_status = "dispatch_failed"
+            inv.error = f"DeepAgent dispatch 4xx: {status_code}: {exc}"[:2000]
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+            raise
+        # 5xx / 408 / 429: ambiguous
+        inv.hermes_status = "dispatch_uncertain"
+        inv.hermes_response = {
+            "reason": "ambiguous_dispatch_outcome",
+            "status_code": status_code,
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        await db.commit()
+        logger.warning(
+            "Investigation %s dispatch ambiguous (HTTP %s): reconcile sẽ GET job_id=%s",
+            inv.id, status_code, inv.external_job_id,
+        )
+        raise
+    except (
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.ConnectError,
+        httpx.RemoteProtocolError,
+    ) as exc:
+        # Ambiguous network failure — request có thể đã tới server. KHÔNG set
+        # failed; chuyển sang `dispatch_uncertain` để vòng reconcile (xem
+        # `_state_check_deepagent_job`) GET job_id và quyết định:
+        #   - job tồn tại → `dispatched`.
+        #   - 404 → `recovery_required` (re-dispatch).
+        # Debug removed in production
+        inv.hermes_status = "dispatch_uncertain"
+        inv.hermes_response = {
+            "reason": "ambiguous_dispatch_outcome",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        await db.commit()
+        logger.warning(
+            "Investigation %s dispatch ambiguous (%s): reconcile sẽ GET job_id=%s",
+            inv.id, type(exc).__name__, inv.external_job_id,
+        )
+        raise
     except Exception as exc:
+        # Các lỗi khác (vd validation body, JSON decode) — definitive failure
+        # vì request chắc chắn không gửi đi đúng format.
+        # No debug print in production code — remove
         inv.status = "failed"
         inv.hermes_status = "dispatch_failed"
         inv.error = f"DeepAgent dispatch: {type(exc).__name__}: {exc}"[:2000]
@@ -603,7 +687,7 @@ async def _state_start(db: AsyncSession, inv: DfirInvestigation) -> None:
                     err = f"{type(e).__name__}: {e}"
                     flows.append({"artifact": art, "error": err})
                     logger.warning("Investigation %s: collect %s failed: %s", inv.id, art, err)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Không tạo được VelociraptorClient (sai config, mất kết nối…) → fail toàn bộ
         err = f"{type(e).__name__}: {e}"
         inv.status = "failed"
@@ -685,7 +769,7 @@ async def _state_poll_collect(db: AsyncSession, inv: DfirInvestigation) -> None:
                         inv.id, flow_id, e,
                     )
                     all_done = False
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Không tạo được VelociraptorClient → fail cả investigation
         inv.status = "failed"
         inv.error = f"Velociraptor poll: {type(e).__name__}: {e}"[:2000]

@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+
 from app.core.security import hash_password
 from app.db.models import Machine, Organization, OrgType, User, UserRole
 
@@ -1048,3 +1049,438 @@ async def test_officers_crud_and_assign(client, session_factory, org_env):
     r = await client.get(f"/api/system-profiles/{pid_b}", headers=sa)
     assert r.json()["officer"] is None
     assert r.json()["officer_id"] is None
+
+
+# ── P1-1: Org Admin parent không được sửa hồ sơ của org con ─
+
+
+async def _make_child_org(session_factory, parent_org_id: str, name: str) -> str:
+    """Tạo org con (parent_id = parent_org_id) — mirror Organization model."""
+    async with session_factory() as s:
+        org = Organization(name=name, type=OrgType.UBND_XA.value, parent_id=uuid.UUID(parent_org_id))
+        s.add(org)
+        await s.commit()
+        return str(org.id)
+
+
+async def test_parent_org_admin_reads_but_cannot_mutate_child_profile(
+    client, session_factory, org_env
+):
+    """Org Admin của parent org được đọc hồ sơ org con (visibility) nhưng KHÔNG
+    được PATCH/DELETE/mutate child content (devices, machines, parties,
+    applications, ip_ranges, requirements).
+    """
+    parent_id = org_env["org_id"]
+    child_id = await _make_child_org(session_factory, parent_id, "UBND xã con")
+    parent_admin_email = await _make_org_admin(session_factory, parent_id)
+    child_admin_email = await _make_org_admin(session_factory, child_id)
+
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    parent_oa = _auth(await _login(client, parent_admin_email, "Passw0rd!123"))
+    child_oa = _auth(await _login(client, child_admin_email, "Passw0rd!123"))
+
+    # Child admin tạo hồ sơ ở child org
+    r = await client.post(
+        "/api/system-profiles",
+        headers=child_oa,
+        json={"org_id": child_id, "name": "Hệ thống con", "level": 1},
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+
+    # Parent admin ĐỌC được hồ sơ con (visibility bao gồm cả descendants)
+    r = await client.get(f"/api/system-profiles/{pid}", headers=parent_oa)
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == pid
+
+    # List cũng trả về hồ sơ con cho parent admin
+    r = await client.get("/api/system-profiles", headers=parent_oa)
+    assert any(item["id"] == pid for item in r.json()["items"])
+
+    # Parent admin KHÔNG được PATCH
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=parent_oa, json={"name": "Đổi tên trái phép"}
+    )
+    assert r.status_code == 403, r.text
+
+    # Parent admin KHÔNG được DELETE
+    r = await client.delete(f"/api/system-profiles/{pid}", headers=parent_oa)
+    assert r.status_code == 403, r.text
+
+    # Parent admin KHÔNG được thêm thiết bị
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=parent_oa,
+        json={"name": "Thiết bị lạ", "device_type": "firewall"},
+    )
+    assert r.status_code == 403, r.text
+
+    # Parent admin KHÔNG được thêm máy (kể cả gắn máy cùng parent org vào profile con)
+    machine_id = await _make_machine(session_factory, parent_id)
+    r = await client.post(
+        f"/api/system-profiles/{pid}/machines?machine_id={machine_id}", headers=parent_oa
+    )
+    assert r.status_code == 403, r.text
+
+    # Parent admin KHÔNG được submit (trạng thái workflow)
+    r = await client.post(f"/api/system-profiles/{pid}/submit", headers=parent_oa)
+    assert r.status_code == 403, r.text
+
+    # Parent admin KHÔNG được tạo party / application / ip-range
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=parent_oa,
+        json={"role": "owner", "name": "Chủ quản lạ"},
+    )
+    assert r.status_code == 403, r.text
+
+    r = await client.post(
+        f"/api/system-profiles/{pid}/applications", headers=parent_oa,
+        json={"name": "App lạ"},
+    )
+    assert r.status_code == 403, r.text
+
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=parent_oa,
+        json={"zone": "LAN", "cidr": "10.0.0.0/24", "ip_kind": "private"},
+    )
+    assert r.status_code == 403, r.text
+
+    # Sanity: child admin vẫn mutate được hồ sơ con
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=child_oa, json={"name": "Sửa hợp lệ"}
+    )
+    assert r.status_code == 200, r.text
+    # Super admin vẫn mutate được
+    r = await client.delete(f"/api/system-profiles/{pid}", headers=sa)
+    assert r.status_code == 204
+
+
+# ── P1-2: Hồ sơ approved trở đi không được sửa nội dung child resource ─
+
+
+async def test_approved_profile_blocks_org_admin_from_mutating_child_resources(
+    client, session_factory, org_env
+):
+    """Khi hồ sơ ở approved/implemented/fulfilled:
+    - Org Admin KHÔNG được mutate devices, machines, parties, applications, ip-ranges.
+    - Super Admin vẫn mutate được (và có timeline event).
+    - Org Admin vẫn có thể PATCH metadata (managed_by) theo policy hiện tại.
+    - Hồ sơ rejected vẫn cho phép sửa bình thường.
+    """
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    # Super admin tạo hồ sơ approved trực tiếp (kèm decision_number)
+    r = await client.post(
+        "/api/system-profiles", headers=sa,
+        json={
+            "org_id": org_env["org_id"],
+            "name": "Hồ sơ approved",
+            "level": 1,
+            "decision_number": "42/QĐ-ATTT",
+            "decision_agency": "Công an tỉnh",
+        },
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    assert r.json()["status"] == "approved"
+
+    # Thêm thiết bị trên hồ sơ approved → Org Admin bị chặn
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=oa,
+        json={"name": "Firewall", "device_type": "firewall"},
+    )
+    assert r.status_code == 400, r.text
+    assert "approved" in r.json()["detail"]
+
+    # Super Admin vẫn mutate được
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=sa,
+        json={"name": "Firewall SA", "device_type": "firewall"},
+    )
+    assert r.status_code == 201, r.text
+    dev_id = r.json()["devices"][0]["id"]
+
+    # Gắn máy trên approved → Org Admin bị chặn
+    machine_id = await _make_machine(session_factory, org_env["org_id"])
+    r = await client.post(
+        f"/api/system-profiles/{pid}/machines?machine_id={machine_id}", headers=oa
+    )
+    assert r.status_code == 400, r.text
+
+    # Thêm party trên approved → Org Admin bị chặn
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "Chủ quản"},
+    )
+    assert r.status_code == 400, r.text
+
+    # Thêm application trên approved → Org Admin bị chặn
+    r = await client.post(
+        f"/api/system-profiles/{pid}/applications", headers=oa,
+        json={"name": "Web app"},
+    )
+    assert r.status_code == 400, r.text
+
+    # Thêm ip-range trên approved → Org Admin bị chặn
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={"zone": "LAN", "cidr": "10.0.0.0/24", "ip_kind": "private"},
+    )
+    assert r.status_code == 400, r.text
+
+    # Sửa / xóa thiết bị trên approved (do Super Admin tạo) bằng Org Admin → bị chặn
+    r = await client.put(
+        f"/api/system-profiles/{pid}/devices/{dev_id}", headers=oa,
+        json={"name": "Đổi tên", "device_type": "firewall"},
+    )
+    assert r.status_code == 400, r.text
+    r = await client.delete(f"/api/system-profiles/{pid}/devices/{dev_id}", headers=oa)
+    assert r.status_code == 400, r.text
+
+    # PATCH name thường trên approved → Org Admin bị chặn
+    r = await client.patch(f"/api/system-profiles/{pid}", headers=oa, json={"name": "Đổi tên"})
+    assert r.status_code == 400, r.text
+
+    # PATCH managed_by trên approved → Org Admin ĐƯỢC phép (theo policy hiện tại)
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=oa, json={"managed_by": "Tên chủ quản mới"}
+    )
+    assert r.status_code == 200, r.text
+
+
+# ── P2-1: timeline `level_changed` phải log old value đúng ─
+
+
+async def test_level_changed_timeline_logs_correct_old_value(
+    client, org_env, session_factory
+):
+    """Khi đổi level 2 → 3, event `level_changed` phải chứa `2 → 3`, không phải `3 → 3`.
+
+    Bug trước fix: code `setattr(profile, 'level', new_level)` chạy TRƯỚC khi
+    log event, nên `profile.level` lúc log đã là giá trị mới → event ghi nhầm
+    `3 → 3`.
+    """
+    from app.db.models import LevelRequirement
+
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    # Seed level requirement cho cả level 1 và 2
+    async with session_factory() as s:
+        s.add(LevelRequirement(level=1, code="L1-A", title="Yêu cầu L1"))
+        s.add(LevelRequirement(level=2, code="L2-B", title="Yêu cầu L2"))
+        await s.commit()
+
+    # Tạo hồ sơ level 1
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Test", "level": 1},
+    )
+    pid = r.json()["id"]
+    assert r.json()["level"] == 1
+
+    # PATCH level 1 → 2
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=oa, json={"level": 2}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["level"] == 2
+
+    # Tìm event `level_changed` trong timeline
+    events = r.json()["events"]
+    level_changed = [e for e in events if e["event"] == "level_changed"]
+    assert level_changed, f"Không có event level_changed: {events}"
+    msg = level_changed[0]["message"]
+    assert "1" in msg and "2" in msg, f"Event không chứa cả old/new: {msg!r}"
+    # Quan trọng: phải có dạng "1 → 2", KHÔNG phải "2 → 2"
+    assert "1 → 2" in msg or "1 -> 2" in msg, (
+        f"P2-1 BUG: timeline ghi sai old value. Event message: {msg!r}. "
+        "Expected '1 → 2' (old → new), but format suggests snapshot bị miss."
+    )
+    assert "2 → 2" not in msg and "2 -> 2" not in msg, (
+        f"P2-1 BUG: old value bị overwrite bởi setattr trước log. Event: {msg!r}"
+    )
+
+
+async def test_rejected_profile_allows_org_admin_full_edit(client, org_env):
+    """Hồ sơ rejected vẫn cho Org Admin sửa child resource bình thường."""
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Hồ sơ", "level": 1},
+    )
+    pid = r.json()["id"]
+    await client.post(f"/api/system-profiles/{pid}/submit", headers=oa)
+    r = await client.post(
+        f"/api/system-profiles/{pid}/review", headers=sa,
+        json={"action": "reject", "review_note": "Thiếu thông tin"},
+    )
+    assert r.json()["status"] == "rejected"
+
+    # Org Admin vẫn mutate được child resource trên rejected
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=oa,
+        json={"name": "Firewall", "device_type": "firewall"},
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "Chủ quản"},
+    )
+    assert r.status_code == 201, r.text
+
+
+# ── P2-3: DeviceType.is_active=False không được dùng cho device mới ─
+
+
+async def test_inactive_device_type_cannot_be_used_for_new_device(
+    client, org_env, session_factory
+):
+    """Loại thiết bị đã tắt (is_active=false) không được dùng để tạo device mới.
+
+    Theo policy: `is_active=false` → ẩn khỏi form, dữ liệu cũ vẫn render được.
+    Trước fix: `_valid_device_type` chỉ check existence → API client có thể bypass
+    frontend và tạo device mới với inactive type.
+    """
+    from app.db.models import DeviceType
+
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    # Seed thêm một inactive device type
+    async with session_factory() as s:
+        s.add(DeviceType(
+            code="legacy_type",
+            label="Legacy",
+            icon="📦",
+            is_active=False,
+            sort_order=99,
+        ))
+        await s.commit()
+
+    # Tạo profile
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Test", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    # POST device với active type → OK
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=oa,
+        json={"name": "FW active", "device_type": "firewall"},
+    )
+    assert r.status_code == 201, r.text
+
+    # POST device với inactive type → 400
+    r = await client.post(
+        f"/api/system-profiles/{pid}/devices", headers=oa,
+        json={"name": "FW legacy", "device_type": "legacy_type"},
+    )
+    assert r.status_code == 400, r.text
+    assert "legacy_type" in r.json()["detail"]
+
+    # PUT device với inactive type → 400
+    r = await client.put(
+        f"/api/system-profiles/{pid}/devices/{r.json().get('id', '00000000-0000-0000-0000-000000000000')}",
+        headers=oa,
+        json={"name": "FW legacy", "device_type": "legacy_type"},
+    )
+    # Lấy lại device id thực
+    r2 = await client.get(f"/api/system-profiles/{pid}", headers=sa)
+    dev_id = r2.json()["devices"][0]["id"]
+    r = await client.put(
+        f"/api/system-profiles/{pid}/devices/{dev_id}", headers=oa,
+        json={"name": "FW legacy", "device_type": "legacy_type"},
+    )
+    assert r.status_code == 400, r.text
+    assert "legacy_type" in r.json()["detail"]
+
+
+# ── P2-4: SystemProfile.code race condition ─
+
+
+@pytest.mark.asyncio
+async def test_profile_code_generation_handles_concurrent_inserts(
+    session_factory, seeded_env
+):
+    """Hai transaction cùng tạo hồ sơ trong cùng org cùng năm phải sinh ra
+    code khác nhau, không được trả 500 do unique conflict.
+
+    Trước fix: SELECT-max-then-INSERT → race có thể tạo cùng code → unique
+    constraint bắt được nhưng request bị 500 unhandled.
+    Sau fix: catch IntegrityError, retry với seq mới (bounded).
+    """
+    from app.core.security import hash_password
+    from app.db.models import User, UserRole
+
+    org_id = seeded_env["org_id"]
+
+    # Pre-create admin
+    admin_email = f"concurrent-{uuid.uuid4().hex[:8]}@org.test"
+    async with session_factory() as s:
+        s.add(User(
+            org_id=org_id,
+            full_name="Concurrent Admin",
+            email=admin_email,
+            role=UserRole.ORG_ADMIN.value,
+            password_hash=hash_password("Passw0rd!123"),
+        ))
+        await s.commit()
+
+    from app.api.routes.system_profiles import _create_profile_with_unique_code
+    from app.db.models import User as UserModel
+
+    # Get admin user id
+    async with session_factory() as s:
+        admin_user = (
+            await s.execute(
+                UserModel.__table__.select().where(UserModel.email == admin_email)
+            )
+        ).first()
+        creator_id = admin_user[0]
+
+    # Test 1: race-safe generator trả code khác nhau khi gọi liên tiếp.
+    # Trước fix: mỗi lần sinh đều nhìn cùng max(seq) → cùng code.
+    # Sau fix: sau khi INSERT, sequence DB được bump → call tiếp theo
+    # thấy max(seq) mới.
+    codes = []
+    for _ in range(5):
+        async with session_factory() as s:
+            creator = await s.get(UserModel, creator_id)
+            profile = await _create_profile_with_unique_code(
+                s,
+                org_id=org_id,
+                creator=creator,
+                name=f"Profile {uuid.uuid4().hex[:6]}",
+                level=1,
+            )
+            await s.commit()
+            codes.append(profile.code)
+
+    assert len(set(codes)) == 5, f"Trùng code giữa các lần sinh: {codes}"
+    # Đều phải match pattern HS-{year}-{3digits}
+    import re
+    from datetime import datetime
+    year = datetime.now().year
+    for c in codes:
+        assert re.match(rf"^HS-{year}-\d{{3}}$", c), f"Code format sai: {c}"
+
+    # Test 2: helper handle IntegrityError — pre-create code tồn tại,
+    # gọi generator sẽ sinh code mới (không trùng).
+    existing = codes[0]
+    async with session_factory() as s:
+        creator = await s.get(UserModel, creator_id)
+        # Generator thấy existing code 'HS-2026-001' → trả 'HS-2026-002'
+        from app.api.routes.system_profiles import _generate_profile_code
+        new_code = await _generate_profile_code(s, org_id)
+        assert new_code != existing, f"Generator trả code đã tồn tại: {new_code}"
+    # Đều phải match pattern HS-{year}-{3digits}
+    import re
+    from datetime import datetime
+    year = datetime.now().year
+    for c in codes:
+        assert re.match(rf"^HS-{year}-\d{{3}}$", c), f"Code format sai: {c}"

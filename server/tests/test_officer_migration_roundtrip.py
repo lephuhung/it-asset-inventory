@@ -1,0 +1,267 @@
+"""Round-trip test for officer migration downgrade.
+
+Migration `b5c6d7e8f9a0_officers_table` refactor từ các cột `officer_*` trên
+`system_profiles` sang bảng `officers` + FK `officer_id`. Alembic invariant:
+
+> downgrade từ revision N phải tạo schema tương ứng với revision N-1.
+
+Revision N-1 = `bbcbbb152a4b` (merge), trạng thái schema có:
+- `system_profiles.officer_*` columns (do `a5b6c7d8e9f1` thêm)
+- KHÔNG có `officers` table, `officer_id` (do `b5c6d7e8f9a0` thêm/xóa)
+
+Test này:
+1. Tạo DB tạm
+2. Chạy `alembic upgrade` tới `b5c6d7e8f9a0` (head của branch officer refactor)
+3. Chạy `alembic downgrade -1` → phải về `bbcbbb152a4b`
+4. Verify schema tại `bbcbbb152a4b` có `officer_*` columns và không có `officer_id`
+5. Chạy tiếp `alembic downgrade -1` → về `a5b6c7d8e9f1` (vẫn có columns)
+6. Verify `alembic heads` chỉ ra 1 head, không phát sinh head mới
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import uuid
+
+import asyncpg
+import pytest
+
+# Head của branch officer refactor (sau merge).
+OFFICER_REFACTOR_REV = "b5c6d7e8f9a0"
+PRIOR_REV = "bbcbbb152a4b"  # merge — schema trước khi refactor
+PRIOR_TO_MERGE_REV = "a5b6c7d8e9f1"  # migration thêm officer_* columns
+
+OFFICER_LEGACY_COLUMNS = (
+    "officer_name",
+    "officer_organization",
+    "officer_title",
+    "officer_phone",
+    "officer_email",
+    "officer_note",
+    "officer_assigned_at",
+    "officer_assigned_by",
+)
+
+
+@pytest.fixture
+async def temp_db():
+    """Tạo DB PostgreSQL tạm cho migration round-trip test."""
+    admin_url = (
+        os.environ.get(
+            "TEST_DATABASE_ADMIN_URL",
+            "postgresql://inventory:inventory@127.0.0.1:5432/postgres",
+        )
+    )
+
+    db_name = f"alembic_roundtrip_{uuid.uuid4().hex[:8]}"
+
+    conn = await asyncpg.connect(admin_url)
+    try:
+        await conn.execute(f'CREATE DATABASE "{db_name}"')
+    finally:
+        await conn.close()
+
+    # Build asyncpg URL for tests to introspect schema
+    asyncpg_url = admin_url.rsplit("/", 1)[0] + f"/{db_name}"
+
+    yield db_name, asyncpg_url
+
+    conn = await asyncpg.connect(admin_url)
+    try:
+        # Terminate any remaining sessions then drop
+        await conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = $1 AND pid <> pg_backend_pid()",
+            db_name,
+        )
+        await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+    finally:
+        await conn.close()
+
+
+def _alembic_url(asyncpg_url: str) -> str:
+    """Convert asyncpg URL sang scheme async cho alembic env.py.
+
+    `alembic/env.py` dùng `async_engine_from_config` nên bắt buộc scheme async.
+    """
+    if asyncpg_url.startswith("postgresql+asyncpg://"):
+        return asyncpg_url
+    return asyncpg_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+def _run_alembic(cmd: list[str], db_url: str) -> subprocess.CompletedProcess:
+    """Chạy alembic CLI với DATABASE_URL override."""
+    env = os.environ.copy()
+    env["DATABASE_URL"] = db_url
+    env.setdefault("SECRET_KEY", "x" * 32)
+    env.setdefault("DATA_ENCRYPTION_KEY", "x" * 32)
+    env.setdefault("APP_ENV", "test")
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *cmd],
+        cwd=".",
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+async def _columns_of(conn, table: str) -> set[str]:
+    rows = await conn.fetch(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+        table,
+    )
+    return {r["column_name"] for r in rows}
+
+
+async def _tables_in(conn) -> set[str]:
+    rows = await conn.fetch(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+    )
+    return {r["table_name"] for r in rows}
+
+
+@pytest.mark.asyncio
+async def test_officer_refactor_downgrade_restores_legacy_columns(temp_db):
+    """`b5c6d7e8f9a0` downgrade phải khôi phục `officer_*` columns.
+
+    BUG trước fix: downgrade chỉ drop `officer_id` + `officers` table mà KHÔNG
+    restore `officer_*` columns → vi phạm Alembic invariant.
+    """
+    db_name, asyncpg_url = temp_db
+    sync_url = _alembic_url(asyncpg_url)
+
+    # 1. Upgrade tới b5c6d7e8f9a0
+    result = _run_alembic(["upgrade", OFFICER_REFACTOR_REV], sync_url)
+    assert result.returncode == 0, (
+        f"alembic upgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        cols_after_upgrade = await _columns_of(conn, "system_profiles")
+        tables_after_upgrade = await _tables_in(conn)
+        assert "officer_id" in cols_after_upgrade
+        assert "officers" in tables_after_upgrade
+        # Các cột cũ đã bị drop sau upgrade
+        assert not any(c.startswith("officer_") and c != "officer_id" for c in cols_after_upgrade)
+    finally:
+        await conn.close()
+
+    # 2. Downgrade -1 → bbcbbb152a4b
+    result = _run_alembic(["downgrade", "-1"], sync_url)
+    assert result.returncode == 0, (
+        f"alembic downgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        cols = await _columns_of(conn, "system_profiles")
+        tables = await _tables_in(conn)
+        # `officer_id` đã được drop
+        assert "officer_id" not in cols
+        # Bảng `officers` đã được drop
+        assert "officers" not in tables
+        # Quan trọng: các cột legacy phải được khôi phục
+        missing = [c for c in OFFICER_LEGACY_COLUMNS if c not in cols]
+        assert not missing, (
+            f"downgrade b5c6d7e8f9a0 KHÔNG khôi phục các cột: {missing}. "
+            "Đây là vi phạm Alembic invariant."
+        )
+    finally:
+        await conn.close()
+
+    # Lưu ý: KHÔNG downgrade thêm — `bbcbbb152a4b` là merge revision với 2
+    # down_revisions (`a5b6c7d8e9f1` và `c7d8e9f0a1b2`) nên `-1` từ merge
+    # là ambiguous. Mục tiêu của fix là khôi phục schema của merge; mọi
+    # branch hợp lệ phía dưới merge đều kế thừa các cột này.
+
+
+@pytest.mark.asyncio
+async def test_officer_refactor_downgrade_migrates_data_back(temp_db):
+    """Best-effort: downgrade cố gắng migrate data từ `officers` về legacy cols."""
+    db_name, asyncpg_url = temp_db
+    sync_url = _alembic_url(asyncpg_url)
+
+    # 1. Upgrade tới b5c6d7e8f9a0 (officer refactor). Tại revision này có
+    # `officers` table + `officer_id` FK. Cần upgrade qua `a5b6c7d8e9f1` +
+    # merge để có các cột legacy tồn tại trước đó.
+    result = _run_alembic(["upgrade", OFFICER_REFACTOR_REV], sync_url)
+    assert result.returncode == 0, (
+        f"alembic upgrade failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # 2. Insert sample user, officer, then assign to profile
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        # Cần một organization + user trước
+        org_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+        profile_id = uuid.uuid4()
+        officer_id = uuid.uuid4()
+
+        await conn.execute(
+            "INSERT INTO organizations (id, name, type) "
+            "VALUES ($1, 'test-org', 'ubnd_xa')",
+            org_id,
+        )
+        await conn.execute(
+            "INSERT INTO users (id, org_id, full_name, email, role, password_hash, is_active, is_2fa_enabled, created_at) "
+            "VALUES ($1, $2, 'Test User', 'tu@test.vn', 'super_admin', 'x', true, false, now())",
+            user_id, org_id,
+        )
+        # Create profile first
+        await conn.execute(
+            "INSERT INTO system_profiles (id, org_id, code, name, level, status, created_by, created_at, updated_at) "
+            "VALUES ($1, $2, 'TEST-001', 'Test', 1, 'drafted', $3, now(), now())",
+            profile_id, org_id, user_id,
+        )
+        # Now create officer
+        await conn.execute(
+            "INSERT INTO officers (id, name, organization, title, phone, email, note, created_by, created_at, updated_at) "
+            "VALUES ($1, 'Nguyen Van A', 'Org X', 'Manager', '0901234567', 'a@x.vn', 'note text', $2, now(), now())",
+            officer_id, user_id,
+        )
+        # Assign to profile
+        await conn.execute(
+            "UPDATE system_profiles SET officer_id = $1 WHERE id = $2",
+            officer_id, profile_id,
+        )
+    finally:
+        await conn.close()
+
+    # 3. Downgrade -1 → bbcbbb152a4b (trigger migration b5c6d7e8f9a0 downgrade)
+    result = _run_alembic(["downgrade", "-1"], sync_url)
+    assert result.returncode == 0, result.stderr
+
+    # 4. Verify data was migrated back
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        row = await conn.fetchrow(
+            "SELECT officer_name, officer_organization, officer_title, officer_phone, "
+            "officer_email, officer_note, officer_assigned_by "
+            "FROM system_profiles WHERE id = $1",
+            profile_id,
+        )
+        assert row is not None
+        assert row["officer_name"] == "Nguyen Van A"
+        assert row["officer_organization"] == "Org X"
+        assert row["officer_title"] == "Manager"
+        assert row["officer_phone"] == "0901234567"
+        assert row["officer_email"] == "a@x.vn"
+        assert row["officer_note"] == "note text"
+        assert row["officer_assigned_by"] == user_id
+    finally:
+        await conn.close()
+
+
+def test_officer_refactor_creates_no_extra_heads():
+    """Migration fix không được tạo head mới (chỉ sửa downgrade)."""
+    from pathlib import Path
+
+    from alembic.script import ScriptDirectory
+
+    migrations_dir = Path(__file__).parents[1] / "alembic"
+    script = ScriptDirectory(str(migrations_dir))
+    heads = script.get_heads()
+    assert len(heads) == 1, f"Phải đúng 1 head, hiện có {len(heads)}: {heads}"

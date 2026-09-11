@@ -28,7 +28,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import get_current_user, is_super_admin, require_admin, require_super_admin, visible_org_ids
+from app.api.deps import (
+    get_current_user,
+    is_super_admin,
+    require_admin,
+    require_super_admin,
+    visible_org_ids,
+)
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.db.models import (
@@ -38,16 +44,16 @@ from app.db.models import (
     Machine,
     Officer,
     Organization,
-    ServiceAudience,
     ProfileRequirementStatus,
+    ServiceAudience,
     SystemDevice,
     SystemProfile,
     SystemProfileApplication,
     SystemProfileContact,
     SystemProfileEvent,
     SystemProfileIpRange,
-    SystemProfileParty,
     SystemProfileMachine,
+    SystemProfileParty,
     SystemProfileRequirement,
     SystemProfileStatus,
     User,
@@ -57,28 +63,28 @@ from app.schemas import (
     LevelRequirementIn,
     LevelRequirementOut,
     LevelRequirementUpdate,
-    SystemProfileApplicationIn,
-    SystemProfileApplicationOut,
-    SystemProfileIpRangeIn,
-    SystemProfileIpRangeOut,
-    SystemProfilePartyIn,
-    SystemProfilePartyOut,
+    OfficerOut,
     Page,
     ProfileRequirementOut,
     ProfileRequirementRequest,
     ProfileRequirementReview,
+    SystemProfileApplicationIn,
+    SystemProfileApplicationOut,
+    SystemProfileAssignOfficerIn,
     SystemProfileConfirmImplementation,
-    SystemProfileCreate,
-    SystemProfileDeviceIn,
-    OfficerOut,
     SystemProfileContactOut,
-    SystemProfileDeviceOut,
-    SystemProfileReportImplementation,
+    SystemProfileCreate,
     SystemProfileDetailOut,
+    SystemProfileDeviceIn,
+    SystemProfileDeviceOut,
     SystemProfileEventOut,
+    SystemProfileIpRangeIn,
+    SystemProfileIpRangeOut,
     SystemProfileMachineOut,
     SystemProfileOut,
-    SystemProfileAssignOfficerIn,
+    SystemProfilePartyIn,
+    SystemProfilePartyOut,
+    SystemProfileReportImplementation,
     SystemProfileReview,
     SystemProfileStats,
     SystemProfileUpdate,
@@ -100,14 +106,62 @@ def _log_event(db: AsyncSession, profile: SystemProfile, event: str, message: st
 
 
 async def _valid_device_type(db: AsyncSession, device_type: str) -> bool:
-    """Validate `device_type` tra catalog `device_types` (quản trị động)."""
+    """Validate `device_type` tra catalog `device_types` (quản trị động).
+
+    Chỉ chấp nhận `code` còn đang active. Dữ liệu cũ dùng inactive type vẫn
+    được đọc/render bình thường — bất kỳ create/update device mới phải chọn
+    code đang hoạt động (xem P2-3 fix).
+    """
     return (
-        await db.execute(select(func.count()).select_from(DeviceType).where(DeviceType.code == device_type))
+        await db.execute(
+            select(func.count()).select_from(DeviceType).where(
+                DeviceType.code == device_type,
+                DeviceType.is_active.is_(True),
+            )
+        )
     ).scalar_one() > 0
 
 
+# Trạng thái hồ sơ mà nội dung dossier được coi là "đã chốt" — Org Admin
+# không được mutate child resource (devices, machines, parties, applications,
+# ip-ranges). Super Admin vẫn được phép (override có audit + timeline).
+_FROZEN_STATUSES: frozenset[str] = frozenset({
+    SystemProfileStatus.APPROVED.value,
+    SystemProfileStatus.IMPLEMENTED.value,
+    SystemProfileStatus.FULFILLED.value,
+})
+
+
+def assert_profile_content_mutable(
+    profile: SystemProfile, user: User, *, action: str
+) -> None:
+    """Guard tập trung: chặn Org Admin mutate nội dung dossier khi hồ sơ đã chốt.
+
+    - Status: approved / implemented / fulfilled (đã có quyết định / đã triển khai).
+    - Org Admin → 400, message rõ ràng cho client hiển thị.
+    - Super Admin vẫn được mutate (ghi timeline qua `_log_event`).
+
+    Endpoint nào mutate **nội dung** (devices, machines, parties,
+    applications, ip-ranges) phải gọi guard này. Endpoint chỉ mutate
+    workflow (submit/review, requirement request/review) thì KHÔNG gọi.
+    """
+    if is_super_admin(user):
+        return
+    if profile.status in _FROZEN_STATUSES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Hồ sơ đã ở trạng thái '{profile.status}' — không thể {action}. "
+                "Liên hệ quản trị viên hệ thống để chỉnh sửa."
+            ),
+        )
+
+
 async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: User) -> SystemProfile:
-    """Lấy hồ sơ theo id, chặn nếu nằm ngoài phạm vi org của user."""
+    """Lấy hồ sơ theo id với scope **chỉ đọc** (Org Admin đọc được cả con).
+
+    Dùng cho endpoint GET. Endpoint mutation phải dùng `_get_profile_mutable`.
+    """
     profile = (
         await db.execute(
             select(SystemProfile)
@@ -128,6 +182,27 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Không tìm thấy hồ sơ")
     if not is_super_admin(user) and str(profile.org_id) not in await visible_org_ids(db, user):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Hồ sơ ngoài phạm vi của bạn")
+    return profile
+
+
+async def _get_profile_mutable(
+    db: AsyncSession, profile_id: uuid.UUID, user: User
+) -> SystemProfile:
+    """Lấy hồ sơ cho endpoint **mutation** — Org Admin chỉ mutate được hồ sơ
+    của CHÍNH đơn vị mình, không phải của org cấp dưới.
+
+    Phân biệt rõ với `_get_profile_scoped` (read visibility bao gồm cả cây con)
+    để tránh privilege escalation: Org Admin của parent org không nên sửa /
+    xóa / mutate child-org profile dù vẫn đọc được.
+
+    Super Admin giữ toàn quyền.
+    """
+    profile = await _get_profile_scoped(db, profile_id, user)
+    if not is_super_admin(user) and str(profile.org_id) != str(user.org_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Chỉ được sửa hồ sơ thuộc đơn vị của bạn",
+        )
     return profile
 
 def _officer_out(o: Officer) -> OfficerOut:
@@ -356,7 +431,16 @@ async def list_profiles(
 
 
 async def _generate_profile_code(db: AsyncSession, org_id: uuid.UUID) -> str:
-    """Sinh mã hồ sơ `HS-{năm}-{seq 3 chữ số}` — seq đếm theo đơn vị + năm."""
+    """Sinh mã hồ sơ `HS-{năm}-{seq 3 chữ số}` — seq đếm theo đơn vị + năm.
+
+    Race-safe: SELECT-max-then-INSERT có thể trùng code khi nhiều transaction
+    chạy song song (cùng max(seq)). Khi caller INSERT bị `IntegrityError` do
+    vi phạm unique constraint `(org_id, code)`, họ sẽ retry — generator
+    thực hiện pre-check và trả code mới; tuy nhiên cạnh tranh vẫn có thể
+    xảy ra. Caller (POST endpoint) phải catch IntegrityError và re-call
+    generator. Hàm này cố tình không retry tự động để giữ trách nhiệm rõ
+    ràng cho transaction layer.
+    """
     year = datetime.now(UTC).year
     prefix = f"HS-{year}-"
     rows = (
@@ -373,6 +457,71 @@ async def _generate_profile_code(db: AsyncSession, org_id: uuid.UUID) -> str:
         except ValueError:
             continue
     return f"{prefix}{seq + 1:03d}"
+
+
+async def _create_profile_with_unique_code(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    creator: User,
+    name: str,
+    level: int,
+    description: str | None = None,
+    diagram_mermaid: str | None = None,
+    decision_number: str | None = None,
+    decision_date: datetime | None = None,
+    decision_agency: str | None = None,
+    max_attempts: int = 5,
+) -> SystemProfile:
+    """Tạo SystemProfile với code duy nhất — bounded retry khi race condition.
+
+    Sinh code qua `_generate_profile_code`; nếu INSERT vi phạm unique constraint
+    `(org_id, code)`, retry với code mới. Sau `max_attempts` lần thất bại thì
+    raise IntegrityError để caller xử lý (không bị nuốt lỗi).
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    last_error: IntegrityError | None = None
+    for _ in range(max_attempts):
+        code = await _generate_profile_code(db, org_id)
+        # Super Admin có decision_number → approved ngay
+        # Snapshot các trường cần từ creator TRƯỚC khi vào retry loop để
+        # tránh lazy-load sau khi session expire (greenlet issue).
+        creator_id = creator.id
+        creator_role = getattr(creator, "role", None)
+        is_super = creator_role in {"super_admin", "admin_global"}
+        status_value = (
+            SystemProfileStatus.APPROVED.value
+            if is_super and decision_number
+            else SystemProfileStatus.DRAFTED.value
+        )
+        profile = SystemProfile(
+            org_id=org_id,
+            code=code,
+            name=name,
+            level=level,
+            description=description,
+            diagram_mermaid=diagram_mermaid,
+            status=status_value,
+            decision_number=decision_number if is_super else None,
+            decision_date=decision_date if is_super else None,
+            decision_agency=decision_agency if is_super else None,
+            reviewed_by=creator_id if is_super and decision_number else None,
+            reviewed_at=datetime.now(UTC) if is_super and decision_number else None,
+            created_by=creator_id,
+        )
+        db.add(profile)
+        try:
+            await db.flush()
+            return profile
+        except IntegrityError as exc:
+            last_error = exc
+            await db.rollback()
+            # Thử lại với code mới
+            continue
+    # Hết lần retry — vẫn trả IntegrityError để caller thấy
+    assert last_error is not None
+    raise last_error
 
 
 @router.get("/stats", response_model=SystemProfileStats)
@@ -406,25 +555,27 @@ async def create_profile(
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Chỉ tạo hồ sơ cho đơn vị của bạn")
 
     approved_directly = is_super_admin(admin) and bool(body.decision_number)
-    profile = SystemProfile(
+    # P2-4 fix: dùng `_create_profile_with_unique_code` thay vì chỉ
+    # `_generate_profile_code`. Generator SELECT-max-then-INSERT có race:
+    # hai transaction đồng thời cùng đọc max(seq) và INSERT cùng code →
+    # unique constraint `(org_id, code)` sẽ reject 1 trong 2, gây 500
+    # unhandled. Helper mới catch IntegrityError và retry với code mới
+    # (bounded = 5 attempts).
+    profile = await _create_profile_with_unique_code(
+        db,
         org_id=body.org_id,
-        code=await _generate_profile_code(db, body.org_id),
+        creator=admin,
         name=body.name.strip(),
         level=body.level,
         description=body.description,
         diagram_mermaid=body.diagram_mermaid,
-        managed_by=body.managed_by,
-        document_number=body.document_number,
-        document_date=body.document_date,
-        status=SystemProfileStatus.APPROVED.value if approved_directly else SystemProfileStatus.DRAFTED.value,
         decision_number=body.decision_number if approved_directly else None,
         decision_date=body.decision_date if approved_directly else None,
         decision_agency=body.decision_agency if approved_directly else None,
-        reviewed_by=admin.id if approved_directly else None,
-        reviewed_at=datetime.now(UTC) if approved_directly else None,
-        created_by=admin.id,
     )
-    db.add(profile)
+    profile.managed_by = body.managed_by
+    profile.document_number = body.document_number
+    profile.document_date = body.document_date
     await db.flush()  # cần profile.id để ghi event
     _log_event(db, profile, "created", f"Tạo hồ sơ (cấp độ {body.level})" + (f" — số văn bản đề nghị {body.document_number}" if body.document_number else ""), admin)
     await append_audit(
@@ -464,7 +615,12 @@ async def update_profile(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    # Lưu ý: KHÔNG gọi assert_profile_content_mutable ở đây — endpoint này có
+    # rule riêng cho phép Org Admin sửa `managed_by` + `document_*` sau approval
+    # (xem check `set(changes) - {"managed_by"}` ngay dưới). Việc khóa hồ sơ
+    # sau approval đã được thực thi bởi child-resource endpoints (devices,
+    # machines, parties, applications, ip_ranges, contacts) thông qua guard.
     changes = body.model_dump(exclude_unset=True, exclude_none=True)
     # Số văn bản đề nghị + ngày văn bản có thể bổ sung sau, kể cả khi đã duyệt
     doc_fields = {f: changes.pop(f) for f in ("document_number", "document_date") if f in changes}
@@ -477,6 +633,10 @@ async def update_profile(
     if "service_audience" in changes and changes["service_audience"] not in {a.value for a in ServiceAudience}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="service_audience không hợp lệ")
     level_changed = "level" in changes and changes["level"] != profile.level
+    # P2-1 fix: snapshot giá trị cũ TRƯỚC khi setattr. Trước fix, log_event dùng
+    # `profile.level` đã bị thay bằng `changes["level"]` → event ghi "3 → 2" thay vì
+    # "2 → 3" (vd). Phải capture old value trước mutation.
+    old_level = profile.level if level_changed else None
     for field, value in {**changes, **doc_fields}.items():
         setattr(profile, field, value)
     # Ghi timeline chi tiết từng trường thay đổi (diff) để quản trị dễ truy vết
@@ -492,8 +652,13 @@ async def update_profile(
         "managed_by": "Tên chủ quản",
     }
     changed_labels = [FIELD_LABELS[f] for f in changes if f in FIELD_LABELS]
-    if "level" in changes:
-        _log_event(db, profile, "level_changed", f"Đổi cấp độ đề xuất: {profile.level} → {changes['level']}", admin)
+    if "level" in changes and level_changed:
+        # Dùng snapshot `old_level` thay vì `profile.level` (đã bị setattr thành new).
+        _log_event(
+            db, profile, "level_changed",
+            f"Đổi cấp độ đề xuất: {old_level} → {changes['level']}",
+            admin,
+        )
     if doc_fields:
         parts = [f"{'Số văn bản' if f == 'document_number' else 'Ngày văn bản'}: {v}" for f, v in doc_fields.items()]
         _log_event(db, profile, "document_updated", "Cập nhật văn bản đề nghị — " + "; ".join(parts), admin)
@@ -528,7 +693,8 @@ async def delete_profile(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     if not is_super_admin(admin):
         if profile.status not in (SystemProfileStatus.DRAFTED.value, SystemProfileStatus.REJECTED.value):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ xóa được hồ sơ chưa trình / bị từ chối")
@@ -550,7 +716,7 @@ async def submit_profile(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.status not in (SystemProfileStatus.DRAFTED.value, SystemProfileStatus.REJECTED.value):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Hồ sơ đã được trình hoặc đã duyệt")
     profile.status = SystemProfileStatus.PENDING_REVIEW.value
@@ -575,7 +741,7 @@ async def review_profile(
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.status != SystemProfileStatus.PENDING_REVIEW.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ duyệt được hồ sơ đang chờ duyệt")
     if body.action == "approve":
@@ -620,7 +786,7 @@ async def report_implementation(
     Hồ sơ là căn cứ để đơn vị triển khai hệ thống đảm bảo cấp độ đã được duyệt;
     khi triển khai xong, đơn vị khai báo để Super Admin xác nhận đáp ứng.
     """
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.status != SystemProfileStatus.APPROVED.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ khai báo được với hồ sơ đã được phê duyệt")
     if not is_super_admin(admin) and str(admin.org_id) != str(profile.org_id):
@@ -639,7 +805,7 @@ async def report_implementation(
     _log_event(db, profile, "implementation_reported", "Đơn vị khai báo đã triển khai hệ thống theo hồ sơ", admin)
     await append_audit(db, action="system_profile.report_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 
@@ -652,7 +818,7 @@ async def confirm_implementation(
     db: AsyncSession = Depends(get_db),
 ):
     """Super Admin xác nhận đơn vị đã đáp ứng hồ sơ (implemented → fulfilled)."""
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.status != SystemProfileStatus.IMPLEMENTED.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ xác nhận được hồ sơ đang ở trạng thái đã khai báo triển khai")
     if body.review_note:
@@ -663,7 +829,7 @@ async def confirm_implementation(
     _log_event(db, profile, "fulfilled", "Xác nhận đơn vị đã đáp ứng hồ sơ", admin)
     await append_audit(db, action="system_profile.confirm_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 
@@ -688,7 +854,8 @@ async def add_device(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     if not await _valid_device_type(db, body.device_type):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Loại thiết bị không hợp lệ: {body.device_type}")
     await _validate_machine(db, body.machine_id, profile)
@@ -715,7 +882,8 @@ async def update_device(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     device = (
         await db.execute(
             select(SystemDevice).where(SystemDevice.id == device_id, SystemDevice.profile_id == profile.id)
@@ -749,7 +917,8 @@ async def delete_device(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     device = (
         await db.execute(
             select(SystemDevice).where(SystemDevice.id == device_id, SystemDevice.profile_id == profile.id)
@@ -779,11 +948,12 @@ async def attach_machine(
     profile_id: uuid.UUID,
     machine_id: uuid.UUID,
     note: str | None = None,
-    request: Request = None,  # noqa: RUF012 — gán bởi FastAPI dependency injection
+    request: Request = None,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     await _validate_machine(db, machine_id, profile)
     exists = (
         await db.execute(
@@ -818,7 +988,8 @@ async def detach_machine(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     link = (
         await db.execute(
             select(SystemProfileMachine).where(
@@ -852,7 +1023,7 @@ async def attach_contact(
     profile_id: uuid.UUID,
     contact_id: uuid.UUID,
     note: str | None = None,
-    request: Request = None,  # noqa: RUF012 — gán bởi FastAPI dependency injection
+    request: Request = None,
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -861,7 +1032,8 @@ async def attach_contact(
     Contact phải cùng đơn vị với hồ sơ. `note` ghi vai trò trong hồ sơ
     (vd: phụ trách vận hành, đầu mối kỹ thuật).
     """
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     contact = (await db.execute(select(ItContact).where(ItContact.id == contact_id))).scalar_one_or_none()
     if contact is None or str(contact.org_id) != str(profile.org_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Contact không thuộc đơn vị của hồ sơ")
@@ -880,7 +1052,8 @@ async def attach_contact(
     _log_event(db, profile, "contact_attached", f"Gắn {kind_label.lower()}: {contact.name}", admin)
     await append_audit(db, action="system_profile.contact.attach", actor=str(admin.id), target=f"{profile.id}:{contact_id}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -892,7 +1065,8 @@ async def detach_contact(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     link = (
         await db.execute(
             select(SystemProfileContact).where(
@@ -908,7 +1082,8 @@ async def detach_contact(
     _log_event(db, profile, "contact_detached", f"Gỡ chuyên trách/tổ chức: {contact_name}", admin)
     await append_audit(db, action="system_profile.contact.detach", actor=str(admin.id), target=f"{profile.id}:{contact_id}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -925,7 +1100,7 @@ async def assign_officer(
     1 hồ sơ - 1 cán bộ; gọi lại để thay thế. Thông tin cán bộ (tên, tổ chức, …)
     sống ở bảng `officers` — chỉnh sửa 1 chỗ áp dụng cho mọi hồ sơ đang gán.
     """
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     officer = (
         await db.execute(select(Officer).where(Officer.id == body.officer_id))
     ).scalar_one_or_none()
@@ -947,7 +1122,7 @@ async def assign_officer(
         target=f"{profile.id}:{officer.id}", ip=get_client_ip(request),
     )
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 
@@ -959,7 +1134,7 @@ async def unassign_officer(
     db: AsyncSession = Depends(get_db),
 ):
     """Gỡ cán bộ phụ trách khỏi hồ sơ. Bản ghi officer vẫn còn trong bảng officers."""
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.officer_id is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Hồ sơ chưa có cán bộ phụ trách")
     removed = profile.officer
@@ -975,7 +1150,7 @@ async def unassign_officer(
         target=str(profile.id), ip=get_client_ip(request),
     )
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 # ── Yêu cầu an toàn theo cấp độ: catalog + thẩm định ────────
@@ -1082,7 +1257,7 @@ async def request_requirement_review(
     db: AsyncSession = Depends(get_db),
 ):
     """Đơn vị khai báo hoàn thành yêu cầu → chờ Super Admin thẩm định."""
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     row = (
         await db.execute(
             select(SystemProfileRequirement).where(
@@ -1103,7 +1278,7 @@ async def request_requirement_review(
     _log_event(db, profile, "requirement_requested", f"Trình thẩm định yêu cầu ATTT: {req_title}", admin)
     await append_audit(db, action="system_profile.requirement.request", actor=str(admin.id), target=f"{profile.id}:{row_id}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 
@@ -1117,7 +1292,7 @@ async def review_requirement(
     db: AsyncSession = Depends(get_db),
 ):
     """Super Admin thẩm định yêu cầu: verify (đạt) / reject (không đạt)."""
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     row = (
         await db.execute(
             select(SystemProfileRequirement).where(
@@ -1143,7 +1318,7 @@ async def review_requirement(
         _log_event(db, profile, "requirement_rejected", f"Thẩm định KHÔNG ĐẠT yêu cầu ATTT: {req_title}" + (f" — {body.review_note}" if body.review_note else ""), admin)
     await append_audit(db, action=f"system_profile.requirement.{body.action}", actor=str(admin.id), target=f"{profile.id}:{row_id}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
     return _to_detail(profile, None)
 
 
@@ -1158,7 +1333,8 @@ async def add_party(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     dup = (
         await db.execute(
             select(SystemProfileParty).where(
@@ -1172,7 +1348,8 @@ async def add_party(
     _log_event(db, profile, "party_added", f"Khai báo {'đơn vị chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
     await append_audit(db, action="system_profile.party.add", actor=str(admin.id), target=f"{profile.id}:{body.role}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1185,7 +1362,8 @@ async def update_party(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     party = (
         await db.execute(
             select(SystemProfileParty).where(SystemProfileParty.id == party_id, SystemProfileParty.profile_id == profile.id)
@@ -1198,7 +1376,8 @@ async def update_party(
     _log_event(db, profile, "party_updated", f"Cập nhật thông tin {'chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
     await append_audit(db, action="system_profile.party.update", actor=str(admin.id), target=str(party_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1210,7 +1389,8 @@ async def delete_party(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     party = (
         await db.execute(
             select(SystemProfileParty).where(SystemProfileParty.id == party_id, SystemProfileParty.profile_id == profile.id)
@@ -1223,7 +1403,8 @@ async def delete_party(
     _log_event(db, profile, "party_removed", f"Xóa thông tin chủ quản/vận hành: {party_name}", admin)
     await append_audit(db, action="system_profile.party.delete", actor=str(admin.id), target=str(party_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1238,13 +1419,15 @@ async def add_application(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     await _validate_machine(db, body.machine_id, profile)
     db.add(SystemProfileApplication(profile_id=profile.id, **body.model_dump()))
     _log_event(db, profile, "application_added", f"Khai báo ứng dụng/dịch vụ: {body.name}", admin)
     await append_audit(db, action="system_profile.application.add", actor=str(admin.id), target=f"{profile.id}:{body.name}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1257,7 +1440,8 @@ async def update_application(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     app = (
         await db.execute(
             select(SystemProfileApplication).where(SystemProfileApplication.id == app_id, SystemProfileApplication.profile_id == profile.id)
@@ -1271,7 +1455,8 @@ async def update_application(
     _log_event(db, profile, "application_updated", f"Cập nhật ứng dụng/dịch vụ: {body.name}", admin)
     await append_audit(db, action="system_profile.application.update", actor=str(admin.id), target=str(app_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1283,7 +1468,8 @@ async def delete_application(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     app = (
         await db.execute(
             select(SystemProfileApplication).where(SystemProfileApplication.id == app_id, SystemProfileApplication.profile_id == profile.id)
@@ -1296,7 +1482,8 @@ async def delete_application(
     _log_event(db, profile, "application_removed", f"Xóa ứng dụng/dịch vụ: {app_name}", admin)
     await append_audit(db, action="system_profile.application.delete", actor=str(admin.id), target=str(app_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1311,12 +1498,14 @@ async def add_ip_range(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     db.add(SystemProfileIpRange(profile_id=profile.id, **body.model_dump()))
     _log_event(db, profile, "ip_range_added", f"Khai báo vùng mạng {body.zone} ({body.cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.add", actor=str(admin.id), target=f"{profile.id}:{body.zone}", ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1329,7 +1518,8 @@ async def update_ip_range(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     ip = (
         await db.execute(
             select(SystemProfileIpRange).where(SystemProfileIpRange.id == range_id, SystemProfileIpRange.profile_id == profile.id)
@@ -1342,7 +1532,8 @@ async def update_ip_range(
     _log_event(db, profile, "ip_range_updated", f"Cập nhật vùng mạng {body.zone} ({body.cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.update", actor=str(admin.id), target=str(range_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
 
 
@@ -1354,7 +1545,8 @@ async def delete_ip_range(
     admin: User = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     ip = (
         await db.execute(
             select(SystemProfileIpRange).where(SystemProfileIpRange.id == range_id, SystemProfileIpRange.profile_id == profile.id)
@@ -1367,5 +1559,6 @@ async def delete_ip_range(
     _log_event(db, profile, "ip_range_removed", f"Xóa vùng mạng {ip_zone} ({ip_cidr})", admin)
     await append_audit(db, action="system_profile.ip_range.delete", actor=str(admin.id), target=str(range_id), ip=get_client_ip(request))
     await db.commit()
-    profile = await _get_profile_scoped(db, profile_id, admin)
+    profile = await _get_profile_mutable(db, profile_id, admin)
+    assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)
