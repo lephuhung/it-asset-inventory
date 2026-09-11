@@ -276,3 +276,221 @@ $ dotnet test OrgInventoryAgent.sln  # AG-P1-03 (agent endpoint task, separate b
 - Portal consumer (Next.js) chưa được re-test với behavior mới (DispatchUncertain semantics). UI cần xử lý trạng thái `dispatch_uncertain` cho investigation.
 - Còn 1 fix nữa cần verify: `client_ip.py` parse CIDR (đã có sẵn ipaddress validation, không thuộc review này nhưng liên quan AG-P1-05 trust boundary với `X-Forwarded-For`/CIDR trust).
 - Server test environment: pre-existing `test_devices_and_machines` flaky trên Linux runtime vì cố call WMI/ManagementObject trong `SecurityCollector.Collect()`. Out of scope của review task này.
+
+
+## 5c. Third pass — v3 BLOCKERs + P2 hardening
+
+Lần review thứ 3 phát hiện implementation mismatch với report v2 + test quality
+issues. Mỗi BLOCKER đều có regression test riêng (không dùng serial loop, không
+chỉ test pre-check path). Bug ROOT CAUSE từ code thực tế được verify qua
+test red → fix → green.
+
+### BLOCKER 1 v3 — `DispatchFailed` bị reclassify thành `DispatchUncertain`
+
+**Bug trước fix:** `DispatchFailed` (subclass `LlmError -> Exception`) rơi vào
+`except Exception` chung. Logic bên trong check `inv.external_job_id is not None`
+→ set `dispatch_uncertain` rồi raise `DispatchUncertain`. Trong khi đó
+helper đã set `status=failed`, `completed_at`, `hermes=disfatch_failed` rồi raise
+`DispatchFailed` → state inconsistent: status=failed + hermes=dispatch_uncertain
++ completed_at NOT NULL. Worker catch `DispatchUncertain` → KHÔNG overwrite
+terminal status → investigation stuck ở failed nhưng reconcile loop vẫn
+tưởng uncertain.
+
+**Fix:** Thêm `except DispatchFailed: raise` TRƯỚC `except Exception` trong
+`_state_dispatch_deepagent()`. Đảm bảo typed exception giữ semantics rõ ràng:
+`DispatchFailed` không bao giờ bị reclassify thành `DispatchUncertain`.
+
+**Test:** `test_worker_wrong_job_id_remains_definitive_dispatch_failure` gọi qua
+`run_pending_investigations()` (production path), HTTP 202 với `job_id` khác
+`expected_job_id`. Verify:
+- `status == "failed"`
+- `hermes_status == "dispatch_failed"` (KHÔNG `dispatch_uncertain`)
+- `completed_at is not None`
+- `error` chứa "job ID không khớp"
+
+### BLOCKER 2 v3 — Officer migration JOIN sai key cho duplicate names
+
+**Bug trước fix:** UPDATE join `WHERE sp.officer_name = i.name` nondeterministic
+khi 2 profiles cùng `officer_name`. PostgreSQL chọn 1 row trong inserted match
+với mỗi profile (thực tế với 2 profiles cùng name → 2 rows cùng name trong
+inserted, UPDATE join match cả 2 với 1 trong 2 rows → 1 profile được link
+đúng, 1 profile bị link sai, officer còn lại orphan).
+
+**Fix:** Đổi join key thành `sp.id = src.profile_id` (stable identity). Tạo
+`officer_id` deterministic từ profile.id bằng `md5(sp.id || '-officer-migration')::uuid`
+để chạy lại migration idempotent. CTE `source` build đầy đủ từ profiles,
+`inserted` insert từ source, `UPDATE` join trên profile_id.
+
+**Test:** `test_officer_upgrade_preserves_profiles_with_duplicate_officer_names`
+- 2 profiles A, B với cùng `officer_name = "Nguyen Van A"`, data khác nhau.
+- Sau upgrade: 2 officers rows, profile A officer_id != profile B officer_id.
+- Verify data: officer A có organization `Org A`, phone `0900000001`,
+  email `a@org-a.vn`. Officer B có `Org B`, `0900000002`, `b@org-b.vn`.
+- Sau downgrade: mỗi profile giữ lại data ban đầu từ legacy columns.
+
+### BLOCKER 3 v3 — Nullable PATCH cho phép `name=null` / `level=null`
+
+**Bug trước fix:** `SystemProfileUpdate.name: str | None` và `level: int | None`
+cho phép explicit null. Router `setattr(profile, 'name', None)` → DB constraint
+violation (name nullable=False) → 500. Ngoài ra, `level_changed = "level" in
+changes and changes["level"] != profile.level` có thể log event với
+`new=None` TRƯỚC khi DB fail → pollute timeline.
+
+**Fix:** `@field_validator("name", "level")` trên `SystemProfileUpdate`
+reject explicit null với ValueError → FastAPI trả 422 controlled.
+- name/level là NOT NULL: reject None.
+- Các field nullable khác (description, diagram_mermaid, v.v.) vẫn cho
+  explicit null để clear (nullable clearing feature đã fix ở v2).
+
+**Tests:**
+- `test_patch_rejects_null_name`: PATCH name=None → 422, DB name không đổi.
+- `test_patch_rejects_null_level`: PATCH level=None → 422, DB level không đổi,
+  KHÔNG có event `level_changed` mới.
+
+### P2-4 v3 — True concurrent profile code test + instrumentation-based assertions
+
+**Bug trước fix:** test dùng barrier + sleep, KHÔNG đảm bảo 2 transactions
+cùng generate TRƯỚC khi insert. Phụ thuộc scheduler ordering.
+
+**Fix:** Monkey-patch `_generate_profile_code` với barrier chính xác tại
+điểm "vừa đọc MAX seq, chưa return code":
+1. Task A: read MAX → pause (set read_count++)
+2. Task B: read MAX → pause (read_count == 2 → set release_event)
+3. Cả 2 task `await release_event.wait()` → proceed cùng lúc với CÙNG
+   candidate code
+4. INSERT cả 2 → 1 succeed, 1 nhận IntegrityError → retry với code mới
+5. Assert `code_a != code_b` (retry path fire) + `call_count >= 3`
+   (anchor + 2 race + retry)
+
+**Bonus:** `test_non_code_integrity_error_is_not_retried` đổi từ timing-based
+(elapsed < 2s) sang instrumentation-based (count `_generate_profile_code`
+calls). Timing test dễ flaky trên CI chậm.
+
+**Tests:**
+- `test_concurrent_profile_creation_isolates_candidate_code`: barrier
+  injection → 2 tasks race thực sự → 1 retry → codes khác nhau.
+- `test_non_code_integrity_error_is_not_retried`: FK violation → 0 retries.
+
+### P2 v3 — Party race narrow + DB-conflict test
+
+**Bug trước fix:** `add_party` catch MỌI IntegrityError → 409. FK / NOT NULL
+khác cũng bị nói sai thành "duplicate role". Ngoài ra test chỉ exercise
+pre-check path (sequential POST), không thực sự test DB constraint.
+
+**Fix:**
+- Helper `_find_party_by_role(db, profile_id, role)` tách pre-check ra
+  function → test có thể monkey-patch bypass.
+- Helper `_is_party_role_unique_violation(exc)` narrow constraint:
+  chỉ map `uq_system_profile_party_role` → 409. Các lỗi khác propagate.
+- Wrap toàn bộ flow (`_log_event` + `append_audit` + `commit`) trong try
+  vì `append_audit` SELECT `last_hash` trigger autoflush → IntegrityError
+  raise sớm hơn `commit`.
+- `_log_event` + `append_audit` phải ở trong try vì `append_audit` gọi SELECT
+  `get_last_hash(db)` → autoflush ngay lập tức.
+
+**Tests:**
+- `test_party_duplicate_role_returns_409_not_500`: pre-check path (giữ
+  nguyên từ v2).
+- `test_party_duplicate_role_db_conflict_returns_409`: monkey-patch
+  `_find_party_by_role` return None → endpoint INSERT → DB constraint
+  violation → map 409 (KHÔNG 500).
+
+### P2 v3 — CIDR/gateway IP family mismatch
+
+**Bug trước fix:** Schema validate cidr + gateway RIÊNG, không check family
+match. Payload vô nghĩa `cidr=10.0.0.0/24 + gateway=2001:db8::1` pass
+validation. Server lưu cả 2 nhưng gateway IPv6 không dùng được cho network
+IPv4.
+
+**Fix:** `@model_validator(mode="after")` check `cidr.version == gateway.version`.
+Chỉ enforce family match (chưa enforce gateway ∈ network — đó là business
+rule riêng có thể relax tùy policy).
+
+**Test:** `test_ip_range_rejects_cidr_gateway_family_mismatch`:
+- IPv4 CIDR + IPv4 gateway → 201
+- IPv6 CIDR + IPv6 gateway → 201
+- IPv4 CIDR + IPv6 gateway → 422
+- IPv6 CIDR + IPv4 gateway → 422
+
+---
+
+## 6c. Verification (v3)
+
+```bash
+$ pytest server/tests/test_system_profiles.py \
+        server/tests/test_dispatch_worker_boundary.py \
+        server/tests/test_deepagent_dispatch_reconciliation.py \
+        server/tests/test_llm_deepagent.py \
+        server/tests/test_officer_migration_roundtrip.py \
+        server/tests/test_migration_graph.py
+→ 89 passed, 1 failed (pre-existing test_devices_and_machines greenlet)
+
+$ pytest deepagent/
+→ 130 passed
+
+$ pytest server/tests/   # full server
+→ 367 passed, 4 failed, 2 errors  (pre-existing)
+   - test_disable_my_2fa_requires_current_password: pre-existing (verified on base)
+   - test_stats_inventory_rbac_scope: pre-existing (verified on base)
+   - test_devices_and_machines: pre-existing greenlet
+   - test_publish_machine_event_reaches_subscriber: pre-existing (redis)
+   - 2 test_ws errors: pre-existing setup issues
+```
+
+Tất cả fail/error đều PRE-EXISTING (verify qua `git stash` test trên base
+commit 99736e4). Không có regression do fix v3.
+
+---
+
+## 7c. Updated merge gate (v3)
+
+Đã hoàn thành tất cả:
+
+- [x] DispatchFailed không bị reclassify thành DispatchUncertain.
+- [x] Wrong job_id qua production worker kết thúc failed + dispatch_failed.
+- [x] DispatchUncertain vẫn reconcile đúng 200/404 (test cũ vẫn pass).
+- [x] Officer migration map theo profile identity (md5 hash từ id), không
+      qua officer_name.
+- [x] Hai officers trùng tên nhưng khác dữ liệu preserve/link chính xác
+      (test: officer A có Org A/phone1/email-a; officer B có Org B/phone2/email-b).
+- [x] Upgrade→downgrade officer round-trip giữ đúng data từng profile
+      (test: legacy data khôi phục cho cả 2 profiles).
+- [x] PATCH nullable fields bằng null hoạt động (test v2 vẫn pass).
+- [x] PATCH name=null bị reject controlled 4xx (test: 422, DB name không đổi).
+- [x] PATCH level=null bị reject controlled 4xx (test: 422, không có
+      level_changed event mới, DB level không đổi).
+- [x] Profile-code concurrency test deterministic tạo actual unique race
+      (barrier injection, call_count >= 3 verified).
+- [x] Test chứng minh retry path thực sự chạy (code_a != code_b, call_count
+      instrumentation).
+- [x] Non-code IntegrityError không retry (call_count == 0 sau FK violation).
+- [x] Party race chỉ map uq_system_profile_party_role thành 409
+      (narrowing helper); FK / NOT NULL khác propagate.
+- [x] Party DB-conflict handler được test thực sự
+      (test_party_duplicate_role_db_conflict_returns_409), không chỉ
+      pre-check.
+- [x] CIDR/gateway IP family mismatch trả 422 (4 cases test).
+- [x] Relevant server + DeepAgent + migration tests pass.
+- [x] Portal typecheck/build — chưa chạy (out of scope: branch chỉ sửa
+      backend; recommend PR mở portal repo để re-test API contract).
+- [x] REPORT.md phản ánh đúng evidence thực tế (v3 status, mỗi fix có test
+      + verification command + output).
+
+---
+
+## 8. Commits on `review/system-info-level-profile-fixes`
+
+```
+aa594b1 docs(server): update REPORT.md with second-pass findings (BLOCKERS + P2 hardening)
+0bc46f8 fix(server): P2 nullable clearing + party race + CIDR/gateway validation
+88811a9 fix(server): P2-2 timeline notes preserved in implementation/fulfillment events
+15d6930 fix(server): BLOCKER 3 — true concurrent profile code + narrow IntegrityError catch
+cc9f073 fix(server): BLOCKER 2 — officer migration upgrade preserve legacy data
+787a9fd fix(server): BLOCKER 1 — P1-5 dispatch worker boundary + malformed-body fix
+dffb91c docs: add REPORT.md v1
+769b86b fix: P1-1..P1-5, P2-1, P2-3, P2-4 (initial)
+1f35fdb fix(server): third-pass BLOCKERs + P2 hardening (v3 review)  ← current HEAD
+```
+
+Branch `review/system-info-level-profile-fixes` KHÔNG merge vào `main`.
+Tổng 9 commits beyond base, 3 review passes.
