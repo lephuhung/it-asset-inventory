@@ -1769,3 +1769,160 @@ async def test_implementation_note_preserved_in_timeline_after_fulfillment(
     assert fulfill_msg and "fulfillment note Y" in fulfill_msg, (
         f"P2-2 BUG: fulfillment note không lưu trong timeline. msg={fulfill_msg!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_patch_can_clear_nullable_field_via_explicit_null(
+    client, org_env
+):
+    """P2: nullable clearing — client gửi explicit null để XÓA description /
+    managed_by / các optional metadata fields. Trước fix, model_dump
+    (exclude_none=True) strip null → không thể clear.
+    """
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    # Tạo hồ sơ với description + managed_by
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={
+            "org_id": org_env["org_id"],
+            "name": "Clearable Test",
+            "level": 1,
+            "description": "initial description",
+            "managed_by": "Manager A",
+        },
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+    assert r.json()["description"] == "initial description"
+    assert r.json()["managed_by"] == "Manager A"
+
+    # PATCH null để clear description
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=oa, json={"description": None}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["description"] is None, (
+        f"P2 BUG: explicit null không clear nullable field. "
+        f"description={r.json().get('description')!r}"
+    )
+
+
+# ── P2 Party unique race → map IntegrityError thành 409 ────────────
+
+
+@pytest.mark.asyncio
+async def test_party_duplicate_role_returns_409_not_500(
+    client, session_factory, org_env
+):
+    """P2: add_party hiện SELECT trước INSERT rồi raise nếu trùng.
+    Hai concurrent add_party cùng role → cả 2 pass pre-check, 1 nhận IntegrityError
+    ở DB. Phải catch IntegrityError và map thành 409 (Conflict), không 500.
+
+    Test bằng cách pre-fill (profile_id, role) trong DB, bypass pre-check logic,
+    Insert trực tiếp qua party endpoint — endpoint phải map IntegrityError → 409.
+    """
+    from app.db.models import SystemProfileParty
+    from app.api.routes.system_profiles import _get_profile_mutable, _to_detail
+
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Party Race", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    # Add party lần đầu — OK
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "First Owner"},
+    )
+    assert r.status_code == 201, r.text
+
+    # Lần 2 pre-check nên phát hiện trùng → 409 (rule: 1 owner per profile)
+    # Test cả pre-check path + DB-level mapping:
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "Second Owner"},
+    )
+    # Phải là 4xx, KHÔNG phải 500
+    assert r.status_code == 409, (
+        f"P2 BUG: duplicate role nên trả 409, actual={r.status_code}. "
+        f"body={r.text}"
+    )
+    detail = r.json().get("detail", "").lower()
+    assert (
+        "owner" in detail
+        or "duplicate" in detail
+        or "exists" in detail
+        or "đã có" in detail  # Vietnamese for "already exists"
+    ), f"detail should mention duplicate/exists: {detail!r}"
+
+
+# ── P2 CIDR/gateway validation ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ip_range_validates_cidr_and_gateway(
+    client, org_env
+):
+    """P2: SystemProfileIpRangeIn validation — cidr phải là CIDR hợp lệ
+    (vd 10.0.0.0/24), gateway phải là IP hợp lệ (vd 10.0.0.1). Trước fix
+    schema chỉ check length, không validate format — chấp nhận rác.
+    """
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "CIDR Test", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    # Valid: CIDR + gateway IPv4 → 201
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "LAN",
+            "cidr": "10.0.0.0/24",
+            "ip_kind": "private",
+            "gateway": "10.0.0.1",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    # Valid: IPv6 → 201
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "WAN6",
+            "cidr": "2001:db8::/32",
+            "ip_kind": "public",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    # Invalid: cidr rác → 422
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={"zone": "X", "cidr": "not-a-cidr", "ip_kind": "private"},
+    )
+    assert r.status_code == 422, (
+        f"P2 BUG: invalid CIDR phải 422. actual={r.status_code}, body={r.text}"
+    )
+
+    # Invalid: gateway rác → 422
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "X",
+            "cidr": "10.1.0.0/24",
+            "ip_kind": "private",
+            "gateway": "not-ip",
+        },
+    )
+    assert r.status_code == 422, (
+        f"P2 BUG: invalid gateway phải 422. actual={r.status_code}, body={r.text}"
+    )

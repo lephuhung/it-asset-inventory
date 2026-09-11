@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -650,7 +651,10 @@ async def update_profile(
     # (xem check `set(changes) - {"managed_by"}` ngay dưới). Việc khóa hồ sơ
     # sau approval đã được thực thi bởi child-resource endpoints (devices,
     # machines, parties, applications, ip_ranges, contacts) thông qua guard.
-    changes = body.model_dump(exclude_unset=True, exclude_none=True)
+    # P2 nullable clearing: dùng `exclude_unset=True` (bỏ field không gửi)
+    # nhưng GIỮ `None` explicit — cho phép client xóa nullable field qua JSON null.
+    # Các field business-rule không cho phép null (vd name, level) check riêng.
+    changes = body.model_dump(exclude_unset=True)
     # Số văn bản đề nghị + ngày văn bản có thể bổ sung sau, kể cả khi đã duyệt
     doc_fields = {f: changes.pop(f) for f in ("document_number", "document_date") if f in changes}
     if profile.status in (SystemProfileStatus.APPROVED.value, SystemProfileStatus.IMPLEMENTED.value, SystemProfileStatus.FULFILLED.value) and not is_super_admin(admin):
@@ -1391,7 +1395,17 @@ async def add_party(
     db.add(SystemProfileParty(profile_id=profile.id, **body.model_dump()))
     _log_event(db, profile, "party_added", f"Khai báo {'đơn vị chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
     await append_audit(db, action="system_profile.party.add", actor=str(admin.id), target=f"{profile.id}:{body.role}", ip=get_client_ip(request))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # P2 race: 2 concurrent add_party cùng role có thể cùng pass pre-check
+        # rồi 1 nhận IntegrityError tại unique constraint (profile_id, role).
+        # Không được trả 500 — phải map về 409 Conflict.
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Đã có bản ghi cho vai trò này (constraint violation).",
+        ) from exc
     profile = await _get_profile_mutable(db, profile_id, admin)
     assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
     return _to_detail(profile, None)

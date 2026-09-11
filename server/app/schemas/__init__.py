@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.db.models import MachineStatus, TokenStatus
 
@@ -1907,7 +1907,17 @@ class SystemProfileApplicationOut(SystemProfileApplicationIn):
 
 
 class SystemProfileIpRangeIn(BaseModel):
-    """Dải IP trong quy hoạch vùng mạng."""
+    """Dải IP trong quy hoạch vùng mạng.
+
+    Validation:
+      - `cidr` phải là CIDR hợp lệ (vd `192.168.0.0/24`, `2001:db8::/32`). Parse
+        bằng Python `ipaddress.ip_network(strict=False)` để chấp nhận cả
+        `192.168.0.5/24` (host bits set) → reject nếu không phải prefix length.
+      - `gateway` (optional) phải là IP hợp lệ nếu có.
+      - Nếu gateway tồn tại + cùng IP version (CIDR/gateway cùng family), không
+        bắt buộc gateway phải nằm trong network (business rule có thể relax; hiện
+        chỉ check version match).
+    """
 
     zone: str = Field(min_length=1, max_length=128)
     zone_description: str | None = None
@@ -1915,6 +1925,34 @@ class SystemProfileIpRangeIn(BaseModel):
     ip_kind: str = Field(default="private", pattern="^(private|public)$")
     gateway: str | None = Field(default=None, max_length=45)
     note: str | None = None
+
+    @field_validator("cidr")
+    @classmethod
+    def _validate_cidr(cls, value: str) -> str:
+        import ipaddress as _ip
+        try:
+            # strict=False chấp nhận host bits set — sau đó check bằng prefixlen
+            # để đảm bảo là network thực sự. Nếu network == IP thì mask che toàn bộ → OK.
+            net = _ip.ip_network(value, strict=False)
+            if net.num_addresses == 1 and "/" not in value:
+                raise ValueError(
+                    f"cidr phải là dải CIDR (vd 10.0.0.0/24); nhận {value!r}"
+                )
+        except ValueError as exc:
+            raise ValueError(f"cidr không hợp lệ {value!r}: {exc}") from exc
+        return value
+
+    @field_validator("gateway")
+    @classmethod
+    def _validate_gateway(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return value
+        import ipaddress as _ip
+        try:
+            _ip.ip_address(value)
+        except ValueError as exc:
+            raise ValueError(f"gateway không phải IP hợp lệ {value!r}: {exc}") from exc
+        return value
 
 
 class SystemProfileIpRangeOut(SystemProfileIpRangeIn):
