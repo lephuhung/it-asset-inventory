@@ -138,7 +138,10 @@ async def test_dispatch_4xx_is_definitive_failure(
     investigation_id = await _make_dispatchable_investigation(session_factory, seeded_env)
 
     async def fake_post(self, url, **kwargs):
-        return httpx.Response(401, json={"detail": "unauthorized"})
+        # Production-realistic: Response phải có `_request` set để raise_for_status()
+        # raise `HTTPStatusError` đúng. Fake không có → raise `RuntimeError`.
+        # Fix: gắn Request instance vào Response.
+        return httpx.Response(401, json={"detail": "unauthorized"}, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
@@ -266,7 +269,7 @@ async def test_dispatch_validation_422_is_definitive(
     investigation_id = await _make_dispatchable_investigation(session_factory, seeded_env)
 
     async def fake_post(self, url, **kwargs):
-        return httpx.Response(422, json={"detail": "invalid artifact"})
+        return httpx.Response(422, json={"detail": "invalid artifact"}, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
