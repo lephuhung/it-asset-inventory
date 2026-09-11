@@ -344,3 +344,75 @@ async def test_run_pending_investigations_malformed_response_body_keeps_uncertai
             f"hermes_status phải uncertain (chưa verify được job_id từ response). "
             f"actual={stored.hermes_status!r}"
         )
+
+
+# ── BLOCKER 1 v3 — DispatchFailed KHÔNG bị reclassify thành DispatchUncertain ─
+
+
+@pytest.mark.asyncio
+async def test_worker_wrong_job_id_remains_definitive_dispatch_failure(
+    seeded_env, session_factory, monkeypatch
+):
+    """BLOCKER 1 v3: HTTP 2xx + body.job_id != expected_job_id là DEFINITIVE
+    failure. Trước fix, code set status=failed rồi raise DispatchFailed
+    (subclass của LlmError → Exception). Nhưng except Exception phía dưới
+    check `inv.external_job_id is not None` → reclassify thành DispatchUncertain.
+    → state inconsistent: status=failed + hermes_status=dispatch_uncertain
+    + completed_at set. Worker catch DispatchUncertain → KHÔNG overwrite;
+    investigation bị stuck ở status=failed nhưng reconcile loop vẫn tưởng
+    uncertain.
+
+    Acceptance: qua production worker run_pending_investigations, row phải
+    kết thúc với status=failed + hermes_status=dispatch_failed +
+    completed_at NOT NULL, KHÔNG bị flip sang dispatch_uncertain.
+    """
+    import httpx
+    from app.core import config as config_mod
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(config_mod.settings, "deepagent_enabled", True)
+    monkeypatch.setattr(config_mod.settings, "deepagent_url", "http://deepagent.test/")
+    monkeypatch.setattr(config_mod.settings, "deepagent_api_key", "test-token")
+
+    inv_id, expected_job_id, _machine = await _make_pending_investigation(
+        session_factory, seeded_env
+    )
+
+    async def fake_post(self, url, **kwargs):
+        req = httpx.Request("POST", url)
+        # Trả 202 + body.job_id KHÁC expected_job_id → wrong-job-id path
+        return httpx.Response(
+            202,
+            json={"job_id": "deepagent-WRONG-uuid-XXX", "status": "accepted"},
+            request=req,
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    # Run production worker — dispatch helper raise, worker catch
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        stored = await db.get(DfirInvestigation, inv_id)
+        # Invariant: status=failed (terminal)
+        assert stored.status == "failed", (
+            f"BLOCKER 1 v3 BUG: wrong job_id path nên kết thúc status=failed, "
+            f"actual={stored.status!r}"
+        )
+        # Invariant: hermes_status=dispatch_failed (KHÔNG phải dispatch_uncertain)
+        assert stored.hermes_status == "dispatch_failed", (
+            f"BLOCKER 1 v3 BUG: DispatchFailed bị reclassify thành "
+            f"{stored.hermes_status!r} (dispatch_uncertain) — state inconsistent. "
+            f"Terminal failure phải có hermes=dispatch_failed, không phải "
+            f"dispatch_uncertain (vì completed_at đã set + status=failed)."
+        )
+        # Invariant: completed_at set
+        assert stored.completed_at is not None, (
+            f"BLOCKER 1 v3 BUG: completed_at không được set trong DispatchFailed. "
+            f"actual={stored.completed_at!r}"
+        )
+        # Invariant: error message được lưu
+        assert stored.error and "job ID không khớp" in stored.error, (
+            f"BLOCKER 1 v3 BUG: error message không được lưu. "
+            f"actual={stored.error!r}"
+        )

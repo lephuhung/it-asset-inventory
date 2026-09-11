@@ -553,3 +553,158 @@ async def test_officer_upgrade_then_downgrade_preserves_legacy_data(temp_db):
         assert row["officer_assigned_by"] == user_id
     finally:
         await conn.close()
+
+# ── BLOCKER 2 v3 — duplicate officer_name phải map đúng theo profile_id ─
+
+
+@pytest.mark.asyncio
+async def test_officer_upgrade_preserves_profiles_with_duplicate_officer_names(temp_db):
+    """BLOCKER 2 v3: hai profiles có CÙNG officer_name nhưng khác data phải
+    map sang 2 officer rows khác nhau, link đúng theo profile_id.
+
+    Trước fix: UPDATE join `WHERE sp.officer_name = i.name` nondeterministic
+    khi nhiều profiles cùng tên. Có thể: cả 2 profiles link về 1 officer,
+    officer còn lại orphan → mất data.
+
+    Acceptance:
+      - Pre: 2 profiles (A, B) với officer_name giống nhau, data khác.
+      - Sau upgrade: 2 officers rows, profile A officer_id != profile B
+        officer_id; data của mỗi officer khớp với profile tương ứng.
+    """
+    db_name, asyncpg_url = temp_db
+    sync_url = _alembic_url(asyncpg_url)
+
+    # Step 1: upgrade tới revision TRƯỚC (schema có officer_* legacy cols)
+    result = _run_alembic(["upgrade", PRIOR_REV], sync_url)
+    assert result.returncode == 0, result.stderr
+
+    conn = await asyncpg.connect(asyncpg_url)
+    user_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    await conn.execute(
+        "INSERT INTO organizations (id, name, type) VALUES ($1, 'dup-test', 'ubnd_xa')",
+        org_id,
+    )
+    await conn.execute(
+        """INSERT INTO users (id, org_id, full_name, email, role,
+           password_hash, is_active, is_2fa_enabled, created_at)
+           VALUES ($1, $2, 'Admin', 'admin@dup.vn', 'super_admin', 'x', true, false, now())""",
+        user_id, org_id,
+    )
+
+    # CÙNG officer_name, khác data
+    profile_a = uuid.uuid4()
+    profile_b = uuid.uuid4()
+    for prof_id, label in [(profile_a, "A"), (profile_b, "B")]:
+        org_label = f"Org {label}"
+        phone = f"090000000{ord(label) - ord('A') + 1}"  # "A" → 1, "B" → 2
+        email = f"{label.lower()}@org-{label.lower()}.vn"
+        await conn.execute(
+            """INSERT INTO system_profiles (
+                id, org_id, code, name, level, status,
+                officer_name, officer_organization, officer_title,
+                officer_phone, officer_email, officer_note,
+                officer_assigned_at, officer_assigned_by,
+                created_by, created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, 'Profile', 1, 'drafted',
+                'Nguyen Van A', $4, 'Manager',
+                $5, $6, $7,
+                now(), $8, $8, now(), now()
+            )""",
+            prof_id, org_id, f"HS-DUP-{label}", org_label, phone, email,
+            f"note for {label}", user_id,
+        )
+    await conn.close()
+
+    # Step 2: upgrade → 2 officers rows phải được tạo với data khác nhau
+    result = _run_alembic(["upgrade", OFFICER_REFACTOR_REV], sync_url)
+    assert result.returncode == 0, result.stderr
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        # Phải có đúng 2 officer rows
+        officers = await conn.fetch(
+            "SELECT * FROM officers ORDER BY created_at"
+        )
+        assert len(officers) == 2, (
+            f"BLOCKER 2 v3 BUG: expected 2 officer rows (one per profile), "
+            f"got {len(officers)}. Nondeterministic mapping có thể merge rows."
+        )
+        officer_ids = {o["id"] for o in officers}
+        assert len(officer_ids) == 2, (
+            f"BLOCKER 2 v3 BUG: officers phải có ID unique, got {officer_ids}"
+        )
+
+        # Verify profile → officer mapping
+        row_a = await conn.fetchrow(
+            "SELECT officer_id FROM system_profiles WHERE id = $1", profile_a
+        )
+        row_b = await conn.fetchrow(
+            "SELECT officer_id FROM system_profiles WHERE id = $1", profile_b
+        )
+        assert row_a["officer_id"] is not None, "Profile A phải có officer_id"
+        assert row_b["officer_id"] is not None, "Profile B phải có officer_id"
+        assert row_a["officer_id"] != row_b["officer_id"], (
+            f"BLOCKER 2 v3 BUG: 2 profiles cùng officer_name bị map về cùng "
+            f"officer_id={row_a['officer_id']}. Mỗi profile phải có officer "
+            f"riêng (officer_name là business data, không phải identity)."
+        )
+
+        # Verify data của mỗi officer khớp với profile tương ứng
+        officer_a = await conn.fetchrow(
+            "SELECT * FROM officers WHERE id = $1", row_a["officer_id"]
+        )
+        officer_b = await conn.fetchrow(
+            "SELECT * FROM officers WHERE id = $1", row_b["officer_id"]
+        )
+        assert officer_a["organization"] == "Org A", (
+            f"Profile A phải link officer Org A, got {officer_a['organization']}"
+        )
+        assert officer_a["phone"] == "0900000001", (
+            f"Profile A phone: {officer_a['phone']}"
+        )
+        assert officer_a["email"] == "a@org-a.vn", (
+            f"Profile A email: {officer_a['email']}"
+        )
+        assert officer_b["organization"] == "Org B", (
+            f"Profile B phải link officer Org B, got {officer_b['organization']}"
+        )
+        assert officer_b["phone"] == "0900000002"
+        assert officer_b["email"] == "b@org-b.vn"
+
+        # Legacy columns đã drop
+        cols = await _columns_of(conn, "system_profiles")
+        for legacy_col in (
+            "officer_name", "officer_organization", "officer_title",
+            "officer_phone", "officer_email", "officer_note",
+            "officer_assigned_at", "officer_assigned_by",
+        ):
+            assert legacy_col not in cols
+    finally:
+        await conn.close()
+
+    # Step 3: downgrade → legacy data khôi phục đúng cho từng profile
+    result = _run_alembic(["downgrade", "-1"], sync_url)
+    assert result.returncode == 0, result.stderr
+
+    conn = await asyncpg.connect(asyncpg_url)
+    try:
+        row_a = await conn.fetchrow(
+            "SELECT officer_organization, officer_phone, officer_email, officer_note "
+            "FROM system_profiles WHERE id = $1", profile_a,
+        )
+        row_b = await conn.fetchrow(
+            "SELECT officer_organization, officer_phone, officer_email, officer_note "
+            "FROM system_profiles WHERE id = $1", profile_b,
+        )
+        assert row_a["officer_organization"] == "Org A"
+        assert row_a["officer_phone"] == "0900000001"
+        assert row_a["officer_email"] == "a@org-a.vn"
+        assert row_a["officer_note"] == "note for A"
+        assert row_b["officer_organization"] == "Org B"
+        assert row_b["officer_phone"] == "0900000002"
+        assert row_b["officer_email"] == "b@org-b.vn"
+        assert row_b["officer_note"] == "note for B"
+    finally:
+        await conn.close()

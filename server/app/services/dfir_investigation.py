@@ -716,6 +716,14 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         # Đã được xử lý và set hermes_status + commit bên trên; re-raise để
         # worker biết ambiguous outcome.
         raise
+    except DispatchFailed:
+        # BLOCKER 1 v3: dispatch đã set status=failed + completed_at + error
+        # rồi raise DispatchFailed. KHÔNG reclassify — keep semantics:
+        # worker catch DispatchFailed → set status=failed (idempotent).
+        # Nếu để fall qua `except Exception`, `inv.external_job_id is not None`
+        # → reclassify thành DispatchUncertain, state inconsistent
+        # (status=failed + hermes=dispatch_uncertain + completed_at set).
+        raise
     except Exception as exc:
         # BLOCKER 1 follow-up: chỉ definitive failure khi lỗi xảy ra TRƯỚC khi
         # request được gửi đi (vd bad local config, validation body trước khi POST).

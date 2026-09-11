@@ -106,40 +106,64 @@ def upgrade() -> None:
         # Schema mới đã apply (re-run idempotent), không migrate.
         return
 
-    # Mỗi profile có officer_name NOT NULL → tạo officer row + link FK.
+    # BLOCKER 2 v3: join key phải là source profile id (system_profiles.id),
+    # KHÔNG officer_name. Nếu 2 profiles có cùng officer_name, mapping cũ
+    # dựa trên name sẽ nondeterministic: WHERE sp.officer_name = i.name có thể
+    # match nhiều rows trong inserted → UPDATE set officer_id = id đầu tiên
+    # cho CẢ 2 profiles, officer thứ 2 trở thành orphan. Mỗi profile phải
+    # map UNIQUE với một officer row — dùng profile.id làm identity key.
     # Profile có officer_name NULL → officer_id = NULL (giữ nguyên).
     # created_by fallback: dùng officer_assigned_by nếu user tồn tại;
-    # nếu NULL hoặc user_id không tồn tại → log warning + skip migration của row đó
+    # nếu NULL hoặc user_id không tồn tại → fallback về created_by
     # (an toàn hơn fail với FK violation).
     bind.execute(
         sa.text(
             """
-            WITH inserted AS (
-                INSERT INTO officers (id, name, organization, title, phone, email,
-                    note, created_by, created_at, updated_at)
+            WITH source AS (
+                -- Stable identity: mỗi source profile → một generated officer_id.
+                -- generated_id deterministic từ profile.id (md5) nhưng ổn định nếu
+                -- chạy lại migration (cùng profile.id → cùng officer_id).
                 SELECT
-                    gen_random_uuid(),
+                    sp.id AS profile_id,
+                    md5(sp.id::text || '-officer-migration')::uuid AS officer_id,
                     sp.officer_name,
                     sp.officer_organization,
                     sp.officer_title,
                     sp.officer_phone,
                     sp.officer_email,
                     sp.officer_note,
-                    COALESCE(
-                        (SELECT u.id FROM users u WHERE u.id = sp.officer_assigned_by LIMIT 1),
-                        sp.created_by  -- fallback: dùng creator nếu assigned_by invalid
-                    ),
-                    COALESCE(sp.officer_assigned_at, sp.updated_at, now()),
-                    COALESCE(sp.updated_at, now())
+                    sp.officer_assigned_by,
+                    sp.officer_assigned_at,
+                    sp.updated_at,
+                    sp.created_by
                 FROM system_profiles sp
                 WHERE sp.officer_name IS NOT NULL
                   AND sp.officer_name <> ''
-                RETURNING id, name
+            ),
+            inserted AS (
+                INSERT INTO officers (id, name, organization, title, phone, email,
+                    note, created_by, created_at, updated_at)
+                SELECT
+                    src.officer_id,
+                    src.officer_name,
+                    src.officer_organization,
+                    src.officer_title,
+                    src.officer_phone,
+                    src.officer_email,
+                    src.officer_note,
+                    COALESCE(
+                        (SELECT u.id FROM users u WHERE u.id = src.officer_assigned_by LIMIT 1),
+                        src.created_by
+                    ),
+                    COALESCE(src.officer_assigned_at, src.updated_at, now()),
+                    COALESCE(src.updated_at, now())
+                FROM source src
+                RETURNING id
             )
             UPDATE system_profiles sp
-            SET officer_id = i.id
-            FROM inserted i
-            WHERE sp.officer_name = i.name
+            SET officer_id = src.officer_id
+            FROM source src
+            WHERE sp.id = src.profile_id
               AND sp.officer_id IS NULL;
             """
         )

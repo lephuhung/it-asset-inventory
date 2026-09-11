@@ -1852,8 +1852,15 @@ class SystemProfileCreate(BaseModel):
 
 class SystemProfileUpdate(BaseModel):
     """Cập nhật hồ sơ — không cho sửa qua endpoint này khi đã approved
-    (trừ Super Admin, xử lý ở router)."""
+    (trừ Super Admin, xử lý ở router).
 
+    BLOCKER 3 v3: Contract nullable rõ ràng:
+      - `name`, `level` là NOT NULL trong DB. Explicit null bị reject 422.
+      - Các field khác (description, diagram_mermaid, v.v.) cho phép explicit
+        null để clear (nullable clearing feature).
+    """
+
+    # NOT NULL fields: explicit null phải raise validation error.
     name: str | None = Field(default=None, min_length=1, max_length=255)
     level: int | None = Field(default=None, ge=1, le=3)
     description: str | None = None
@@ -1866,6 +1873,22 @@ class SystemProfileUpdate(BaseModel):
     managed_by: str | None = Field(default=None, max_length=255)
     document_number: str | None = Field(default=None, max_length=128)
     document_date: date | None = None
+
+    @field_validator("name", "level")
+    @classmethod
+    def _no_explicit_null_for_required_fields(cls, value, info):
+        """BLOCKER 3 v3: name/level phải là giá trị thực (NOT NULL), KHÔNG null.
+
+        Trước fix: schema cho phép null; router setattr(field, None) → DB
+        IntegrityError / 500.
+        Sau fix: explicit null reject 422 controlled.
+        """
+        if value is None:
+            raise ValueError(
+                f"{info.field_name} không được null (DB NOT NULL); "
+                "để giữ nguyên, bỏ field khỏi body PATCH."
+            )
+        return value
 
 
 # ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ──
@@ -1953,6 +1976,29 @@ class SystemProfileIpRangeIn(BaseModel):
         except ValueError as exc:
             raise ValueError(f"gateway không phải IP hợp lệ {value!r}: {exc}") from exc
         return value
+
+    @model_validator(mode="after")
+    def _validate_cidr_gateway_same_family(self) -> "SystemProfileIpRangeIn":
+        """P2 v3: cidr và gateway phải cùng IP family (IPv4 hoặc IPv6).
+        Business rule hiện tại chỉ enforce family match (chưa enforce gateway ∈ network).
+        Document rõ nếu sau này muốn enforce membership.
+        """
+        if self.gateway is None or self.gateway == "":
+            return self
+        import ipaddress as _ip
+        try:
+            network = _ip.ip_network(self.cidr, strict=False)
+            gateway = _ip.ip_address(self.gateway)
+        except ValueError as exc:
+            # _validate_cidr / _validate_gateway đã catch các lỗi format; đến đây
+            # chỉ là safety net nếu validator bị skip.
+            raise ValueError(f"cidr/gateway format invalid: {exc}") from exc
+        if network.version != gateway.version:
+            raise ValueError(
+                f"cidr {self.cidr} (IPv{network.version}) và gateway {self.gateway} "
+                f"(IPv{gateway.version}) phải cùng IP family"
+            )
+        return self
 
 
 class SystemProfileIpRangeOut(SystemProfileIpRangeIn):

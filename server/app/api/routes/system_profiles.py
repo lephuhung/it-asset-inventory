@@ -554,6 +554,41 @@ def _is_unique_code_violation(exc: IntegrityError) -> bool:
     return constraint_name == "uq_system_profiles_org_code"
 
 
+async def _find_party_by_role(
+    db: AsyncSession, profile_id: uuid.UUID, role: str
+) -> SystemProfileParty | None:
+    """Tìm party row theo (profile_id, role). Tách thành helper để test có thể
+    monkey-patch bypass pre-check → exercise DB conflict path thực sự.
+    """
+    return (
+        await db.execute(
+            select(SystemProfileParty).where(
+                SystemProfileParty.profile_id == profile_id,
+                SystemProfileParty.role == role,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _is_party_role_unique_violation(exc: IntegrityError) -> bool:
+    """Tương tự _is_unique_code_violation, nhưng cho `uq_system_profile_party_role`.
+
+    P2 v3 narrowing: add_party catch IntegrityError quá rộng. Chỉ map constraint
+    này thành 409; các FK / NOT NULL khác phải propagate để caller thấy lỗi
+    thực (debug rõ hơn).
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return False
+    constraint_name = getattr(orig, "constraint_name", None)
+    if constraint_name is None:
+        msg = str(orig)
+        if "uq_system_profile_party_role" in msg:
+            return True
+        return False
+    return constraint_name == "uq_system_profile_party_role"
+
+
 @router.get("/stats", response_model=SystemProfileStats)
 async def profile_stats(
     db: AsyncSession = Depends(get_db),
@@ -1383,24 +1418,27 @@ async def add_party(
 ):
     profile = await _get_profile_mutable(db, profile_id, admin)
     assert_profile_content_mutable(profile, admin, action="mutate nội dung hồ sơ")
-    dup = (
-        await db.execute(
-            select(SystemProfileParty).where(
-                SystemProfileParty.profile_id == profile.id, SystemProfileParty.role == body.role
-            )
-        )
-    ).scalar_one_or_none()
+    # Pre-check duplicate role (UX friendly). Có thể bypass bằng monkeypatch
+    # `_find_party_by_role` trong test (DB constraint vẫn enforce ở commit).
+    dup = await _find_party_by_role(db, profile.id, body.role)
     if dup is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Đã có bản ghi cho vai trò này — hãy sửa thay vì thêm")
     db.add(SystemProfileParty(profile_id=profile.id, **body.model_dump()))
-    _log_event(db, profile, "party_added", f"Khai báo {'đơn vị chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
-    await append_audit(db, action="system_profile.party.add", actor=str(admin.id), target=f"{profile.id}:{body.role}", ip=get_client_ip(request))
+    # _log_event / append_audit / commit đều có thể trigger autoflush (audit log
+    # cần SELECT last_hash trước khi INSERT). Wrap toàn bộ flow trong try để
+    # catch IntegrityError ngay tại flush đầu tiên, KHÔNG chỉ ở commit.
     try:
+        _log_event(db, profile, "party_added", f"Khai báo {'đơn vị chủ quản' if body.role == 'owner' else 'đơn vị vận hành'}: {body.name}", admin)
+        await append_audit(db, action="system_profile.party.add", actor=str(admin.id), target=f"{profile.id}:{body.role}", ip=get_client_ip(request))
         await db.commit()
     except IntegrityError as exc:
-        # P2 race: 2 concurrent add_party cùng role có thể cùng pass pre-check
-        # rồi 1 nhận IntegrityError tại unique constraint (profile_id, role).
-        # Không được trả 500 — phải map về 409 Conflict.
+        # P2 race + v3 narrowing: chỉ map unique constraint
+        # `uq_system_profile_party_role` thành 409 Conflict. FK / NOT NULL /
+        # check constraint khác phải propagate (caller sẽ thấy 500 với detail
+        # lỗi cụ thể — chấp nhận được, vì đó là bug khác cần fix riêng).
+        if not _is_party_role_unique_violation(exc):
+            await db.rollback()
+            raise
         await db.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,

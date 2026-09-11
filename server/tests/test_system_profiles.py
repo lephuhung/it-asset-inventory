@@ -1483,35 +1483,34 @@ async def test_profile_code_generation_handles_concurrent_inserts(
 # ── BLOCKER 3 — P2-4 TRUE concurrent profile code creation ─────────────
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_concurrent_profile_creation_isolates_candidate_code(
-    session_factory, seeded_env
+    session_factory, seeded_env, monkeypatch
 ):
-    """BLOCKER 3: 2 transactions chạy SONG SONG cùng đọc max(seq) rồi INSERT,
-    mỗi session phải thấy 'next available code' tại thời điểm MÌNH generate,
-    KHÔNG phải race-condition dùng serial test trước.
+    """P2-4 v3: deterministic concurrent race test cho profile code generation.
 
-    Test hiện tại (test_profile_code_generation_handles_concurrent_inserts) chỉ
-    loop tuần tự 5 lần với cùng session sau khi commit — KHÔNG tái hiện race vì
-    transactions không concurrent.
+    Trước fix: test dùng barrier + sleep nhưng KHÔNG đảm bảo 2 transactions
+    CÙNG đọc MAX rồi mới insert — phụ thuộc scheduler ordering. Test có thể pass
+    do A insert xong B mới generate, không có race.
 
-    Approach: dùng 2 sessions ĐỘC LẬP, mỗi session tự gọi
-    `_create_profile_with_unique_code`. Sequence:
-      Session A: INSERT (commit) → max=001
-      Session B (BẮT ĐẦU trước khi commit A?)… không, đó là phương pháp khác.
+    Approach mới: monkey-patch `_generate_profile_code` với barrier chính xác
+    tại điểm "vừa đọc MAX seq, chưa return code":
+      1. Cả 2 tasks gọi `_create_profile_with_unique_code` → enter helper.
+      2. Helper gọi `_generate_profile_code` → wrapper barrier:
+         - task A: read MAX → pause
+         - task B: read MAX → pause
+         - release both → cả 2 cùng lúc tiếp tục với CÙNG candidate code
+      3. INSERT cả 2 → 1 succeed, 1 nhận IntegrityError → retry.
+      4. Assert: code_a != code_b, và _generate_profile_code call_count > 2
+         (chứng minh retry path thực sự fire).
 
-    Cách đơn giản nhưng hiệu quả cho race test:
-      Dùng 1 session làm "anchor", pre-insert 1 row để tồn tại 1 code.
-      Sau đó 2 sessions CÙNG LÚC generate candidate cùng lúc:
-      - Cả 2 thấy max(001) → candidate = 002
-      - Cả 2 INSERT
-      - 1 commit OK, 1 nhận IntegrityError → retry với 003
-      → End state: 002 + 003 (không phải 002 + 002, không phải 002 → retry cả 2 lần)
-
-    Dùng asyncio.gather() cho 2 sessions chạy concurrent trên 2 connections.
-    Sync barrier (asyncio.Event) đảm bảo cả 2 generate TRƛC khi 1 commit.
+    Nếu retry path KHÔNG fire: code_a == code_b (cùng candidate, 1 commit OK
+    → 2 rows với cùng code, unique violation skip → fail hoặc duplicate row).
     """
-    from app.db.models import Organization, OrgType, User, UserRole
+    import asyncio
     from app.core.security import hash_password
+    from app.db.models import User, UserRole, User as UserModel
+    from app.api.routes import system_profiles as sp_routes
 
     org_id = seeded_env["org_id"]
 
@@ -1527,148 +1526,105 @@ async def test_concurrent_profile_creation_isolates_candidate_code(
         await s.commit()
         creator_id = admin.id
 
-    # Pre-insert 1 anchor profile để có '001' trong DB
-    from app.api.routes.system_profiles import _create_profile_with_unique_code
-    from app.db.models import User as UserModel
+    # Pre-insert anchor profile để có '001' trong DB
     async with session_factory() as s:
         creator = await s.get(UserModel, creator_id)
-        anchor = await _create_profile_with_unique_code(
+        anchor = await sp_routes._create_profile_with_unique_code(
             s, org_id=org_id, creator=creator, name="Anchor", level=1,
         )
         await s.commit()
     anchor_code = anchor.code
 
-    # Barrier để sync 2 transactions
-    import asyncio
-    start_barrier = asyncio.Event()
-    both_ready = asyncio.Event()
-    race_started = False
+    # Monkey-patch _generate_profile_code với barrier chính xác.
+    # Khi cả 2 tasks đã "đọc MAX" (counter == 2), release both.
+    original_gen = sp_routes._generate_profile_code
+    call_count = 0
+    state = {"read_count": 0}
+    release_event = asyncio.Event()
 
-    candidates_seen = []
+    async def barriered_generate(db, org_id_arg):
+        nonlocal call_count
+        call_count += 1
+        # Gọi original để đọc MAX (logic bình thường)
+        result = await original_gen(db, org_id_arg)
+        # Đã "đọc MAX" — đợi barrier release
+        state["read_count"] += 1
+        if state["read_count"] >= 2:
+            release_event.set()
+        await release_event.wait()
+        return result
 
-    async def race_create():
-        nonlocal race_started
+    monkeypatch.setattr(sp_routes, "_generate_profile_code", barriered_generate)
+
+    # Release barrier: đợi cả 2 tasks arrive, sau đó yield thêm 50ms
+    # rồi set release (safety margin cho task reach wait()).
+    async def release_after_both_arrive():
+        while state["read_count"] < 2:
+            await asyncio.sleep(0.001)
+        await asyncio.sleep(0.05)
+        # release_event đã set bởi barriered_generate; không cần set lại
+
+    async def race_create(idx: int, started_event: asyncio.Event):
+        started_event.set()
         async with session_factory() as s:
-            creator = await s.get(UserModel, creator_id)
-
-            # Cả 2 tasks enter _generate_profile_code (qua _create_profile_with_unique_code)
-            # Tại đây đặt barrier để đồng bộ — đảm bảo cả 2 đọc MAX trước khi insert.
-            start_barrier.set()
-            await both_ready.wait()
-
-            profile = await _create_profile_with_unique_code(
-                s, org_id=org_id, creator=creator,
-                name=f"Race-{uuid.uuid4().hex[:6]}", level=1,
-            )
-            await s.commit()
-            return profile.code
-
-    async def ready_signal():
-        # Wait cho cả 2 tasks đã vào func, sau đó release barrier.
-        await start_barrier.wait()
-        both_ready.set()
-
-    # Schedule 2 concurrent creators + 1 trigger signal. Trigger signal chờ
-    # cho start_barrier (set bởi race_create đầu tiên) rồi set both_ready.
-    # Nhược: 2 race_create chạy song song; cả 2 set start_barrier; signal set both_ready
-    # ngay khi nhận 1 set. Không đảm bảo barrier chính xác — thay bằng pattern
-    # với 2 semaphore/Event có countdown.
-    # Dùng cách đơn giản hơn: count semaphore.
-    ready_count = 0
-    both_ready = asyncio.Event()
-
-    async def counted_ready(sema_release):
-        nonlocal ready_count
-        ready_count += 1
-        if ready_count >= 2:
-            both_ready.set()
-
-    async def race_create_counted(idx: int):
-        async with session_factory() as s:
-            creator = await s.get(UserModel, creator_id)
-            # Đợi "ready" barrier — counted
-            await sema_release
-            # cả 2 đã vào đến đây → generate & insert race
-            profile = await _create_profile_with_unique_code(
-                s, org_id=org_id, creator=creator,
+            profile = await sp_routes._create_profile_with_unique_code(
+                s, org_id=org_id,
+                creator=UserModel(id=creator_id),
                 name=f"Race-{idx}", level=1,
             )
             await s.commit()
             return profile.code
 
-    sema = asyncio.Semaphore(0)
-
-    async def go_a():
-        await counted_ready(sema.release())
-        return await race_create_counted(0)
-    # Reset for second task
-    async def go_b():
-        await counted_ready(sema.release())
-        return await race_create_counted(1)
-
-    # Vì cả 2 cần 'await sema.release()' để có 2 waiter cho sema, ta dùng 2 semaphore.
-    sema_a = asyncio.Semaphore(0)
-    sema_b = asyncio.Semaphore(0)
-
     started_a = asyncio.Event()
     started_b = asyncio.Event()
 
-    # Snapshot primitive values từ creator TRƯỚC khi fork tasks (tránh
-    # lazy-load sau khi session expire, dùng detached ORM creator).
-    creator_id_for_task = creator_id
+    async def go_a():
+        return await race_create(0, started_a)
 
-    async def go_a_v2():
-        started_a.set()
-        await sema_a.acquire()  # wait cho release
-        async with session_factory() as s:
-            # Re-fetch trong session mới nhưng pass primitive id only
-            profile = await _create_profile_with_unique_code(
-                s, org_id=org_id, creator=UserModel(id=creator_id_for_task),
-                name="Race-A", level=1,
-            )
-            await s.commit()
-            return profile.code
-    async def go_b_v2():
-        started_b.set()
-        await sema_b.acquire()
-        async with session_factory() as s:
-            profile = await _create_profile_with_unique_code(
-                s, org_id=org_id, creator=UserModel(id=creator_id_for_task),
-                name="Race-B", level=1,
-            )
-            await s.commit()
-            return profile.code
+    async def go_b():
+        return await race_create(1, started_b)
 
-    # Sync: đợi cả 2 started, sau đó release cùng lúc (race)
     async def coordinator():
         await started_a.wait()
         await started_b.wait()
-        # Yield để cả 2 reach sema.acquire()
-        await asyncio.sleep(0.05)
-        sema_a.release()
-        sema_b.release()
+        await release_after_both_arrive()
 
-    results = await asyncio.gather(
-        go_a_v2(), go_b_v2(), coordinator()
-    )
+    results = await asyncio.gather(go_a(), go_b(), coordinator())
     code_a, code_b = results[0], results[1]
+
+    # ASSERTION 1: codes khác nhau (chứng minh retry path thực sự fire)
+    assert code_a != code_b, (
+        f"P2-4 v3 BUG: 2 transactions cùng generate candidate, "
+        f"code_a={code_a}, code_b={code_b}. Nếu bằng nhau → retry path "
+        f"KHÔNG fire hoặc sequence không thực sự race."
+    )
+
+    # ASSERTION 2: call_count >= 3 (anchor + 2 race + 1 retry minimum)
+    assert call_count >= 3, (
+        f"P2-4 v3: _generate_profile_code phải được gọi ít nhất 3 lần "
+        f"(anchor + 2 race + retry). Got {call_count}."
+    )
+
+    # ASSERTION 3: cả 2 codes khác anchor (HS-2026-001)
+    assert code_a != anchor_code, f"code_a trùng anchor: {code_a}"
+    assert code_b != anchor_code, f"code_b trùng anchor: {code_b}"
 
 
 @pytest.mark.asyncio
 async def test_non_code_integrity_error_is_not_retried(
-    session_factory, seeded_env
+    session_factory, seeded_env, monkeypatch
 ):
-    """BLOCKER 3 narrowing: FK / NOT NULL / check constraint khác unique code
+    """P2-4 v3 hardening: FK / NOT NULL / check constraint khác unique code
     phải propagate ngay để caller biết, không lặp 5 lần.
 
-    Test bằng cách gọi `_create_profile_with_unique_code` với Invalid org_id
-    (FK violation với organizations) — phải raise ngay, không retry 5 lần.
+    Test dựa trên instrumentation (call_count) thay vì timing test (elapsed time
+    < 2s) — timing test dễ flaky. Verify _generate_profile_code chỉ được gọi
+    1 lần (không retry loop) khi FK violation xảy ra trước khi generate.
     """
     from app.core.security import hash_password
-    from app.db.models import User, UserRole
+    from app.db.models import User, UserRole, User as UserModel
+    from app.api.routes import system_profiles as sp_routes
     from sqlalchemy.exc import IntegrityError
-    import time
-    from app.api.routes.system_profiles import _create_profile_with_unique_code
 
     # Pre-create admin
     admin_email = f"nort-{uuid.uuid4().hex[:6]}@org.test"
@@ -1683,32 +1639,43 @@ async def test_non_code_integrity_error_is_not_retried(
         await s.commit()
         creator_id = admin.id
 
-    # Gọi helper với org_id KHÔNG tồn tại trong organizations (FK violation).
-    bogus_org_id = uuid.uuid4()  # không insert vào organizations
+    # Instrument _generate_profile_code: count calls. Nếu helper retry 5 lần,
+    # call_count sẽ là 5. Nếu propagate ngay, call_count = 1.
+    call_count = 0
+    original_gen = sp_routes._generate_profile_code
 
+    async def counting_gen(db, org_id_arg):
+        nonlocal call_count
+        call_count += 1
+        return await original_gen(db, org_id_arg)
+
+    monkeypatch.setattr(sp_routes, "_generate_profile_code", counting_gen)
+
+    # Gọi helper với org_id KHÔNG tồn tại (FK violation).
+    bogus_org_id = uuid.uuid4()
     async with session_factory() as s:
-        from app.db.models import User as UserModel
         creator = await s.get(UserModel, creator_id)
         from app.db.base import Base  # ensure models imported for FK resolution
-
-        t0 = time.monotonic()
         with pytest.raises(IntegrityError):
-            await _create_profile_with_unique_code(
+            await sp_routes._create_profile_with_unique_code(
                 s,
                 org_id=bogus_org_id,
                 creator=creator,
                 name="FK violation",
                 level=1,
             )
-        elapsed = time.monotonic() - t0
 
-    # FK error phải raise NGAY từ attempt 1, không retry 5 lần.
-    # Nếu retry 5 lần sẽ mất thời gian đáng kể (FK validation cycle each).
-    # Verify: thời gian thực < 1s (bound lỏng, không flaky).
-    assert elapsed < 2.0, (
-        f"FK violation mất {elapsed:.2f}s — quá chậm, có thể đã retry nhiều lần. "
-        "Helper phải propagate non-unique-code IntegrityError ngay."
+    # FK error raise NGAY từ attempt 1 → _generate_profile_code chỉ được gọi 0 lần
+    # (vì FK check ở INSERT trước khi đến _generate_profile_code... thực tế nó
+    # chạy trước). Điều kiện tối thiểu: call_count <= 1.
+    assert call_count <= 1, (
+        f"P2-4 v3 BUG: _generate_profile_code được gọi {call_count} lần cho "
+        f"FK violation — nghĩa là helper retry nhiều lần. Phải propagate "
+        f"IntegrityError ngay ở attempt 1."
     )
+
+
+# ── BLOCKER 3 v3 — PATCH null name/level phải bị reject ─
 
 
 # ── P2-2 timeline notes được bảo toàn ────────────────────────────
@@ -1926,3 +1893,196 @@ async def test_ip_range_validates_cidr_and_gateway(
     assert r.status_code == 422, (
         f"P2 BUG: invalid gateway phải 422. actual={r.status_code}, body={r.text}"
     )
+
+
+# ── BLOCKER 3 v3 — PATCH null name/level phải bị reject ─
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_null_name(client, org_env):
+    """BLOCKER 3 v3: PATCH name=None phải trả 422 (controlled), không 500.
+
+    DB name nullable=False; trước fix schema cho phép None → setattr → DB
+    IntegrityError → 500.
+    """
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Original Name", "level": 1},
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=oa, json={"name": None}
+    )
+    assert r.status_code == 422, (
+        f"BLOCKER 3 v3 BUG: PATCH name=null phải trả 422, actual={r.status_code}, body={r.text}"
+    )
+    assert "name" in r.text.lower() and "null" in r.text.lower(), (
+        f"detail should mention name + null: {r.text!r}"
+    )
+
+    # DB name không đổi
+    r = await client.get(f"/api/system-profiles/{pid}", headers=oa)
+    assert r.json()["name"] == "Original Name", (
+        f"DB name bị đổi sau PATCH null! got {r.json()['name']!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_null_level(client, org_env):
+    """BLOCKER 3 v3: PATCH level=None phải trả 422 và KHÔNG tạo bogus event.
+
+    Trước fix: PATCH level=None setattr → level_changed event log với new=None
+    trước khi DB constraint fail → pollute timeline.
+    """
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Level Test", "level": 1},
+    )
+    assert r.status_code == 201, r.text
+    pid = r.json()["id"]
+
+    r = await client.patch(
+        f"/api/system-profiles/{pid}", headers=oa, json={"level": None}
+    )
+    assert r.status_code == 422, (
+        f"BLOCKER 3 v3 BUG: PATCH level=null phải trả 422, actual={r.status_code}"
+    )
+    assert "level" in r.text.lower() and "null" in r.text.lower(), (
+        f"detail should mention level + null: {r.text!r}"
+    )
+
+    # DB level không đổi + KHÔNG có level_changed event mới
+    r = await client.get(f"/api/system-profiles/{pid}", headers=oa)
+    assert r.json()["level"] == 1, (
+        f"DB level bị đổi sau PATCH null! got {r.json()['level']!r}"
+    )
+    level_changed_events = [e for e in r.json()["events"] if e["event"] == "level_changed"]
+    assert not level_changed_events, (
+        f"BLOCKER 3 v3: PATCH level=null tạo bogus event level_changed: {level_changed_events}"
+    )
+
+
+# ── P2 v3 — party race narrow: chỉ uq_system_profile_party_role → 409 ─
+
+
+@pytest.mark.asyncio
+async def test_party_duplicate_role_db_conflict_returns_409(
+    client, session_factory, org_env, monkeypatch
+):
+    """P2 v3: test DB-conflict path thực sự (không qua pre-check).
+
+    Bypass pre-check bằng cách monkey-patch `_find_party_by_role` trả về None
+    → endpoint INSERT ngay → DB constraint `uq_system_profile_party_role` violation
+    → catch IntegrityError → map 409.
+    """
+    from app.api.routes import system_profiles as sp_routes
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "Party DB Race", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    # Tạo 1 party OK
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "First Owner"},
+    )
+    assert r.status_code == 201, r.text
+
+    # Bypass pre-check: trả về None (giả vờ không có duplicate)
+    async def fake_find(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(sp_routes, "_find_party_by_role", fake_find)
+
+    # Lần 2 INSERT sẽ gặp DB unique constraint violation → 409
+    r = await client.post(
+        f"/api/system-profiles/{pid}/parties", headers=oa,
+        json={"role": "owner", "name": "Second Owner"},
+    )
+    assert r.status_code == 409, (
+        f"P2 v3 BUG: DB-conflict path nên trả 409 (KHÔNG 500), actual={r.status_code}, "
+        f"body={r.text}"
+    )
+    assert "đã có" in r.text.lower() or "duplicate" in r.text.lower() or "constraint" in r.text.lower(), (
+        f"detail should mention duplicate/constraint: {r.text!r}"
+    )
+
+
+# ── P2 v3 — CIDR/gateway IP family mismatch ─
+
+
+@pytest.mark.asyncio
+async def test_ip_range_rejects_cidr_gateway_family_mismatch(client, org_env):
+    """P2 v3: cidr (IPv4) + gateway (IPv6) hoặc ngược lại phải bị reject 422."""
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    r = await client.post(
+        "/api/system-profiles", headers=oa,
+        json={"org_id": org_env["org_id"], "name": "CIDR Family", "level": 1},
+    )
+    pid = r.json()["id"]
+
+    # IPv4 CIDR + IPv6 gateway → 422
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "Z1",
+            "cidr": "10.0.0.0/24",
+            "ip_kind": "private",
+            "gateway": "2001:db8::1",
+        },
+    )
+    assert r.status_code == 422, (
+        f"P2 v3: IPv4 CIDR + IPv6 gateway phải bị 422, actual={r.status_code}, body={r.text}"
+    )
+
+    # IPv6 CIDR + IPv4 gateway → 422
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "Z2",
+            "cidr": "2001:db8::/32",
+            "ip_kind": "public",
+            "gateway": "10.0.0.1",
+        },
+    )
+    assert r.status_code == 422, (
+        f"P2 v3: IPv6 CIDR + IPv4 gateway phải bị 422, actual={r.status_code}, body={r.text}"
+    )
+
+    # IPv4 CIDR + IPv4 gateway (match) → 201
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "Z3",
+            "cidr": "192.168.1.0/24",
+            "ip_kind": "private",
+            "gateway": "192.168.1.1",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    # IPv6 CIDR + IPv6 gateway (match) → 201
+    r = await client.post(
+        f"/api/system-profiles/{pid}/ip-ranges", headers=oa,
+        json={
+            "zone": "Z4",
+            "cidr": "2001:db8:1::/48",
+            "ip_kind": "public",
+            "gateway": "2001:db8:1::1",
+        },
+    )
+    assert r.status_code == 201, r.text
