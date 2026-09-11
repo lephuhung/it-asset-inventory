@@ -515,6 +515,13 @@ async def _create_profile_with_unique_code(
             await db.flush()
             return profile
         except IntegrityError as exc:
+            # BLOCKER 3 narrowing: chỉ retry khi lỗi thuộc UNIQUE constraint
+            # `uq_system_profiles_org_code` (2 transactions race trên cùng code).
+            # FK / NOT NULL / check constraint khác phải propagate ngay để caller
+            # biết — không lặp 5 lần gây trễ + vẫn fail.
+            if not _is_unique_code_violation(exc):
+                await db.rollback()
+                raise
             last_error = exc
             await db.rollback()
             # Thử lại với code mới
@@ -522,6 +529,28 @@ async def _create_profile_with_unique_code(
     # Hết lần retry — vẫn trả IntegrityError để caller thấy
     assert last_error is not None
     raise last_error
+
+
+def _is_unique_code_violation(exc: IntegrityError) -> bool:
+    """Inspect IntegrityError.orig to determine if it's the unique constraint
+    `(org_id, code)` violation on system_profiles. Returns True nếu chỉ conflict
+    unique trên 2 cột đó, False cho FK / NOT NULL / check constraint khác.
+
+    PostgreSQL: IntegrityError.orig is asyncpg.exceptions.UniqueViolationError
+    (subclass of asyncpg.IntegrityConstraintError). constraint_name attribute
+    chứa tên constraint.
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return False
+    constraint_name = getattr(orig, "constraint_name", None)
+    if constraint_name is None:
+        # Thử parse từ message nếu attribute không có.
+        msg = str(orig)
+        if "uq_system_profiles_org_code" in msg:
+            return True
+        return False
+    return constraint_name == "uq_system_profiles_org_code"
 
 
 @router.get("/stats", response_model=SystemProfileStats)

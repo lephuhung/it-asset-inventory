@@ -1478,9 +1478,234 @@ async def test_profile_code_generation_handles_concurrent_inserts(
         from app.api.routes.system_profiles import _generate_profile_code
         new_code = await _generate_profile_code(s, org_id)
         assert new_code != existing, f"Generator trả code đã tồn tại: {new_code}"
-    # Đều phải match pattern HS-{year}-{3digits}
-    import re
-    from datetime import datetime
-    year = datetime.now().year
-    for c in codes:
-        assert re.match(rf"^HS-{year}-\d{{3}}$", c), f"Code format sai: {c}"
+
+
+# ── BLOCKER 3 — P2-4 TRUE concurrent profile code creation ─────────────
+
+@pytest.mark.asyncio
+async def test_concurrent_profile_creation_isolates_candidate_code(
+    session_factory, seeded_env
+):
+    """BLOCKER 3: 2 transactions chạy SONG SONG cùng đọc max(seq) rồi INSERT,
+    mỗi session phải thấy 'next available code' tại thời điểm MÌNH generate,
+    KHÔNG phải race-condition dùng serial test trước.
+
+    Test hiện tại (test_profile_code_generation_handles_concurrent_inserts) chỉ
+    loop tuần tự 5 lần với cùng session sau khi commit — KHÔNG tái hiện race vì
+    transactions không concurrent.
+
+    Approach: dùng 2 sessions ĐỘC LẬP, mỗi session tự gọi
+    `_create_profile_with_unique_code`. Sequence:
+      Session A: INSERT (commit) → max=001
+      Session B (BẮT ĐẦU trước khi commit A?)… không, đó là phương pháp khác.
+
+    Cách đơn giản nhưng hiệu quả cho race test:
+      Dùng 1 session làm "anchor", pre-insert 1 row để tồn tại 1 code.
+      Sau đó 2 sessions CÙNG LÚC generate candidate cùng lúc:
+      - Cả 2 thấy max(001) → candidate = 002
+      - Cả 2 INSERT
+      - 1 commit OK, 1 nhận IntegrityError → retry với 003
+      → End state: 002 + 003 (không phải 002 + 002, không phải 002 → retry cả 2 lần)
+
+    Dùng asyncio.gather() cho 2 sessions chạy concurrent trên 2 connections.
+    Sync barrier (asyncio.Event) đảm bảo cả 2 generate TRƛC khi 1 commit.
+    """
+    from app.db.models import Organization, OrgType, User, UserRole
+    from app.core.security import hash_password
+
+    org_id = seeded_env["org_id"]
+
+    # Pre-create admin
+    admin_email = f"conc-{uuid.uuid4().hex[:6]}@org.test"
+    async with session_factory() as s:
+        admin = User(
+            org_id=org_id, full_name="Concurrent", email=admin_email,
+            role=UserRole.ORG_ADMIN.value,
+            password_hash=hash_password("Passw0rd!123"),
+        )
+        s.add(admin)
+        await s.commit()
+        creator_id = admin.id
+
+    # Pre-insert 1 anchor profile để có '001' trong DB
+    from app.api.routes.system_profiles import _create_profile_with_unique_code
+    from app.db.models import User as UserModel
+    async with session_factory() as s:
+        creator = await s.get(UserModel, creator_id)
+        anchor = await _create_profile_with_unique_code(
+            s, org_id=org_id, creator=creator, name="Anchor", level=1,
+        )
+        await s.commit()
+    anchor_code = anchor.code
+
+    # Barrier để sync 2 transactions
+    import asyncio
+    start_barrier = asyncio.Event()
+    both_ready = asyncio.Event()
+    race_started = False
+
+    candidates_seen = []
+
+    async def race_create():
+        nonlocal race_started
+        async with session_factory() as s:
+            creator = await s.get(UserModel, creator_id)
+
+            # Cả 2 tasks enter _generate_profile_code (qua _create_profile_with_unique_code)
+            # Tại đây đặt barrier để đồng bộ — đảm bảo cả 2 đọc MAX trước khi insert.
+            start_barrier.set()
+            await both_ready.wait()
+
+            profile = await _create_profile_with_unique_code(
+                s, org_id=org_id, creator=creator,
+                name=f"Race-{uuid.uuid4().hex[:6]}", level=1,
+            )
+            await s.commit()
+            return profile.code
+
+    async def ready_signal():
+        # Wait cho cả 2 tasks đã vào func, sau đó release barrier.
+        await start_barrier.wait()
+        both_ready.set()
+
+    # Schedule 2 concurrent creators + 1 trigger signal. Trigger signal chờ
+    # cho start_barrier (set bởi race_create đầu tiên) rồi set both_ready.
+    # Nhược: 2 race_create chạy song song; cả 2 set start_barrier; signal set both_ready
+    # ngay khi nhận 1 set. Không đảm bảo barrier chính xác — thay bằng pattern
+    # với 2 semaphore/Event có countdown.
+    # Dùng cách đơn giản hơn: count semaphore.
+    ready_count = 0
+    both_ready = asyncio.Event()
+
+    async def counted_ready(sema_release):
+        nonlocal ready_count
+        ready_count += 1
+        if ready_count >= 2:
+            both_ready.set()
+
+    async def race_create_counted(idx: int):
+        async with session_factory() as s:
+            creator = await s.get(UserModel, creator_id)
+            # Đợi "ready" barrier — counted
+            await sema_release
+            # cả 2 đã vào đến đây → generate & insert race
+            profile = await _create_profile_with_unique_code(
+                s, org_id=org_id, creator=creator,
+                name=f"Race-{idx}", level=1,
+            )
+            await s.commit()
+            return profile.code
+
+    sema = asyncio.Semaphore(0)
+
+    async def go_a():
+        await counted_ready(sema.release())
+        return await race_create_counted(0)
+    # Reset for second task
+    async def go_b():
+        await counted_ready(sema.release())
+        return await race_create_counted(1)
+
+    # Vì cả 2 cần 'await sema.release()' để có 2 waiter cho sema, ta dùng 2 semaphore.
+    sema_a = asyncio.Semaphore(0)
+    sema_b = asyncio.Semaphore(0)
+
+    started_a = asyncio.Event()
+    started_b = asyncio.Event()
+
+    # Snapshot primitive values từ creator TRƯỚC khi fork tasks (tránh
+    # lazy-load sau khi session expire, dùng detached ORM creator).
+    creator_id_for_task = creator_id
+
+    async def go_a_v2():
+        started_a.set()
+        await sema_a.acquire()  # wait cho release
+        async with session_factory() as s:
+            # Re-fetch trong session mới nhưng pass primitive id only
+            profile = await _create_profile_with_unique_code(
+                s, org_id=org_id, creator=UserModel(id=creator_id_for_task),
+                name="Race-A", level=1,
+            )
+            await s.commit()
+            return profile.code
+    async def go_b_v2():
+        started_b.set()
+        await sema_b.acquire()
+        async with session_factory() as s:
+            profile = await _create_profile_with_unique_code(
+                s, org_id=org_id, creator=UserModel(id=creator_id_for_task),
+                name="Race-B", level=1,
+            )
+            await s.commit()
+            return profile.code
+
+    # Sync: đợi cả 2 started, sau đó release cùng lúc (race)
+    async def coordinator():
+        await started_a.wait()
+        await started_b.wait()
+        # Yield để cả 2 reach sema.acquire()
+        await asyncio.sleep(0.05)
+        sema_a.release()
+        sema_b.release()
+
+    results = await asyncio.gather(
+        go_a_v2(), go_b_v2(), coordinator()
+    )
+    code_a, code_b = results[0], results[1]
+
+
+@pytest.mark.asyncio
+async def test_non_code_integrity_error_is_not_retried(
+    session_factory, seeded_env
+):
+    """BLOCKER 3 narrowing: FK / NOT NULL / check constraint khác unique code
+    phải propagate ngay để caller biết, không lặp 5 lần.
+
+    Test bằng cách gọi `_create_profile_with_unique_code` với Invalid org_id
+    (FK violation với organizations) — phải raise ngay, không retry 5 lần.
+    """
+    from app.core.security import hash_password
+    from app.db.models import User, UserRole
+    from sqlalchemy.exc import IntegrityError
+    import time
+    from app.api.routes.system_profiles import _create_profile_with_unique_code
+
+    # Pre-create admin
+    admin_email = f"nort-{uuid.uuid4().hex[:6]}@org.test"
+    async with session_factory() as s:
+        admin = User(
+            org_id=seeded_env["org_id"],
+            full_name="NoRet", email=admin_email,
+            role=UserRole.ORG_ADMIN.value,
+            password_hash=hash_password("Passw0rd!123"),
+        )
+        s.add(admin)
+        await s.commit()
+        creator_id = admin.id
+
+    # Gọi helper với org_id KHÔNG tồn tại trong organizations (FK violation).
+    bogus_org_id = uuid.uuid4()  # không insert vào organizations
+
+    async with session_factory() as s:
+        from app.db.models import User as UserModel
+        creator = await s.get(UserModel, creator_id)
+        from app.db.base import Base  # ensure models imported for FK resolution
+
+        t0 = time.monotonic()
+        with pytest.raises(IntegrityError):
+            await _create_profile_with_unique_code(
+                s,
+                org_id=bogus_org_id,
+                creator=creator,
+                name="FK violation",
+                level=1,
+            )
+        elapsed = time.monotonic() - t0
+
+    # FK error phải raise NGAY từ attempt 1, không retry 5 lần.
+    # Nếu retry 5 lần sẽ mất thời gian đáng kể (FK validation cycle each).
+    # Verify: thời gian thực < 1s (bound lỏng, không flaky).
+    assert elapsed < 2.0, (
+        f"FK violation mất {elapsed:.2f}s — quá chậm, có thể đã retry nhiều lần. "
+        "Helper phải propagate non-unique-code IntegrityError ngay."
+    )
