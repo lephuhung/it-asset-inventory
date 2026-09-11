@@ -159,7 +159,12 @@ public sealed class EnrollCoordinator
         }
 
         // Token dùng 1 lần — xóa ngay sau enroll thành công
+        // AG-P2-01: PHẢI xóa cả trong in-memory config lẫn backing store (Registry
+        // trên Windows). Nếu chỉ clear in-memory, một tool khác (vd admin script)
+        // đọc Registry vẫn thấy token. Clear key `EnrollToken` dưới
+        // HKLM\SOFTWARE\OrgInventory để credential thực sự biến mất.
         _config.Token = null;
+        TryDeleteBootstrapTokenFromRegistry();
         _config.Save();
 
         _logger.LogInformation("Enroll thành công: machine_id={MachineId}, is_new={IsNew}, status={Status}, server={Server}",
@@ -209,5 +214,29 @@ public sealed class EnrollCoordinator
     private string? SafeHostname()
     {
         try { return Dns.GetHostName(); } catch { return Environment.MachineName; }
+    }
+
+    /// <summary>
+    /// AG-P2-01: Sau enroll thành công, xóa bootstrap token khỏi Windows Registry
+    /// (<c>HKLM\SOFTWARE\OrgInventory\EnrollToken</c>) để credential thực sự biến mất.
+    /// Best-effort: log warning nếu không xóa được, không fail enroll.
+    /// </summary>
+    private void TryDeleteBootstrapTokenFromRegistry()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\OrgInventory", writable: true);
+            if (key?.GetValue("EnrollToken") is null) return;
+            key.DeleteValue("EnrollToken", throwOnMissingValue: false);
+            _logger.LogInformation(
+                "AG-P2-01: Đã xóa bootstrap token khỏi Registry HKLM\\SOFTWARE\\OrgInventory\\EnrollToken.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "AG-P2-01: Không xóa được EnrollToken khỏi Registry (non-fatal, agent vẫn enrolled): {Msg}",
+                ex.Message);
+        }
     }
 }
