@@ -494,3 +494,179 @@ dffb91c docs: add REPORT.md v1
 
 Branch `review/system-info-level-profile-fixes` KHÔNG merge vào `main`.
 Tổng 9 commits beyond base, 3 review passes.
+
+---
+
+## 5d. Fourth pass — v4 fixes (final before merge review)
+
+Lần review thứ 4 xác nhận phần lớn blocker v1–v3 đã xử lý đúng; còn lại:
+1 merge blocker implementation, 1 operational P2, và một số
+verification/report inconsistencies. Mọi sửa đổi dưới đây đều là
+implementation + regression test TRƯỚC, report sau.
+
+### BLOCKER 1 v4 — Profile-code retry dùng full `db.rollback()` + đọc ORM creator sau rollback
+
+**Bug trước fix:** `_create_profile_with_unique_code()` snapshot `creator.id` /
+`creator.role` BÊN TRONG retry loop (comment nói snapshot trước loop nhưng
+implementation sai). Production route truyền persistent `User` load từ chính
+AsyncSession của request. Sau unique collision: `flush()` → IntegrityError →
+`db.rollback()` → rollback expire persistent ORM state → iteration tiếp theo
+đọc `creator.id` / `creator.role` trigger implicit refresh (async IO không mong
+đợi / MissingGreenlet). Test concurrency cũ không bắt được vì truyền transient
+`UserModel(id=creator_id)` — không giống production.
+
+**Fix** (`server/app/api/routes/system_profiles.py`):
+- Snapshot `creator_id` / `creator_role` / `is_super` TRƯỚC loop, TRƯỚC mọi
+  rollback. Không đọc lại ORM creator sau rollback.
+- Mỗi attempt chạy trong SAVEPOINT (`async with db.begin_nested()`): unique
+  collision chỉ rollback savepoint của attempt → outer transaction + session
+  state còn nguyên; object failed attempt được resurrect về transient (không
+  pollute). Non-unique IntegrityError propagate ngay (narrowing v3 giữ nguyên).
+
+**Regression test:** `test_concurrent_profile_code_retry_with_persistent_creator`
+(đổi tên từ `test_concurrent_profile_creation_isolates_candidate_code`):
+- Mỗi race task dùng session riêng + `await s.get(User, creator_id)` →
+  **persistent ORM creator giống production** (không còn `UserModel(id=...)`).
+- Barrier injection giữ nguyên: cả 2 tasks đọc MAX seq trước khi insert →
+  1 succeed, 1 unique-conflict → loser retry với code mới.
+- Assertions: `code_a != code_b`; `_generate_profile_code` được gọi `>= 3`
+  (**2 first attempts + ít nhất 1 retry** — anchor tạo trước khi monkeypatch,
+  không tính vào call_count; report v3 đếm "anchor + 2 race + retry" là SAI);
+  không MissingGreenlet.
+
+### P2 v4 — DeepAgent reconcile 401/403/400/422 giữ capacity vô hạn
+
+**Bug trước fix:** `_state_check_deepagent_job()` chỉ phân biệt 2xx / 404 /
+"mọi thứ khác". GET `/v1/jobs/{id}` trả 401/403/400/422 → keep
+`dispatch_uncertain` → status remains `analyzing` → capacity tính row này
+vô hạn. Token sai / contract lỗi = capacity starvation không hồi phục.
+
+**Fix** (`server/app/services/dfir_investigation.py`), chỉ áp dụng cho row đang
+`dispatch_uncertain`:
+- **401/403** — terminal auth/config failure → `status=failed`,
+  `hermes_status=reconcile_failed`, `completed_at` set, error ghi rõ → slot
+  released.
+- **400/422** — terminal protocol/request incompatibility → terminal
+  `reconcile_failed` như trên.
+- **408/429/5xx / network error** — vẫn transient (keep `dispatch_uncertain`),
+  NHƯNG có age bound (mục "bounded uncertain" dưới).
+
+### P2 v4 — Bounded uncertain reconciliation (age-based)
+
+`dispatch_uncertain` không được giữ slot vô hạn kể cả khi GET trả 5xx/timeout
+liên tục. Nếu `now - started_at > deepagent_reconcile_max_uncertain_seconds`
+(setting mới, default 1800s, không cần schema migration vì dùng `started_at`)
+→ terminal `reconcile_timeout`: `status=failed`, `completed_at` set, slot
+released. GET vẫn được thực hiện trước khi check age ở tick đó — age bound
+chặn cả trường hợp GET liên tục transient lẫn GET liên tục network-error.
+
+### P2 v4 — Worker exception clause rõ ràng
+
+`except (LlmError, Exception)` (redundant — Exception bao trùm LlmError) →
+tách thành `except DispatchFailed` (typed definitive failure, log + commit
+idempotent) rồi `except Exception` (unexpected). `DispatchUncertain` vẫn được
+bắt riêng trước đó. Typed state-machine semantics visible ở worker boundary.
+
+### Tests mới (worker-level, gọi `run_pending_investigations()` production path)
+
+| Test | Chứng minh |
+|---|---|
+| `test_reconcile_401_releases_capacity` | capacity=1; A uncertain + GET 401 → A failed + completed_at + reconcile_failed; B (pending) được claim + dispatched trong CÙNG tick — capacity release thực sự, không chỉ assert status. |
+| `test_reconcile_403_is_terminal` | GET 403 → terminal fail. |
+| `test_reconcile_422_is_terminal` | GET 422 → terminal fail. |
+| `test_reconcile_429_remains_uncertain` | GET 429 → vẫn analyzing + dispatch_uncertain + completed_at None. |
+| `test_reconcile_502_remains_uncertain` | GET 502 → vẫn analyzing + dispatch_uncertain. |
+| `test_reconcile_uncertain_age_timeout_releases_capacity` | uncertain 2h + GET vẫn 502 → reconcile_timeout terminal; B được dispatch cùng tick. |
+
+### Test quality fixes (v4)
+
+- `test_non_code_integrity_error_is_not_retried`: assert chặt
+  `call_count == 1` (helper LUÔN generate trước INSERT nên FK violation xảy ra
+  sau generation — deterministic), thay vì `call_count <= 1` lỏng.
+- Report v3 sai khi viết `call_count >= 3 = "anchor + 2 race + retry"`
+  (minimum theo cách đếm đó phải là 4). Đúng: monkeypatch đặt sau anchor →
+  `call_count >= 3` nghĩa là **2 first attempts + >= 1 retry**.
+
+---
+
+## 6d. Verification (v4)
+
+**Local verification: PASS (không regression). GitHub CI: NOT RUN** — workflow
+chỉ trigger `push`/`pull_request` vào `main`; branch này không push/merge.
+
+| Command | Result |
+|---|---|
+| `uv run pytest tests/test_system_profiles.py` (server/) | **39 passed**, 1 failed = `test_devices_and_machines` (pre-existing greenlet). |
+| `uv run pytest tests/test_dispatch_worker_boundary.py tests/test_deepagent_dispatch_reconciliation.py tests/test_llm_deepagent.py` | **48 passed** (gồm 6 test reconcile v4 + persistent-creator concurrency test). |
+| `uv run pytest tests/test_officer_migration_roundtrip.py tests/test_migration_graph.py` | **8 passed** (duplicate officer names vẫn preserve). |
+| `uv run pytest -q` (full server) | **371 passed, 6 failed, 2 errors** — TẤT CẢ pre-existing: `test_disable_my_2fa_requires_current_password`, `test_stats_inventory_rbac_scope`, `test_devices_and_machines`, `test_publish_machine_event_reaches_subscriber` (redis), `test_partition.py::test_rows_in_default_migrated_on_partition_create`, `test_phase4.py::test_report_pdf_export` (OSError cannot load lib), 2 errors `test_ws.py`. Hai failure đầu tiên chưa listed trong report v3 đã được verify pre-existing bằng cách chạy đúng command trên HEAD `485d57f` KHÔNG có thay đổi v4 → fail y hệt. |
+| `ruff check app tests` (server/) | 136 errors — **không đổi so với HEAD baseline** (pre-existing style). |
+| `uv run pytest -q` (deepagent/) | **130 passed**. |
+| `ruff check deepagent tests` (deepagent/) | 3 errors — không đổi so với baseline (pre-existing). |
+| `alembic heads` | 1 head (`b6c7d8e9f0a2`). Officer migration round-trip (upgrade → duplicate names preserve → downgrade → upgrade) cover qua 8 test trên. |
+| `npm ci && npm run typecheck` (portal/) | **FAIL — 5 TS errors** (`review_note`, `document_date`, `device_count`, `machine_count` không tồn tại trên type `SystemProfile` trong `app/(portal)/system-profiles/page.tsx`). **Pre-existing: fail y hệt (nhiều lỗi hơn) trên base commit `99736e4`** — type definitions portal thiếu field, không do review fixes. |
+| `npm run build` (portal/) | **FAIL — cùng nguyên nhân type errors** (Next build type check). Pre-existing như trên. |
+| `npm test` (portal/) | **26/28 passed**; 2 failed (`standalone-static-assets`, `MachineInvestigationPanel closed state`) — **fail y hệt trên base `99736e4`** → pre-existing. |
+
+Pre-existing failures được verify bằng: chạy đúng command trên commit
+`485d57f` (HEAD trước v4, không có thay đổi v4) hoặc base `99736e4` → cùng
+failure, cùng nguyên nhân.
+
+---
+
+## 7d. Updated merge gate (v4)
+
+- [x] Profile-code retry KHÔNG đọc persistent creator sau rollback
+      (SAVEPOINT per attempt + snapshot trước loop).
+- [x] Persistent-creator concurrency test pass
+      (`test_concurrent_profile_code_retry_with_persistent_creator`).
+- [x] Actual unique conflict retry path được deterministic exercise
+      (barrier injection, `code_a != code_b`).
+- [x] Non-code IntegrityError không retry (`call_count == 1`).
+- [x] DeepAgent reconcile 401 releases capacity (worker-level test với job B
+      được dispatch cùng tick).
+- [x] DeepAgent reconcile 403 releases capacity (terminal).
+- [x] DeepAgent reconcile 400/422 classified terminal.
+- [x] DeepAgent reconcile 408/429/5xx remains transient.
+- [x] Uncertain có age bound (`reconcile_timeout`) — slot không giữ vô hạn.
+- [x] Pending DeepAgent job có thể được claim sau terminal reconcile failure
+      (assert trong `test_reconcile_401_releases_capacity`).
+- [x] DispatchUncertain / DispatchFailed typed semantics vẫn pass regression
+      (48 worker/reconciliation/llm tests).
+- [x] Officer duplicate-name migration tests vẫn pass (8/8).
+- [x] Nullable PATCH tests vẫn pass.
+- [x] Party DB-conflict test vẫn pass.
+- [x] CIDR family tests vẫn pass.
+- [x] Full targeted server tests pass except proven pre-existing failures.
+- [x] DeepAgent tests pass (130/130).
+- [x] Portal typecheck/build **đã chạy và kết quả được ghi**: FAIL —
+      pre-existing trên base `99736e4`, KHÔNG phải regression của review
+      fixes. **Cần fix riêng portal type definitions trước khi merge tổng
+      (tracked ngoài scope review fixes này).**
+- [x] REPORT.md current HEAD đúng (xem dưới).
+- [x] REPORT.md local-vs-CI terminology đúng (Local PASS / GitHub CI NOT RUN).
+- [x] Không merge/push vào `main`.
+
+**HEAD:** fix v4 = `5c62b99` ("fix(server): v4 review — savepoint profile-code
+retry + DeepAgent reconcile terminal classification"); HEAD của branch sau
+commit report này là docs commit chứa section 5d–7d. Reviewer reviewed
+`485d57f`; mọi thay đổi sau đó nằm trong 2 commit trên
+`review/system-info-level-profile-fixes`.
+
+**Known operational risk còn lại (đã bound, không vô hạn):** uncertain jobs
+giữ slot tối đa `deepagent_reconcile_max_uncertain_seconds` (1800s default)
+trước khi bị chuyển `reconcile_timeout`. Không còn giữ vô hạn như trước.
+
+---
+
+## 8b. Commits v4 on `review/system-info-level-profile-fixes`
+
+```
+5c62b99 fix(server): v4 review — savepoint profile-code retry + DeepAgent reconcile terminal classification
+<this commit> docs(server): update REPORT.md with v4 fixes + corrected merge gate
+485d57f docs(server): update REPORT.md with v3 BLOCKERs + P2 hardening (third pass)
+1f35fdb fix(server): third-pass BLOCKERs + P2 hardening (v3 review)
+...
+```
+
+Branch `review/system-info-level-profile-fixes` KHÔNG merge vào `main`.
