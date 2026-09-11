@@ -49,10 +49,23 @@ public sealed class EnrollCoordinator
     /// <summary>
     /// Đảm bảo đã enroll. Trả true nếu enroll thành công (hoặc đã enroll từ trước).
     /// Tối đa 1 attempt/60s (tránh spam server khi token sai).
+    ///
+    /// AG-P1-02: nếu <c>ReenrollRequired = true</c> và KHÔNG có fresh token, KHÔNG retry
+    /// enroll (return false ngay). Khi admin ghi fresh token vào config.Token (qua MSI
+    /// property / --enroll-token / edit config.json), lần gọi kế tiếp sẽ enroll và clear
+    /// trạng thái reenroll.
     /// </summary>
     public async Task<bool> EnsureEnrolledAsync(CancellationToken ct)
     {
         if (AgentIdentity.IsEnrolled(_config)) return true;
+
+        // AG-P1-02: reenroll đang chờ token → KHÔNG spam /api/enroll. KHÔNG tính vào rate-limit
+        // nếu chưa có token — chờ admin. Caller (HeartbeatService) đã có check riêng trước khi
+        // gọi EnsureEnrolledAsync; double-check ở đây để đảm bảo idempotent.
+        if (AgentIdentity.IsReenrollPending(_config))
+        {
+            return false;
+        }
 
         lock (_lock)
         {
@@ -127,6 +140,8 @@ public sealed class EnrollCoordinator
         _config.Enrolled = true;
         _config.RenewAfter = response.RenewAfter;
         _config.LastEnrolledAt = DateTimeOffset.UtcNow;
+        // AG-P1-02: enroll thành công → clear trạng thái reenroll (nếu có).
+        _config.ReenrollRequired = false;
 
         // Lưu config server trả về (endpoint + interval/jitter + inventory interval)
         var changed = _config.ApplyServerSettings(

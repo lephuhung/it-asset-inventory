@@ -66,7 +66,17 @@ public sealed class HeartbeatService : BackgroundService
             {
                 if (!AgentIdentity.IsEnrolled(_config))
                 {
-                    await _enroll.EnsureEnrolledAsync(ct);
+                    // AG-P1-02: nếu reenroll đang chờ fresh token → không gọi /api/enroll,
+                    // chỉ log 1 lần per state-transition (KHÔNG spam). Coordinator sẽ
+                    // return false ngay; ta cũng không tăng rate-limit.
+                    if (AgentIdentity.IsReenrollPending(_config))
+                    {
+                        // Không log nữa (đã log ở lúc chuyển state); chờ admin issue token.
+                    }
+                    else
+                    {
+                        await _enroll.EnsureEnrolledAsync(ct);
+                    }
                 }
                 else
                 {
@@ -75,17 +85,26 @@ public sealed class HeartbeatService : BackgroundService
                     if (_cycleCount % CertCheckEvery == 0)
                     {
                         var status = AgentIdentity.Validate(_config, _keyStore);
-                        if (status == EnrollStatus.CertMissing)
+                        if (status == EnrollStatus.ReenrollRequired && !_config.ReenrollRequired)
                         {
+                            // AG-P1-02: phát hiện cert biến mất → đặt cờ reenroll + clear
+                            // trạng thái enrolled. KHÔNG cố tự enroll (không có token).
+                            // Chờ admin issue fresh bootstrap token để Coordinator xử lý.
                             _logger.LogCritical(
                                 "Client cert (thumbprint={Thumb}) không còn trong Windows Certificate Store. " +
                                 "Có thể OS được cài lại hoặc store bị xóa. " +
-                                "Đặt lại trạng thái enrollment để tự re-enroll.",
+                                "Đặt trạng thái REENROLL_REQUIRED. Agent sẽ KHÔNG tự enroll; " +
+                                "chờ admin issue fresh bootstrap token.",
                                 _config.ClientCertThumbprint);
-                            // Reset để EnsureEnrolledAsync chạy lại ở chu kỳ sau
                             _config.Enrolled = false;
                             _config.ClientCertThumbprint = null;
+                            _config.CertStoreLocation = null;
+                            _config.ReenrollRequired = true;
                             _config.Save();
+                        }
+                        else if (status == EnrollStatus.ReenrollRequired && _config.ReenrollRequired)
+                        {
+                            // Cert vẫn missing và reenroll đang chờ token → silent no-op.
                         }
                     }
                 }
