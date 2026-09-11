@@ -1483,29 +1483,31 @@ async def test_profile_code_generation_handles_concurrent_inserts(
 # ── BLOCKER 3 — P2-4 TRUE concurrent profile code creation ─────────────
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
-async def test_concurrent_profile_creation_isolates_candidate_code(
+async def test_concurrent_profile_code_retry_with_persistent_creator(
     session_factory, seeded_env, monkeypatch
 ):
-    """P2-4 v3: deterministic concurrent race test cho profile code generation.
+    """BLOCKER 1 v4: deterministic concurrent race test cho profile code generation
+    với **persistent ORM creator giống production**.
 
-    Trước fix: test dùng barrier + sleep nhưng KHÔNG đảm bảo 2 transactions
-    CÙNG đọc MAX rồi mới insert — phụ thuộc scheduler ordering. Test có thể pass
-    do A insert xong B mới generate, không có race.
+    Bug trước fix v4: helper dùng `db.rollback()` toàn transaction khi unique
+    collision → expire persistent ORM state. Production truyền persistent `User`
+    load từ chính AsyncSession — đọc lại `creator.id`/`creator.role` sau rollback
+    trigger implicit refresh (async IO không mong đợi / MissingGreenlet).
+    Test cũ không bắt được vì truyền transient `UserModel(id=creator_id)`.
 
-    Approach mới: monkey-patch `_generate_profile_code` với barrier chính xác
-    tại điểm "vừa đọc MAX seq, chưa return code":
+    Approach: mỗi race task mở session riêng và `s.get(User, creator_id)` để có
+    persistent creator; monkey-patch `_generate_profile_code` với barrier chính
+    xác tại điểm "vừa đọc MAX seq, chưa return code":
       1. Cả 2 tasks gọi `_create_profile_with_unique_code` → enter helper.
       2. Helper gọi `_generate_profile_code` → wrapper barrier:
          - task A: read MAX → pause
          - task B: read MAX → pause
          - release both → cả 2 cùng lúc tiếp tục với CÙNG candidate code
       3. INSERT cả 2 → 1 succeed, 1 nhận IntegrityError → retry.
-      4. Assert: code_a != code_b, và _generate_profile_code call_count > 2
-         (chứng minh retry path thực sự fire).
-
-    Nếu retry path KHÔNG fire: code_a == code_b (cùng candidate, 1 commit OK
-    → 2 rows với cùng code, unique violation skip → fail hoặc duplicate row).
+      4. Assert: code_a != code_b, và `_generate_profile_code` được gọi >= 3
+         (2 first attempts + ít nhất 1 retry — anchor được tạo TRƯỚC khi
+         monkeypatch nên không tính vào call_count).
+      5. Không có MissingGreenlet / implicit-refresh lỗi sau rollback.
     """
     import asyncio
     from app.core.security import hash_password
@@ -1567,9 +1569,14 @@ async def test_concurrent_profile_creation_isolates_candidate_code(
     async def race_create(idx: int, started_event: asyncio.Event):
         started_event.set()
         async with session_factory() as s:
+            # BLOCKER 1 v4: persistent ORM creator giống production — được load
+            # TỪ session này, không phải transient `UserModel(id=...)`. Nếu
+            # helper rollback toàn transaction và đọc lại creator.* sau đó,
+            # implicit refresh sẽ fail (MissingGreenlet) ở đây.
+            creator = await s.get(UserModel, creator_id)
             profile = await sp_routes._create_profile_with_unique_code(
                 s, org_id=org_id,
-                creator=UserModel(id=creator_id),
+                creator=creator,
                 name=f"Race-{idx}", level=1,
             )
             await s.commit()
@@ -1599,10 +1606,11 @@ async def test_concurrent_profile_creation_isolates_candidate_code(
         f"KHÔNG fire hoặc sequence không thực sự race."
     )
 
-    # ASSERTION 2: call_count >= 3 (anchor + 2 race + 1 retry minimum)
+    # ASSERTION 2: call_count >= 3 — monkeypatch đặt SAU khi anchor đã tạo,
+    # nên call_count chỉ đếm race tasks: 2 first attempts + ít nhất 1 retry.
     assert call_count >= 3, (
-        f"P2-4 v3: _generate_profile_code phải được gọi ít nhất 3 lần "
-        f"(anchor + 2 race + retry). Got {call_count}."
+        f"BLOCKER 1 v4: _generate_profile_code phải được gọi ít nhất 3 lần "
+        f"(2 first attempts + >= 1 retry). Got {call_count}."
     )
 
     # ASSERTION 3: cả 2 codes khác anchor (HS-2026-001)
@@ -1652,6 +1660,9 @@ async def test_non_code_integrity_error_is_not_retried(
     monkeypatch.setattr(sp_routes, "_generate_profile_code", counting_gen)
 
     # Gọi helper với org_id KHÔNG tồn tại (FK violation).
+    # Helper LUÔN gọi _generate_profile_code trước INSERT (generator chạy
+    # trước, FK check ở flush sau đó) → deterministic: generator được gọi
+    # đúng 1 lần, IntegrityError propagate ngay, KHÔNG retry.
     bogus_org_id = uuid.uuid4()
     async with session_factory() as s:
         creator = await s.get(UserModel, creator_id)
@@ -1665,13 +1676,12 @@ async def test_non_code_integrity_error_is_not_retried(
                 level=1,
             )
 
-    # FK error raise NGAY từ attempt 1 → _generate_profile_code chỉ được gọi 0 lần
-    # (vì FK check ở INSERT trước khi đến _generate_profile_code... thực tế nó
-    # chạy trước). Điều kiện tối thiểu: call_count <= 1.
-    assert call_count <= 1, (
-        f"P2-4 v3 BUG: _generate_profile_code được gọi {call_count} lần cho "
-        f"FK violation — nghĩa là helper retry nhiều lần. Phải propagate "
-        f"IntegrityError ngay ở attempt 1."
+    # FK error raise NGAY từ attempt 1 → generator chạy đúng 1 lần
+    # (luôn chạy trước INSERT), không retry nào xảy ra.
+    assert call_count == 1, (
+        f"BLOCKER 1 v4: _generate_profile_code phải được gọi đúng 1 lần cho "
+        f"FK violation (generator luôn chạy trước INSERT, propagate ngay, "
+        f"không retry). Got {call_count}."
     )
 
 

@@ -416,3 +416,224 @@ async def test_worker_wrong_job_id_remains_definitive_dispatch_failure(
             f"BLOCKER 1 v3 BUG: error message không được lưu. "
             f"actual={stored.error!r}"
         )
+
+# ── P2 v4 — Reconcile terminal vs transient classification ────────
+#
+# Bug trước fix: `_state_check_deepagent_job()` chỉ phân biệt 2xx / 404 /
+# "mọi thứ khác". GET /v1/jobs/{id} trả 401/403/400/422 → keep
+# dispatch_uncertain → status remains analyzing → capacity đếm row này vào
+# `analyzing` vô hạn (capacity starvation khi token sai / contract lỗi).
+
+
+async def _make_uncertain_investigation(session_factory, seeded_env) -> tuple[str, str]:
+    """Tạo investigation đang `analyzing` + `dispatch_uncertain` + external_job_id
+    (state sau 1 dispatch ambiguous). KHÔNG re-seed VelociraptorConfig/LlmConfig
+    (id=1 đã seed bởi `_make_pending_investigation`)."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime
+
+    from app.core.security import encrypt_aes_gcm  # noqa: F401 (consistency)
+
+    async with session_factory() as db:
+        admin = (
+            await db.execute(select(User).where(User.email == seeded_env["email"]))
+        ).scalar_one()
+        machine = Machine(
+            org_id=admin.org_id,
+            machine_uuid=f"unc-{uuid_mod.uuid4().hex[:8]}",
+            hostname="UNC-TEST",
+            status="online",
+        )
+        db.add(machine)
+        await db.flush()
+        from app.db.models import MachineCurrent
+
+        db.add(MachineCurrent(
+            machine_id=machine.id,
+            collected_at=datetime.now(UTC),
+            platform="windows",
+        ))
+        inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="C.unc-test",
+            artifacts=[],
+            status="analyzing",
+            external_orchestrator="deepagent",
+            hermes_status="dispatch_uncertain",
+            external_job_id=f"deepagent-job-{uuid_mod.uuid4().hex[:8]}",
+            started_at=datetime.now(UTC),
+            requested_by=admin.id,
+        )
+        db.add(inv)
+        await db.commit()
+        return str(inv.id), inv.external_job_id
+
+
+def _fake_get_status(status_code: int):
+    async def fake_get(self, url, **kwargs):
+        return httpx.Response(status_code, json={"detail": "fake"}, request=httpx.Request("GET", url))
+    return fake_get
+
+
+def _fake_post_202(job_id: str):
+    async def fake_post(self, url, **kwargs):
+        return httpx.Response(
+            202,
+            json={"job_id": job_id, "status": "accepted"},
+            request=httpx.Request("POST", url),
+        )
+    return fake_post
+
+
+@pytest.mark.asyncio
+async def test_reconcile_401_releases_capacity(
+    seeded_env, session_factory, monkeypatch
+):
+    """P2 v4 core test: GET /v1/jobs → 401 (token sai) là terminal auth/config
+    failure. Job A (analyzing + dispatch_uncertain) phải thoát khỏi `analyzing`
+    (status=failed + completed_at + hermes terminal) để job B (pending) được
+    claim/dispatch trong CÙNG tick — chứng minh capacity thực sự được release,
+    không chỉ assert status.
+    """
+    _enable_deepagent(monkeypatch)
+    monkeypatch.setattr(config_mod.settings, "deepagent_max_concurrent_jobs", 1)
+
+    b_id, _b_job, _ = await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _a_job = await _make_uncertain_investigation(session_factory, seeded_env)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(401))
+    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post_202(f"deepagent-{b_id}"))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+        b = await db.get(DfirInvestigation, b_id)
+
+    assert a.status == "failed", f"A phải terminal fail, actual={a.status!r}"
+    assert a.hermes_status == "reconcile_failed", (
+        f"A phải hermes terminal reconcile_failed, actual={a.hermes_status!r}"
+    )
+    assert a.completed_at is not None, "A phải có completed_at (slot released)"
+
+    # Capacity release: B (pending, capacity=1) phải được claim + dispatch
+    # trong cùng tick sau khi A thoát analyzing.
+    assert b.external_job_id is not None, "B phải được claim (external_job_id set)"
+    assert b.hermes_status == "dispatched", (
+        f"B phải được dispatch trong cùng tick sau khi A fail, "
+        f"actual={b.hermes_status!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_403_is_terminal(seeded_env, session_factory, monkeypatch):
+    """GET 403 → terminal: status=failed + completed_at, KHÔNG giữ uncertain."""
+    _enable_deepagent(monkeypatch)
+    # Seed LlmConfig/VelociraptorConfig để worker không skip tick
+    await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _ = await _make_uncertain_investigation(session_factory, seeded_env)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(403))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+    assert a.status == "failed"
+    assert a.hermes_status == "reconcile_failed"
+    assert a.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_422_is_terminal(seeded_env, session_factory, monkeypatch):
+    """GET 422 → terminal protocol incompatibility: status=failed + completed_at."""
+    _enable_deepagent(monkeypatch)
+    await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _ = await _make_uncertain_investigation(session_factory, seeded_env)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(422))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+    assert a.status == "failed"
+    assert a.hermes_status == "reconcile_failed"
+    assert a.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_429_remains_uncertain(seeded_env, session_factory, monkeypatch):
+    """GET 429 (rate limited) là transient → giữ dispatch_uncertain + analyzing,
+    KHÔNG set failed."""
+    _enable_deepagent(monkeypatch)
+    await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _ = await _make_uncertain_investigation(session_factory, seeded_env)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(429))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+    assert a.status == "analyzing", f"429 là transient — giữ analyzing, actual={a.status!r}"
+    assert a.hermes_status == "dispatch_uncertain"
+    assert a.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_502_remains_uncertain(seeded_env, session_factory, monkeypatch):
+    """GET 502 (bad gateway) là transient → giữ dispatch_uncertain + analyzing."""
+    _enable_deepagent(monkeypatch)
+    await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _ = await _make_uncertain_investigation(session_factory, seeded_env)
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(502))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+    assert a.status == "analyzing", f"502 là transient — giữ analyzing, actual={a.status!r}"
+    assert a.hermes_status == "dispatch_uncertain"
+    assert a.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_uncertain_age_timeout_releases_capacity(
+    seeded_env, session_factory, monkeypatch
+):
+    """P2 bounded uncertain (age-based bound): dispatch_uncertain kéo dài quá
+    `deepagent_reconcile_max_uncertain_seconds` tính từ `started_at` → terminal
+    `reconcile_timeout` (dù GET vẫn trả 502 transient) → slot released cho job B.
+    """
+    from datetime import timedelta
+
+    _enable_deepagent(monkeypatch)
+    monkeypatch.setattr(config_mod.settings, "deepagent_max_concurrent_jobs", 1)
+    monkeypatch.setattr(
+        config_mod.settings, "deepagent_reconcile_max_uncertain_seconds", 60
+    )
+
+    b_id, _b_job, _ = await _make_pending_investigation(session_factory, seeded_env)
+    a_id, _a_job = await _make_uncertain_investigation(session_factory, seeded_env)
+
+    # Giả lập uncertain đã kéo dài 2 giờ
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+        a.started_at = datetime.now(UTC) - timedelta(hours=2)
+        await db.commit()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _fake_get_status(502))
+    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post_202(f"deepagent-{b_id}"))
+
+    await inv_svc.run_pending_investigations()
+
+    async with session_factory() as db:
+        a = await db.get(DfirInvestigation, a_id)
+        b = await db.get(DfirInvestigation, b_id)
+
+    assert a.status == "failed", f"A phải terminal fail theo age bound, actual={a.status!r}"
+    assert a.hermes_status == "reconcile_timeout", (
+        f"A phải hermes reconcile_timeout, actual={a.hermes_status!r}"
+    )
+    assert a.completed_at is not None
+    # Capacity release: B được claim + dispatch trong cùng tick
+    assert b.external_job_id is not None
+    assert b.hermes_status == "dispatched"

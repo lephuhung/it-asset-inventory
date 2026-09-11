@@ -482,20 +482,24 @@ async def _create_profile_with_unique_code(
     """
     from sqlalchemy.exc import IntegrityError
 
+    # Snapshot các trường cần từ creator TRƯỚC retry loop và TRƯỚC BẤT KỲ
+    # rollback nào: production truyền persistent `User` được load từ chính
+    # AsyncSession của request. Sau rollback, ORM state persistent bị expire —
+    # đọc `creator.id` / `creator.role` lại sẽ trigger implicit refresh
+    # (async IO không mong đợi / MissingGreenlet trên AsyncSession).
+    creator_id = creator.id
+    creator_role = getattr(creator, "role", None)
+    is_super = creator_role in {"super_admin", "admin_global"}
+    # Super Admin có decision_number → approved ngay
+    status_value = (
+        SystemProfileStatus.APPROVED.value
+        if is_super and decision_number
+        else SystemProfileStatus.DRAFTED.value
+    )
+
     last_error: IntegrityError | None = None
     for _ in range(max_attempts):
         code = await _generate_profile_code(db, org_id)
-        # Super Admin có decision_number → approved ngay
-        # Snapshot các trường cần từ creator TRƯỚC khi vào retry loop để
-        # tránh lazy-load sau khi session expire (greenlet issue).
-        creator_id = creator.id
-        creator_role = getattr(creator, "role", None)
-        is_super = creator_role in {"super_admin", "admin_global"}
-        status_value = (
-            SystemProfileStatus.APPROVED.value
-            if is_super and decision_number
-            else SystemProfileStatus.DRAFTED.value
-        )
         profile = SystemProfile(
             org_id=org_id,
             code=code,
@@ -511,20 +515,26 @@ async def _create_profile_with_unique_code(
             reviewed_at=datetime.now(UTC) if is_super and decision_number else None,
             created_by=creator_id,
         )
-        db.add(profile)
         try:
-            await db.flush()
+            # BLOCKER 1 v4: mỗi attempt chạy trong SAVEPOINT (nested
+            # transaction). Unique collision chỉ rollback savepoint của attempt
+            # đó — outer transaction + session state (creator snapshot, các
+            # object khác đang pending của request) còn nguyên. Trước fix dùng
+            # `db.rollback()` toàn transaction → expire mọi persistent state.
+            async with db.begin_nested():
+                db.add(profile)
+                await db.flush()
             return profile
         except IntegrityError as exc:
             # BLOCKER 3 narrowing: chỉ retry khi lỗi thuộc UNIQUE constraint
             # `uq_system_profiles_org_code` (2 transactions race trên cùng code).
             # FK / NOT NULL / check constraint khác phải propagate ngay để caller
-            # biết — không lặp 5 lần gây trễ + vẫn fail.
+            # biết — không lặp 5 lần gây trễ + vẫn fail. Savepoint đã được
+            # rollback bởi context manager; failed profile của attempt bị
+            # resurrect về transient, không pollute session state.
             if not _is_unique_code_violation(exc):
-                await db.rollback()
                 raise
             last_error = exc
-            await db.rollback()
             # Thử lại với code mới
             continue
     # Hết lần retry — vẫn trả IntegrityError để caller thấy

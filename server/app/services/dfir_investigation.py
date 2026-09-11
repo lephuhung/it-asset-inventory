@@ -415,8 +415,22 @@ async def run_pending_investigations() -> dict:
                 # Vẫn count là "processed" để loop không retry sớm — nhưng
                 # trạng thái cuối cùng là dispatch_uncertain để reconcile phía sau.
                 processed.append(str(inv.id))
-            except (LlmError, Exception) as e:
-                # DispatchFailed hoặc unexpected — definitive failure.
+            except DispatchFailed as e:
+                # Typed state-machine exception — definitive failure.
+                # Helper đã set status=failed + completed_at + hermes status;
+                # worker boundary chỉ log + commit idempotent. Giữ clause riêng
+                # (không trộn vào generic Exception) để typed semantics visible.
+                err = f"{type(e).__name__}: {e}"
+                errors.append(f"{inv.id}: {err}")
+                logger.warning("Investigation %s dispatch failed definitively: %s", inv.id, err)
+                if inv.status != "failed":
+                    inv.status = "failed"
+                    inv.error = err[:2000]
+                    inv.completed_at = datetime.now(UTC)
+                    await db.commit()
+            except Exception as e:
+                # Unexpected — definitive failure (KHÔNG bao gồm
+                # DispatchUncertain vì clause trên đã bắt riêng).
                 err = f"{type(e).__name__}: {e}"
                 errors.append(f"{inv.id}: {err}")
                 logger.exception("Investigation %s failed", inv.id)
@@ -495,7 +509,15 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
         `dispatch_uncertain` + external_job_id (đã set)     → GET /v1/jobs/{id}:
             * 2xx → `dispatched` (job tồn tại, request đã tới DeepAgent).
             * 404 → `recovery_required` (job không tồn tại, re-dispatch an toàn).
-            * 5xx / network error → giữ nguyên `dispatch_uncertain`, retry tick sau.
+            * 401/403 → terminal auth/config failure → `reconcile_failed`
+              (status=failed + completed_at — giải phóng capacity slot).
+            * 400/422 → terminal protocol/request incompatibility →
+              `reconcile_failed` (status=failed + completed_at).
+            * 408/429/5xx / network error → giữ nguyên `dispatch_uncertain`,
+              retry tick sau — NHƯNG nếu `dispatch_uncertain` kéo dài quá
+              `deepagent_reconcile_max_uncertain_seconds` (age-based bound
+              tính từ `started_at`) → `reconcile_timeout` terminal để slot
+              không bị giữ vô hạn khi backend unhealthy kéo dài.
     """
     if not inv.external_job_id:
         dispatch_started_at = inv.started_at
@@ -510,6 +532,34 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
             inv.hermes_response = {"reason": "deepagent_dispatch_interrupted"}
             await db.commit()
             logger.warning("DeepAgent dispatch interrupted for investigation %s", inv.id)
+        return
+
+    # P2 bounded uncertain reconciliation: `dispatch_uncertain` không được giữ
+    # capacity slot vô hạn. Nếu uncertain kéo dài quá age bound (tính từ
+    # `started_at` lúc dispatch) — dù nguyên nhân là 5xx/timeout liên tục —
+    # chuyển terminal `reconcile_timeout` để giải phóng slot cho job mới.
+    # Age-based (dùng `started_at`) nên không cần schema migration.
+    uncertain = inv.hermes_status == "dispatch_uncertain"
+    if (
+        uncertain
+        and inv.started_at
+        and (datetime.now(UTC) - inv.started_at).total_seconds()
+        > settings.deepagent_reconcile_max_uncertain_seconds
+    ):
+        inv.status = "failed"
+        inv.hermes_status = "reconcile_timeout"
+        inv.error = (
+            "dispatch_uncertain không reconcile được sau "
+            f"{settings.deepagent_reconcile_max_uncertain_seconds}s — "
+            "DeepAgent backend có thể unhealthy kéo dài"
+        )[:2000]
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning(
+            "Investigation %s: dispatch_uncertain vượt age bound → reconcile_timeout "
+            "(giải phóng capacity slot)",
+            inv.id,
+        )
         return
     try:
         async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
@@ -543,10 +593,33 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
         return
 
     if response.status_code != 404:
-        # 5xx hoặc 4xx lạ từ DeepAgent — chưa rõ job có tồn tại hay không.
-        # Giữ nguyên `dispatch_uncertain`, retry tick sau.
+        if uncertain and response.status_code in (400, 401, 403, 422):
+            # P2 v4 terminal classification: đây là lỗi auth/config (401/403)
+            # hoặc protocol/request incompatibility (400/422) của GET
+            # reconciliation — KHÔNG BAO GIỜ thành công bằng cách retry.
+            # Nếu giữ dispatch_uncertain thì capacity lại tính row này vào
+            # `analyzing` vô hạn (capacity starvation). Terminal fail để
+            # thoát khỏi analyzing + giải phóng slot.
+            inv.status = "failed"
+            inv.hermes_status = "reconcile_failed"
+            inv.error = (
+                f"DeepAgent GET /v1/jobs/{inv.external_job_id} returned "
+                f"HTTP {response.status_code} — terminal auth/config hoặc "
+                "protocol incompatibility, không thể reconcile"
+            )[:2000]
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+            logger.error(
+                "Investigation %s: reconcile GET returned HTTP %s (terminal) → "
+                "reconcile_failed, capacity slot released",
+                inv.id, response.status_code,
+            )
+            return
+        # 408/429/5xx từ DeepAgent — chưa rõ job có tồn tại hay không.
+        # Giữ nguyên `dispatch_uncertain`, retry tick sau (age bound phía trên
+        # đảm bảo không giữ slot vô hạn).
         logger.warning(
-            "Investigation %s: GET returned HTTP %s (not 200/404); keep dispatch_uncertain",
+            "Investigation %s: GET returned HTTP %s (transient); keep dispatch_uncertain",
             inv.id, response.status_code,
         )
         return

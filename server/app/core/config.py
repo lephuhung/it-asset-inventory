@@ -181,6 +181,11 @@ class Settings(BaseSettings):
     deepagent_request_timeout_seconds: int = 30
     deepagent_default_lookback_hours: int = 24
     deepagent_max_concurrent_jobs: int = Field(default=2, ge=1, le=3)
+    # Age bound cho `dispatch_uncertain`: nếu GET /v1/jobs vẫn transient
+    # (5xx/408/429/timeout) sau khoảng này tính từ `started_at` → terminal
+    # `reconcile_timeout` để giải phóng capacity slot (không giữ slot vô hạn
+    # khi backend unhealthy kéo dài).
+    deepagent_reconcile_max_uncertain_seconds: int = Field(default=1800, ge=60)
 
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)
