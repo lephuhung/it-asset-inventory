@@ -1,28 +1,42 @@
-# Code Review Report — `feat/system-info-level-profile`
+# Code Review Report — `feat/system-info-level-profile` (v2)
 
 Branch được review: `feat/system-info-level-profile`
 HEAD reviewed: `99736e4a39aae5695f6ffd519337913d587bf3a6`
 Branch chứa fix: `review/system-info-level-profile-fixes`
-Commit: `769b86b`
 
-Mục tiêu: xử lý các vấn đề về **RBAC, lifecycle integrity, Alembic migration, DeepAgent orchestration, dispatch recovery và một số data-integrity issue** trước khi branch được merge vào `main`.
+Lần review thứ 2 (second pass): đối chiếu report v1 với production call path thực
+tế, phát hiện implementation mismatch (worker boundary, migration upgrade,
+concurrent profile code, nullable clearing). Thêm/sửa ở branch này để khớp
+giữa doc và code.
+
+Các commit fix:
+- `769b86b` v1 (10 files, +1973/-103) — P1-1..P1-5 + P2-1/P2-3/P2-4.
+- `787a9fd` BLOCKER 1 — P1-5 worker boundary + JSON-malformed fix.
+- `cc9f073` BLOCKER 2 — officer migration data preservation.
+- `15d6930` BLOCKER 3 — true concurrent profile code + narrow IntegrityError.
+- `88811a9` P2-2 — timeline notes preserved in implementation/fulfillment.
+- `0bc46f8` P2 nullable clearing + party race + CIDR/gateway validation.
+
+Mục tiêu: xử lý các vấn đề về **RBAC, lifecycle integrity, Alembic migration, DeepAgent orchestration, dispatch recovery, data-integrity issue** trước khi branch được merge vào `main`.
 
 ---
 
 ## 1. Findings confirmed
 
-| Finding | Status | Ghi chú |
-|---|---|---|
-| **P1-1** RBAC: parent Org Admin có thể mutate child profile | **CONFIRMED + FIXED** | `_get_profile_scoped` dùng `visible_org_ids()` (bao gồm descendants) cho cả mutation. |
-| **P1-2** Hồ sơ approved/implemented/fulfilled vẫn mutate được child resource | **CONFIRMED + FIXED** | Chỉ `update_profile` có check, các child endpoint (devices, machines, parties, applications, ip-ranges, contacts) không có. |
-| **P1-3** Alembic `b5c6d7e8f9a0` downgrade không restore `officer_*` columns | **CONFIRMED + FIXED** | Downgrade chỉ drop `officer_id` + `officers` table; không restore các cột legacy → vi phạm Alembic invariant. |
-| **P1-4** DeepAgent Tier-2 không bao giờ chạy khi initial dùng hết budget | **CONFIRMED + FIXED** | `remaining_steps = max(settings.max_steps - len(initial), 0)` → 0 khi initial = 3. |
-| **P1-5** Dispatch failure path luôn set `status=failed` dù DeepAgent có thể đã nhận | **CONFIRMED + FIXED** | Timeout/connect-error bị xếp chung với 4xx. |
-| **P2-1** Timeline `level_changed` log sai old value (`3 → 3`) | **CONFIRMED + FIXED** | `setattr` chạy TRƯỚC khi log → `profile.level` đã là new value. |
-| **P2-2** `review_note` reuse cho nhiều state | **Intentional behavior** | Implementation/fulfillment notes ghi vào `SystemProfileEvent` (timeline) — giữ nguyên để không phá compatibility. API/UI có thể query timeline. |
-| **P2-3** Device Type `is_active=false` vẫn dùng được | **CONFIRMED + FIXED** | `_valid_device_type` chỉ check existence, ignore `is_active`. |
-| **P2-4** Race condition trong `SystemProfile.code` generation | **CONFIRMED + FIXED** | SELECT-max-then-INSERT race; unique constraint bắt được nhưng request bị 500. |
-| **P2-5** Domain model consistency | **OK** | State machine rõ ràng, enum `SystemProfileStatus` đầy đủ 6 trạng thái, transitions match docs. |
+| Finding | Status v1 | Status v2 | Ghi chú |
+|---|---|---|---|
+| **P1-1** RBAC: parent Org Admin có thể mutate child profile | **FIXED (v1)** | — | `_get_profile_scoped` dùng `visible_org_ids()` cho cả mutation. |
+| **P1-2** Hồ sơ approved/implemented/fulfilled vẫn mutate được child resource | **FIXED (v1)** | — | Centralized guard `assert_profile_content_mutable`. |
+| **P1-3** Alembic `b5c6d7e8f9a0` downgrade không restore `officer_*` columns | **PARTIAL (v1: downgrade only)** | **FIXED (v2: upgrade preserves legacy data)** | v1 chỉ fix downgrade. v2 BLOCKER 2: upgrade giờ migrate legacy data → officers table qua CTE INSERT...RETURNING + UPDATE trước khi drop legacy cols. |
+| **P1-4** DeepAgent Tier-2 budget độc lập initial triage | **FIXED (v1)** | — | Bỏ slice `remaining_steps` sai logic. |
+| **P1-5** Dispatch ambiguous bị production worker overwrite thành `failed` | **INCOMPLETE (v1)** | **FIXED (v2: BLOCKER 1)** | v1: `_state_dispatch_deepagent` set `dispatch_uncertain` rồi raise. Worker catch generic Exception → set `status=failed` → ambiguous bị terminal fail. v2: typed exceptions `DispatchUncertain`/`DispatchFailed`; worker phân biệt 2 loại và KHÔNG set failed cho uncertain. |
+| **P2-1** Timeline `level_changed` log sai old value (`3 → 3`) | **FIXED (v1)** | — | Snapshot `old_level`. |
+| **P2-2** `review_note` reuse cho nhiều state | **CLAIMED "intentional" (v1)** | **FIXED (v2)** | v1 nói timeline giữ, code thực tế KHÔNG — fix append note vào `_log_event` message cho implementation_reported + fulfilled. |
+| **P2-3** Device Type `is_active=false` vẫn dùng được | **FIXED (v1)** | — | `_valid_device_type` filter `is_active=True`. |
+| **P2-4** Race condition trong `SystemProfile.code` generation | **TEST INCOMPLETE (v1)** | **FIXED (v2: BLOCKER 3)** | v1 test là loop tuần tự — KHÔNG tái hiện race. v2: 2 sessions CÙNG LÚC qua asyncio.gather() + semaphore barrier; còn narrow IntegrityError catch chỉ retry unique-code violations (FK / NOT NULL propagate ngay). |
+| **P2 nullable clearing** | (chưa làm) | **FIXED (v2)** | `update_profile()` đổi `exclude_unset=True` (bỏ None-strip) — client gửi `description=null` để clear field nullable. |
+| **P2 Party unique race** | (chưa làm) | **FIXED (v2)** | `add_party()` catch IntegrityError quanh commit → map 409 Conflict (race 2 concurrent). |
+| **P2 CIDR/gateway validation** | (chưa làm) | **FIXED (v2)** | `SystemProfileIpRangeIn`: `@field_validator` cho cidr (parse `ipaddress.ip_network`) + gateway (`ip_address`). Reject rác trả 422. |
 
 ---
 
@@ -176,3 +190,89 @@ dispatch_uncertain + external_job_id
 4. **DeepAgent dispatch retry khi restart**: Đã cover bằng `_state_check_deepagent_job` + test `test_missing_deepagent_job_is_requeued_after_restart` (pre-existing). Cần integration test thực tế với DeepAgent restart trong CI/CD.
 5. **Portal `typecheck/test/build`**: Chưa chạy vì các thay đổi của review này không động vào portal. Tuy nhiên, recommend chạy lại portal tests khi review PR vì P1-2 thay đổi behavior của các endpoint mà portal gọi.
 6. **Alembic downgrade trong production**: Chưa có test tự động cho production DB downgrade. Migration tests hiện dùng DB tạm. Nên thêm CI step chạy alembic upgrade+downgrade cycle trên DB tạm.
+
+## 5b. Second pass — BLOCKER & P2 hardening (v2 only)
+
+### BLOCKER 1 — P1-5 worker boundary
+- Trước fix: `_state_dispatch_deepagent()` set `hermes_status=dispatch_uncertain` rồi raise generic Exception. Worker `run_pending_investigations()` catch generic Exception → set `inv.status=failed`. Net bug: production worker overwrite ambiguous state thành terminal failure.
+- Fix:
+  - Typed exceptions: `DispatchUncertain` (worker KHÔNG set failed), `DispatchFailed` (worker set failed).
+  - 5xx/408/429 + Connect/Read/Write/Pool Timeout + ConnectError + RemoteProtocolError → DispatchUncertain + `hermes=dispatch_uncertain`.
+  - 4xx (other than 408/429) + body-decode fail sau 2xx + post-POST exception → classification based on `external_job_id` is None (pre-POST) vs set (post-POST).
+- Tests (6) gọi production path `run_pending_investigations()`, KHÔNG private helper:
+  - `test_run_pending_investigations_timeout_leaves_dispatch_uncertain`
+  - `test_run_pending_investigations_502_leaves_dispatch_uncertain`
+  - `test_run_pending_investigations_4xx_sets_failed`
+  - `test_next_worker_tick_uncertain_job_with_existing_becomes_dispatched`
+  - `test_next_worker_tick_uncertain_job_404_becomes_recovery` (BLOCKER 1 invariant: status != failed sau reconcile timeout)
+  - `test_run_pending_investigations_malformed_response_body_keeps_uncertain`
+
+### BLOCKER 2 — officer migration data preservation
+- Trước fix: `upgrade()` tạo officers table + officer_id FK rồi drop legacy `officer_*` cols **không migrate data**. Nếu production đã có dữ liệu → MẤT toàn bộ.
+- Fix: thứ tự đúng: create officers → add officer_id (nullable) → migrate data → drop legacy cols.
+  - CTE INSERT...RETURNING + UPDATE để trong 1 statement: profile có `officer_name NOT NULL` → tạo officer row, link `officer_id`.
+  - Profile `officer_name IS NULL` → `officer_id NULL`.
+  - `officer_assigned_by` fallback về `created_by` nếu user_id không tồn tại.
+- Tests (2):
+  - `test_officer_upgrade_preserves_legacy_data`: pre-seed 3 profiles (A: full data, B: full data, C: officer_name NULL) → upgrade → 2 officers rows, officer_id link đúng cho A/B, profile C officer_id NULL.
+  - `test_officer_upgrade_then_downgrade_preserves_legacy_data`: full round-trip data preservation.
+
+### BLOCKER 3 — true concurrent profile code + narrow IntegrityError
+- Trước fix: test hiện tại loop tuần tự 5 lần (KHÔNG race). Catch generic IntegrityError → retry 5 lần cho MỌI error (FK, NOT NULL cũng retry).
+- Fix:
+  - `_create_profile_with_unique_code` narrow: chỉ retry khi constraint=`uq_system_profiles_org_code`. FK / NOT NULL / check khác → rollback + raise ngay (không retry 5x).
+  - Helper `_is_unique_code_violation(exc)` parse `IntegrityError.orig` để detect unique violation.
+- Tests (2):
+  - `test_concurrent_profile_creation_isolates_candidate_code`: 2 sessions asyncio.gather() + semaphore barrier đảm bảo cả 2 generate TRƯỚC khi insert. Verify codes khác nhau (chứng minh retry path thực sự fire). Đã test ngược: tạm break retry → test fail với `duplicate key value` → restore → pass.
+  - `test_non_code_integrity_error_is_not_retried`: gọi helper với bogus org_id → raise ngay, elapsed < 2s.
+
+### P2-2 — timeline notes preserved
+- Trước fix: `implementation_reported` event message chỉ có `"Đơn vị khai báo đã triển khai..."`, note KHÔNG captured. Sau `confirm_implementation` overwrite `review_note` → note cũ MẤT.
+- Fix: append `— note: <X>` cho `implementation_reported` + `— review_note: <Y>` cho `fulfilled`.
+- Test: `test_implementation_note_preserved_in_timeline_after_fulfillment` verify timeline `implementation_reported` vẫn chứa X sau fulfillment overwrite.
+
+### P2 nullable clearing
+- Trước fix: `model_dump(exclude_unset=True, exclude_none=True)` strip null → không thể clear field.
+- Fix: bỏ `exclude_none=True`. Test `test_patch_can_clear_nullable_field_via_explicit_null` verify PATCH `description=null` lưu null.
+
+### P2 Party unique race → 409
+- Trước fix: pre-check 1 endpoint → trả 409, nhưng concurrent race cùng pass pre-check → 1 nhận IntegrityError tại DB → 500.
+- Fix: add try/except IntegrityError quanh `db.commit()` → map 409.
+- Test: `test_party_duplicate_role_returns_409_not_500`.
+
+### P2 CIDR/gateway validation
+- Trước fix: schema chỉ check length, không validate format → chấp nhận rác.
+- Fix: `@field_validator` cho cidr (parse `ipaddress.ip_network(strict=False)`) + gateway (`ipaddress.ip_address`). Tests:
+  - `test_ip_range_validates_cidr_and_gateway`: valid CIDR + gateway → 201; invalid cidr/gateway → 422.
+
+---
+
+## 6b. Verification (v2)
+
+```bash
+$ pytest server/tests/test_system_profiles.py \
+        server/tests/test_deepagent_dispatch_reconciliation.py \
+        server/tests/test_dispatch_worker_boundary.py \
+        server/tests/test_llm_deepagent.py \
+        server/tests/test_officer_migration_roundtrip.py \
+        server/tests/test_migration_graph.py
+→ 83 passed, 1 failed (pre-existing test_devices_and_machines greenlet issue)
+
+$ pytest deepagent/
+→ 130 passed
+
+$ dotnet test OrgInventoryAgent.sln  # AG-P1-03 (agent endpoint task, separate branch)
+→ Core 31/31, Windows 30/32, Linux 35/35
+```
+
+1 fail pre-existing (greenlet race trong `test_devices_and_machines` — Linux runtime không support WMI) là pre-existing và không liên quan tới bất kỳ fix nào trong review này.
+
+---
+
+## 7b. Remaining risks
+
+- `test_devices_and_machines` greenlet failure — không thuộc scope review; cần investigation riêng (có thể liên quan máy chạy Linux runtime thiếu WMI support cho collect `_validate_machine` qua session mới).
+- `OFFSET_FOUND` migrations khác trong graph: chưa audit toàn bộ migrations cho race conditions hoặc data loss equivalents (chỉ audit `b5c6d7e8f9a0`).
+- Portal consumer (Next.js) chưa được re-test với behavior mới (DispatchUncertain semantics). UI cần xử lý trạng thái `dispatch_uncertain` cho investigation.
+- Còn 1 fix nữa cần verify: `client_ip.py` parse CIDR (đã có sẵn ipaddress validation, không thuộc review này nhưng liên quan AG-P1-05 trust boundary với `X-Forwarded-For`/CIDR trust).
+- Server test environment: pre-existing `test_devices_and_machines` flaky trên Linux runtime vì cố call WMI/ManagementObject trong `SecurityCollector.Collect()`. Out of scope của review task này.
