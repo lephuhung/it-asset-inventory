@@ -1709,3 +1709,63 @@ async def test_non_code_integrity_error_is_not_retried(
         f"FK violation mất {elapsed:.2f}s — quá chậm, có thể đã retry nhiều lần. "
         "Helper phải propagate non-unique-code IntegrityError ngay."
     )
+
+
+# ── P2-2 timeline notes được bảo toàn ────────────────────────────
+
+
+async def test_implementation_note_preserved_in_timeline_after_fulfillment(
+    client, org_env, session_factory
+):
+    """P2-2: report_implementation với note X → timeline event chứa X.
+    Sau đó confirm_implementation với note Y → timeline có cả X và Y
+    (history immutable), dù profile.review_note chỉ giữ Y (latest).
+    """
+    await _seed_requirements(session_factory, [(1, "L1-P22", "Yêu cầu P2-2")])
+    sa = _auth(await _login(client, org_env["email"], org_env["password"]))
+    oa = _auth(await _login(client, org_env["org_admin_email"], "Passw0rd!123"))
+
+    pid = await _approved_profile(client, org_env, oa, sa)
+    row = (await _get_profile(client, sa, pid))["requirements"][0]["id"]
+
+    await client.post(f"/api/system-profiles/{pid}/requirements/{row}/request", headers=oa, json={"evidence": "OK"})
+    r = await client.post(f"/api/system-profiles/{pid}/requirements/{row}/review", headers=sa, json={"action": "verify"})
+    assert r.json()["level_compliant"] is True
+
+    r = await client.post(
+        f"/api/system-profiles/{pid}/report-implementation",
+        headers=oa,
+        json={"note": "implementation note from unit X"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["review_note"] == "implementation note from unit X"
+
+    impl_events = [e for e in r.json()["events"] if e["event"] == "implementation_reported"]
+    assert impl_events and "implementation note from unit X" in impl_events[0]["message"], (
+        f"P2-2 BUG: implementation note không được lưu trong timeline event. "
+        f"actual msg={impl_events[0]['message'] if impl_events else '(no event)'!r}"
+    )
+
+    r = await client.post(
+        f"/api/system-profiles/{pid}/confirm-implementation",
+        headers=sa,
+        json={"review_note": "fulfillment note Y"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["review_note"] == "fulfillment note Y"
+
+    all_events = r.json()["events"]
+    impl_msg = next(
+        (e["message"] for e in all_events if e["event"] == "implementation_reported"),
+        None,
+    )
+    fulfill_msg = next(
+        (e["message"] for e in all_events if e["event"] == "fulfilled"),
+        None,
+    )
+    assert impl_msg and "implementation note from unit X" in impl_msg, (
+        f"P2-2 BUG: implementation note bị mất sau fulfillment. msg={impl_msg!r}"
+    )
+    assert fulfill_msg and "fulfillment note Y" in fulfill_msg, (
+        f"P2-2 BUG: fulfillment note không lưu trong timeline. msg={fulfill_msg!r}"
+    )

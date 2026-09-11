@@ -831,7 +831,16 @@ async def report_implementation(
     profile.status = SystemProfileStatus.IMPLEMENTED.value
     if body.note:
         profile.review_note = body.note.strip()
-    _log_event(db, profile, "implementation_reported", "Đơn vị khai báo đã triển khai hệ thống theo hồ sơ", admin)
+    # P2-2: lưu note vào timeline event để giữ audit history (review_note
+    # chỉ là latest; timeline là immutable history). Mọi note cũ vẫn truy vết
+    # được dù bị overwrite bởi confirm_implementation / reject sau này.
+    impl_note = (body.note or "").strip()
+    _log_event(
+        db, profile, "implementation_reported",
+        f"Đơn vị khai báo đã triển khai hệ thống theo hồ sơ"
+        + (f" — note: {impl_note}" if impl_note else ""),
+        admin,
+    )
     await append_audit(db, action="system_profile.report_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_mutable(db, profile_id, admin)
@@ -850,12 +859,18 @@ async def confirm_implementation(
     profile = await _get_profile_mutable(db, profile_id, admin)
     if profile.status != SystemProfileStatus.IMPLEMENTED.value:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chỉ xác nhận được hồ sơ đang ở trạng thái đã khai báo triển khai")
+    fulfill_note = (body.review_note or "").strip() if body.review_note else ""
     if body.review_note:
-        profile.review_note = body.review_note.strip()
+        profile.review_note = fulfill_note
     profile.status = SystemProfileStatus.FULFILLED.value
     profile.reviewed_by = admin.id
     profile.reviewed_at = datetime.now(UTC)
-    _log_event(db, profile, "fulfilled", "Xác nhận đơn vị đã đáp ứng hồ sơ", admin)
+    _log_event(
+        db, profile, "fulfilled",
+        f"Xác nhận đơn vị đã đáp ứng hồ sơ"
+        + (f" — review_note: {fulfill_note}" if fulfill_note else ""),
+        admin,
+    )
     await append_audit(db, action="system_profile.confirm_implementation", actor=str(admin.id), target=str(profile.id), ip=get_client_ip(request))
     await db.commit()
     profile = await _get_profile_mutable(db, profile_id, admin)
