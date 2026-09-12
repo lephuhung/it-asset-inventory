@@ -236,6 +236,7 @@ def _to_out(profile: SystemProfile, org_name: str | None = None) -> SystemProfil
         review_note=profile.review_note,
         reviewed_at=profile.reviewed_at,
         diagram_mermaid=profile.diagram_mermaid,
+        diagram_layout=profile.diagram_layout,
         created_by=profile.created_by,
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -297,6 +298,7 @@ def _to_detail(profile: SystemProfile, org_name: str | None) -> SystemProfileDet
         ],
         requirements=[_req_out(r) for r in reqs],
         physical_diagram_mermaid=profile.physical_diagram_mermaid,
+        physical_diagram_layout=profile.physical_diagram_layout,
         physical_location=profile.physical_location,
         user_accounts=profile.user_accounts,
         data_volume=profile.data_volume,
@@ -700,10 +702,12 @@ async def update_profile(
     # nhưng GIỮ `None` explicit — cho phép client xóa nullable field qua JSON null.
     # Các field business-rule không cho phép null (vd name, level) check riêng.
     changes = body.model_dump(exclude_unset=True)
-    # Số văn bản đề nghị + ngày văn bản có thể bổ sung sau, kể cả khi đã duyệt
+    # Số văn bản đề nghị + ngày văn bản + bố cục sơ đồ (chỉ trình bày, không
+    # đổi nội dung) có thể bổ sung sau, kể cả khi đã duyệt
     doc_fields = {f: changes.pop(f) for f in ("document_number", "document_date") if f in changes}
+    layout_fields = {f for f in ("diagram_layout", "physical_diagram_layout") if f in changes}
     if profile.status in (SystemProfileStatus.APPROVED.value, SystemProfileStatus.IMPLEMENTED.value, SystemProfileStatus.FULFILLED.value) and not is_super_admin(admin):
-        if set(changes) - {"managed_by"}:
+        if set(changes) - {"managed_by"} - layout_fields:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 detail="Hồ sơ đã được phê duyệt — chỉ sửa được tên chủ quản và số văn bản, liên hệ quản trị viên hệ thống để sửa nội dung khác",

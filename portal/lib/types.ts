@@ -1160,6 +1160,12 @@ export interface SystemProfile {
   officer_id: string | null;
   officer: Officer | null;
   document_number: string | null;
+  document_date: string | null;
+  review_note: string | null;
+  updated_at: string | null;
+  diagram_mermaid: string | null;
+  device_count: number;
+  machine_count: number;
 }
 
 export interface SystemProfileDetail extends SystemProfile {
@@ -1293,6 +1299,9 @@ export interface SystemProfileDetail {
   /** Timeline lịch sử hồ sơ — mới nhất trước. */
   events: SystemProfileEvent[];
   physical_diagram_mermaid: string | null;
+  /** Bố cục sơ đồ React Flow (vị trí node kéo thả) — sơ đồ lô-gic / vật lý. */
+  diagram_layout: import("./system-profile-diagram").DiagramLayout | null;
+  physical_diagram_layout: import("./system-profile-diagram").DiagramLayout | null;
   physical_location: string | null;
   user_accounts: number | null;
   data_volume: string | null;

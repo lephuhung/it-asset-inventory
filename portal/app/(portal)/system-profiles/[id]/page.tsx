@@ -48,8 +48,8 @@ import {
   Textarea,
 } from "@/components/ui";
 import { useAuth } from "@/components/auth-context";
-import { MermaidDiagram } from "@/components/mermaid-diagram";
-import { generateDevicesMermaid, labelFor, validateDevicesMermaid } from "@/lib/system-profile-diagram";
+import { NetworkTopologyCanvas } from "@/components/network-topology";
+import { labelFor } from "@/lib/system-profile-diagram";
 import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
 
 type Tab = "info" | "history" | "devices" | "machines" | "contacts" | "requirements" | "applications" | "ip-ranges" | "diagram";
@@ -1135,7 +1135,7 @@ export default function SystemProfileDetailPage() {
             <div><span className="text-xs text-slate-500">Số quyết định</span><div className="font-medium">{profile.decision_number ?? "—"}</div></div>
             <div><span className="text-xs text-slate-500">Ngày quyết định</span><div>{profile.decision_date ? new Date(profile.decision_date).toLocaleDateString("vi-VN") : "—"}</div></div>
             <div><span className="text-xs text-slate-500">Cơ quan ban hành</span><div>{profile.decision_agency ?? "—"}</div></div>
-            <div><span className="text-xs text-slate-500">Cập nhật</span><div>{new Date(profile.updated_at).toLocaleString("vi-VN")}</div></div>
+            <div><span className="text-xs text-slate-500">Cập nhật</span><div>{profile.updated_at ? new Date(profile.updated_at).toLocaleString("vi-VN") : "—"}</div></div>
           </div>
           {profile.description && (
             <div>
@@ -1614,26 +1614,26 @@ export default function SystemProfileDetailPage() {
 
       {tab === "diagram" && (
         <div className="space-y-4">
+          {/* Sơ đồ luôn hiện toàn bộ thiết bị đã khai: chưa lưu bố cục thì tự
+              sinh theo tầng, đã lưu thì nạp bố cục + kết nối người dùng kéo. */}
           <Card title="Sơ đồ mô hình lô-gic">
-            <MermaidDiagram
-              code={profile.diagram_mermaid}
-              fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}
-              autoLabel="Sơ đồ tự sinh từ danh mục thiết bị đã khai — bấm Chỉnh sửa để tự vẽ."
-              editable={canEdit}
+            <NetworkTopologyCanvas
+              devices={profile.devices}
+              meta={typeMeta}
+              layout={profile.diagram_layout}
+              canEdit={canEdit}
               saving={busy}
-              onSave={(code) => act(() => api.patch(`/system-profiles/${profile.id}`, { diagram_mermaid: code }))}
-              validate={(c) => validateDevicesMermaid(c, profile.devices)}
+              onSave={(layout) => act(() => api.patch(`/system-profiles/${profile.id}`, { diagram_layout: layout }))}
             />
           </Card>
           <Card title="Sơ đồ mô hình vật lý">
-            <MermaidDiagram
-              code={profile.physical_diagram_mermaid}
-              fallbackCode={generateDevicesMermaid(profile.devices, typeMeta)}
-              autoLabel="Sơ đồ tự sinh từ danh mục thiết bị đã khai — bấm Chỉnh sửa để tự vẽ."
-              editable={canEdit}
+            <NetworkTopologyCanvas
+              devices={profile.devices}
+              meta={typeMeta}
+              layout={profile.physical_diagram_layout}
+              canEdit={canEdit}
               saving={busy}
-              onSave={(code) => act(() => api.patch(`/system-profiles/${profile.id}`, { physical_diagram_mermaid: code }))}
-              validate={(c) => validateDevicesMermaid(c, profile.devices)}
+              onSave={(layout) => act(() => api.patch(`/system-profiles/${profile.id}`, { physical_diagram_layout: layout }))}
             />
           </Card>
         </div>

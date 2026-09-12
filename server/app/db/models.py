@@ -1168,6 +1168,12 @@ class SystemProfile(Base):
     diagram_mermaid: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Sơ đồ mô hình vật lý (kết nối thiết bị thực tế)
     physical_diagram_mermaid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bố cục sơ đồ React Flow — vị trí node {x, y} do người dùng kéo thả +
+    # danh sách cạnh nối người dùng tự vẽ, dạng {"version": 1, "nodes": {...},
+    # "edges": [{"source": .., "target": ..}]}. edges vắng mặt = dùng chain tự
+    # sinh. Đơn thuần trình bày: không tham gia business rule, không ghi timeline.
+    diagram_layout: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    physical_diagram_layout: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # Phạm vi & quy mô hệ thống
     physical_location: Mapped[str | None] = mapped_column(Text, nullable=True)  # địa điểm lắp đặt thiết bị
     user_accounts: Mapped[int | None] = mapped_column(Integer, nullable=True)  # số lượng tài khoản

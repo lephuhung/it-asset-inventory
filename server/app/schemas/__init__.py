@@ -1866,6 +1866,10 @@ class SystemProfileUpdate(BaseModel):
     description: str | None = None
     diagram_mermaid: str | None = None
     physical_diagram_mermaid: str | None = None
+    # Bố cục sơ đồ React Flow (vị trí node kéo thả) — dict tự do, server chỉ
+    # lưu thô; client tự validate shape khi đọc.
+    diagram_layout: dict | None = None
+    physical_diagram_layout: dict | None = None
     physical_location: str | None = None
     user_accounts: int | None = Field(default=None, ge=0)
     data_volume: str | None = None
@@ -2133,6 +2137,7 @@ class SystemProfileOut(BaseModel):
     review_note: str | None = None
     reviewed_at: datetime | None = None
     diagram_mermaid: str | None = None
+    diagram_layout: dict | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -2154,6 +2159,7 @@ class SystemProfileDetailOut(SystemProfileOut):
     requirements_verified: int = 0
     level_compliant: bool = False
     physical_diagram_mermaid: str | None = None
+    physical_diagram_layout: dict | None = None
     physical_location: str | None = None
     user_accounts: int | None = None
     data_volume: str | None = None
