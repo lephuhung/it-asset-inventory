@@ -38,6 +38,8 @@ public sealed class EnrollCoordinator
     public async Task<bool> EnsureEnrolledAsync(CancellationToken ct)
     {
         if (AgentIdentity.IsEnrolled(_config)) return true;
+        // AG-P1-02: reenroll đang chờ fresh token → KHÔNG spam /api/enroll.
+        if (AgentIdentity.IsReenrollPending(_config)) return false;
         lock (_lock)
         {
             if (_inFlight) return false;
@@ -91,6 +93,8 @@ public sealed class EnrollCoordinator
         _config.Enrolled = true;
         _config.RenewAfter = response.RenewAfter;
         _config.LastEnrolledAt = DateTimeOffset.UtcNow;
+        // AG-P1-02: enroll thành công → clear reenroll state.
+        _config.ReenrollRequired = false;
         var changed = _config.ApplyServerSettings(
             response.AgentServerUrl, response.HeartbeatIntervalSeconds,
             response.HeartbeatJitterSeconds, response.InventoryIntervalHours, null);

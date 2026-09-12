@@ -34,6 +34,14 @@ public sealed class AgentConfig
     public string? RenewAfter { get; set; } // ISO 8601 UTC — thời điểm server khuyến nghị renew
     public DateTimeOffset? LastEnrolledAt { get; set; }
 
+    /// <summary>
+    /// AG-P1-02: agent đã enroll trước đó nhưng cert biến mất (vd OS cài lại, store bị
+    /// xóa). Phải CHỜ admin issue fresh bootstrap token trước khi re-enroll.
+    /// Khi <c>true</c>, Heartbeat/Inventory/Renew KHÔNG gửi mTLS request (cert gone),
+    /// EnrollCoordinator KHÔNG retry enroll khi không có token.
+    /// </summary>
+    public bool ReenrollRequired { get; set; }
+
     // ── Khác ──
     public string? CaThumbprint { get; set; }
     public string? HttpProxy { get; set; }

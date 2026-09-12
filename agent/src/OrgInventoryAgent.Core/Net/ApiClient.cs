@@ -172,10 +172,19 @@ public sealed class ApiClient : IDisposable
     private HttpRequestMessage BuildMessage(HttpMethod method, string url, string? json, bool useClientCert)
     {
         var req = new HttpRequestMessage(method, url);
+
+        // AG-P1-05: KHÔNG ĐƯỢC tự gửi các header trust identity (X-SSL-*).
+        // Lý do: production deploy FastAPI sau reverse proxy (nginx). Proxy có nhiệm vụ
+        // STRIP mọi X-SSL-* đến từ client, rồi tự generate từ verified client certificate
+        // (X-SSL-Verify=SUCCESS, X-SSL-Client-CN=<CN>). Nếu agent cũng gửi các header này,
+        // attacker có thể bypass mTLS bằng cách direct-access FastAPI (port 8000 internal)
+        // và gửi X-SSL-Verify=SUCCESS thủ công — server vẫn tin vì check header thay vì
+        // verify cert thực sự.
+        //
+        // Chuẩn: agent chỉ gửi application-layer headers (X-Machine-Id cho audit log,
+        // KHÔNG dùng để authenticate) — mTLS identity do proxy/nginx tự gán từ cert.
         if (useClientCert && !string.IsNullOrWhiteSpace(_config.MachineId))
         {
-            req.Headers.TryAddWithoutValidation("X-SSL-Client-CN", $"machine-{_config.MachineId}");
-            req.Headers.TryAddWithoutValidation("X-SSL-Client-Verify", "SUCCESS");
             req.Headers.TryAddWithoutValidation("X-Machine-Id", _config.MachineId);
         }
 

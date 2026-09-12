@@ -49,10 +49,23 @@ public sealed class EnrollCoordinator
     /// <summary>
     /// Đảm bảo đã enroll. Trả true nếu enroll thành công (hoặc đã enroll từ trước).
     /// Tối đa 1 attempt/60s (tránh spam server khi token sai).
+    ///
+    /// AG-P1-02: nếu <c>ReenrollRequired = true</c> và KHÔNG có fresh token, KHÔNG retry
+    /// enroll (return false ngay). Khi admin ghi fresh token vào config.Token (qua MSI
+    /// property / --enroll-token / edit config.json), lần gọi kế tiếp sẽ enroll và clear
+    /// trạng thái reenroll.
     /// </summary>
     public async Task<bool> EnsureEnrolledAsync(CancellationToken ct)
     {
         if (AgentIdentity.IsEnrolled(_config)) return true;
+
+        // AG-P1-02: reenroll đang chờ token → KHÔNG spam /api/enroll. KHÔNG tính vào rate-limit
+        // nếu chưa có token — chờ admin. Caller (HeartbeatService) đã có check riêng trước khi
+        // gọi EnsureEnrolledAsync; double-check ở đây để đảm bảo idempotent.
+        if (AgentIdentity.IsReenrollPending(_config))
+        {
+            return false;
+        }
 
         lock (_lock)
         {
@@ -127,6 +140,8 @@ public sealed class EnrollCoordinator
         _config.Enrolled = true;
         _config.RenewAfter = response.RenewAfter;
         _config.LastEnrolledAt = DateTimeOffset.UtcNow;
+        // AG-P1-02: enroll thành công → clear trạng thái reenroll (nếu có).
+        _config.ReenrollRequired = false;
 
         // Lưu config server trả về (endpoint + interval/jitter + inventory interval)
         var changed = _config.ApplyServerSettings(
@@ -144,7 +159,12 @@ public sealed class EnrollCoordinator
         }
 
         // Token dùng 1 lần — xóa ngay sau enroll thành công
+        // AG-P2-01: PHẢI xóa cả trong in-memory config lẫn backing store (Registry
+        // trên Windows). Nếu chỉ clear in-memory, một tool khác (vd admin script)
+        // đọc Registry vẫn thấy token. Clear key `EnrollToken` dưới
+        // HKLM\SOFTWARE\OrgInventory để credential thực sự biến mất.
         _config.Token = null;
+        TryDeleteBootstrapTokenFromRegistry();
         _config.Save();
 
         _logger.LogInformation("Enroll thành công: machine_id={MachineId}, is_new={IsNew}, status={Status}, server={Server}",
@@ -194,5 +214,29 @@ public sealed class EnrollCoordinator
     private string? SafeHostname()
     {
         try { return Dns.GetHostName(); } catch { return Environment.MachineName; }
+    }
+
+    /// <summary>
+    /// AG-P2-01: Sau enroll thành công, xóa bootstrap token khỏi Windows Registry
+    /// (<c>HKLM\SOFTWARE\OrgInventory\EnrollToken</c>) để credential thực sự biến mất.
+    /// Best-effort: log warning nếu không xóa được, không fail enroll.
+    /// </summary>
+    private void TryDeleteBootstrapTokenFromRegistry()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\OrgInventory", writable: true);
+            if (key?.GetValue("EnrollToken") is null) return;
+            key.DeleteValue("EnrollToken", throwOnMissingValue: false);
+            _logger.LogInformation(
+                "AG-P2-01: Đã xóa bootstrap token khỏi Registry HKLM\\SOFTWARE\\OrgInventory\\EnrollToken.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "AG-P2-01: Không xóa được EnrollToken khỏi Registry (non-fatal, agent vẫn enrolled): {Msg}",
+                ex.Message);
+        }
     }
 }

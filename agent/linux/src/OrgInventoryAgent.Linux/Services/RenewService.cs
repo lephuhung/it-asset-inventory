@@ -54,6 +54,17 @@ public sealed class RenewService : BackgroundService
     {
         while (!ct.IsCancellationRequested && !AgentIdentity.IsEnrolled(_config))
         {
+            // AG-P1-02: nếu reenroll đang chờ fresh token → KHÔNG spam.
+            if (AgentIdentity.IsReenrollPending(_config))
+            {
+                _logger.LogInformation(
+                    "Cert biến mất; chờ admin issue fresh bootstrap token để re-enroll " +
+                    "(state: REENROLL_REQUIRED, machine_id={MachineId}).", _config.MachineId);
+                // KHÔNG tăng rate-limit ở đây — chờ cho đến khi admin issue token.
+                try { await Task.Delay(TimeSpan.FromMinutes(5), ct); }
+                catch (OperationCanceledException) { return; }
+                continue;
+            }
             await _enroll.EnsureEnrolledAsync(ct);
             try { await Task.Delay(TimeSpan.FromSeconds(20), ct); }
             catch (OperationCanceledException) { return; }
@@ -74,10 +85,31 @@ public sealed class RenewService : BackgroundService
 
     private async Task CheckAndRenewAsync(CancellationToken ct)
     {
+        // AG-P1-02: nếu reenroll đang chờ fresh token → KHÔNG tìm cert, không renew.
+        if (_config.ReenrollRequired)
+        {
+            // Cert chưa còn → không renew (cần reenroll trước).
+            return;
+        }
         X509Certificate2? cert;
         try { cert = _keyStore.FindClientCertificate(_config); }
         catch (Exception ex) { _logger.LogWarning("Không load được client cert: {Msg}", ex.Message); return; }
-        if (cert is null) { _logger.LogWarning("Không thấy client cert — chờ re-enroll."); return; }
+        if (cert is null)
+        {
+            // AG-P1-02: cert missing + không phải reenroll_required → đặt cờ reenroll + log.
+            // Không spam log trong các chu kỳ tiếp theo; Coordinator sẽ KHÔNG gọi /api/enroll.
+            if (!_config.ReenrollRequired)
+            {
+                _logger.LogCritical(
+                    "Client cert không tìm thấy. Có thể PEM file bị xóa hoặc store bị corrupt. " +
+                    "Đặt trạng thái REENROLL_REQUIRED. Agent sẽ KHÔNG tự enroll; chờ admin issue fresh bootstrap token.");
+                _config.Enrolled = false;
+                _config.ClientCertThumbprint = null;
+                _config.ReenrollRequired = true;
+                _config.Save();
+            }
+            return;
+        }
 
         using (cert)
         {
@@ -100,6 +132,7 @@ public sealed class RenewService : BackgroundService
 
     private async Task RenewAsync(CancellationToken ct)
     {
+        // AG-P1-01: cert rotation phải atomic — _keyStore.ReplaceCertificate đã handle.
         using var newKey = CsrGenerator.CreateKeyPair();
         var csrPem = CsrGenerator.CreateCsrPem(newKey, $"machine-{_config.MachineId}");
         try
@@ -117,7 +150,18 @@ public sealed class RenewService : BackgroundService
                 _logger.LogError("Renew response thiếu client_cert_pem.");
                 return;
             }
-            _keyStore.ReplaceCertificate(certPem, newKey, _config);
+            try
+            {
+                _keyStore.ReplaceCertificate(certPem, newKey, _config);
+            }
+            catch (Exception ex)
+            {
+                // AG-P1-01: nếu install fail, cert cũ vẫn còn (atomic swap bảo vệ).
+                // Không raise — chu kỳ tiếp theo sẽ retry renew bằng cert cũ.
+                _logger.LogError(ex,
+                    "Cert mới KHÔNG cài được (atomic swap fail). Cert cũ vẫn còn — sẽ retry ở chu kỳ sau.");
+                return;
+            }
             _config.RenewAfter = resp.Body?["renew_after"]?.GetValue<string>() ?? _config.RenewAfter;
             _config.Save();
             _logger.LogInformation("Renew thành công — cert mới thumbprint={Thumb}.", _config.ClientCertThumbprint);
