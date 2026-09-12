@@ -240,6 +240,7 @@ function TopologyCanvasInner({
   );
   const [savedLayout, setSavedLayout] = useState<DiagramLayout | null>(layout ?? null);
   const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [noteEditor, setNoteEditor] = useState<{ nodeId: string; nodeName: string; value: string } | null>(null);
   const [renameEditor, setRenameEditor] = useState<{ nodeId: string; value: string } | null>(null);
   const [edgeLabelEditor, setEdgeLabelEditor] = useState<{ edgeId: string; title: string; value: string } | null>(null);
@@ -455,24 +456,32 @@ function TopologyCanvasInner({
           <Button onClick={() => void save()} loading={saving} disabled={!dirty}>
             <Save className="size-4" /> {dirty ? "Lưu bố cục" : "Đã lưu"}
           </Button>
-          {/* Hover vào nút → hiện hàng ngang các loại node, bấm là thêm luôn */}
-          <div className="group relative">
-            <Button variant="secondary">
+          {/* Click để mở/đóng menu; menu tự xuống dòng khi nhiều loại */}
+          <div className="relative">
+            <Button variant="secondary" onClick={() => setPickerOpen((v) => !v)}>
               <Tag className="size-4" /> Thêm node
             </Button>
-            <div className="invisible absolute bottom-full left-0 z-10 mb-1 flex flex-nowrap gap-1 rounded-lg border border-slate-200 bg-white p-1.5 opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
-              {nodeTypeOptions.map((t) => (
-                <button
-                  key={t.code}
-                  type="button"
-                  onClick={() => addCustomNode(t.code, t.label)}
-                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-transparent px-2 py-1 text-xs text-slate-700 hover:border-slate-200 hover:bg-slate-50"
-                  title={`Thêm node ${t.label}`}
-                >
-                  <span>{t.icon}</span> {t.label}
-                </button>
-              ))}
-            </div>
+            {pickerOpen && (
+              <>
+                <div className="fixed inset-0 z-20" onClick={() => setPickerOpen(false)} aria-hidden />
+                <div className="absolute left-0 top-full z-30 mt-1 flex w-80 flex-wrap gap-1 rounded-lg border border-slate-200 bg-white p-1.5 shadow-lg">
+                  {nodeTypeOptions.map((t) => (
+                    <button
+                      key={t.code}
+                      type="button"
+                      onClick={() => {
+                        addCustomNode(t.code, t.label);
+                        setPickerOpen(false);
+                      }}
+                      className="flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-xs text-slate-700 hover:border-slate-200 hover:bg-slate-50"
+                      title={`Thêm node ${t.label}`}
+                    >
+                      <span>{t.icon}</span> {t.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
           <Button variant="secondary" onClick={rearrange}>
             <RotateCcw className="size-4" /> Sắp xếp lại
