@@ -1,20 +1,19 @@
 "use client";
 
 /**
- * Sinh code Mermaid gợi ý từ danh mục thiết bị của hồ sơ.
+ * Dữ liệu sơ đồ mạng cho canvas React Flow (thay thế Mermaid cũ).
  *
  * Icon theo loại thiết bị lấy từ catalog động `/api/device-types` (Super Admin
  * quản trị, icon là emoji do người dùng đặt). Nếu loại chưa có trong catalog
- * hoặc không truyền meta thì fallback về map chuẩn bên dưới. Dùng emoji thay
- * vì `fa:fa-*` vì portal render Mermaid ở `securityLevel: "strict"` (đã verify
- * trong Chromium: emoji hiển thị đúng, `fa:` cần Font Awesome CSS + htmlLabels).
+ * hoặc không truyền meta thì fallback về map chuẩn bên dưới.
  *
- * Thứ tự nối mô hình truyền điển hình: Internet → firewall → router →
- * switch → máy chủ / máy trạm; storage/UPS/khác nối vào node cuối.
+ * Thứ tự nối tự sinh theo mô hình truyền điển hình: Internet → firewall →
+ * router → switch → máy chủ / máy trạm; storage/UPS/khác nối vào node cuối.
+ * Người dùng có thể kéo node và tự nối/xóa đường, bố cục lưu vào layout JSON.
  */
 import type { SystemProfileDevice } from "@/lib/types";
 
-/** Icon fallback theo loại thiết bị chuẩn (seed migration d4e5f6a7b8c9). */
+/** Icon fallback theo loại thiết bị chuẩn (seed migration d4e5f6a7b8c9 + d8e9f0a1b2c4). */
 export const DEVICE_TYPE_ICON: Record<string, string> = {
   firewall: "🛡️",
   router: "📡",
@@ -24,6 +23,12 @@ export const DEVICE_TYPE_ICON: Record<string, string> = {
   storage: "💾",
   ups: "🔋",
   other: "📦",
+  website: "🌐",
+  load_balancer: "⚖️",
+  access_point: "📶",
+  printer: "🖨️",
+  camera: "📷",
+  ip_phone: "☎️",
 };
 
 /** Nhãn fallback theo loại chuẩn. */
@@ -36,6 +41,12 @@ export const DEVICE_TYPE_LABEL: Record<string, string> = {
   storage: "Hệ thống lưu trữ",
   ups: "UPS",
   other: "Khác",
+  website: "Website / Web app",
+  load_balancer: "Load Balancer",
+  access_point: "Access Point (Wi-Fi)",
+  printer: "Máy in",
+  camera: "Camera giám sát",
+  ip_phone: "Điện thoại IP",
 };
 
 /** Meta loại thiết bị truyền từ catalog động (code → icon/label). */
@@ -55,20 +66,128 @@ export function labelFor(type: string, meta?: DeviceTypeMeta): string {
   return meta?.labels?.[type] ?? DEVICE_TYPE_LABEL[type] ?? type;
 }
 
-function nodeLine(id: string, icon: string, label: string): string {
-  return `    ${id}["${icon} ${label.replace(/"/g, "'")}"]`;
+/* ── Topology cho React Flow ──────────────────────────────── */
+
+/** Id node Internet cố định trên canvas (không phải thiết bị thật). */
+export const INTERNET_NODE_ID = "__internet__";
+
+/** Id node "Máy trạm" mặc định — luôn có trên sơ đồ làm đầu mút người dùng. */
+export const DEFAULT_WORKSTATION_NODE_ID = "__workstation__";
+
+export interface TopologyNodeData extends Record<string, unknown> {
+  name: string;
+  deviceCode: string | null;
+  deviceType: string;
+  /** Nhãn loại thiết bị (từ catalog hoặc fallback) — hiện khi hover. */
+  typeLabel?: string;
+  /** Emoji icon của loại thiết bị (từ catalog hoặc fallback). */
+  icon: string;
+  /** Ghi chú hiển thị dưới tên (IP của thiết bị, hoặc note người dùng tự đặt). */
+  note?: string;
+  /* Thông tin khai báo chi tiết — hiện trong tooltip khi hover */
+  ip?: string | null;
+  model?: string | null;
+  location?: string | null;
+  purpose?: string | null;
 }
 
-export function generateDevicesMermaid(
+export interface TopologyNode {
+  id: string;
+  position: { x: number; y: number };
+  data: TopologyNodeData;
+}
+
+export interface TopologyEdge {
+  id: string;
+  source: string;
+  target: string;
+}
+
+/** Một cạnh nối người dùng tự vẽ (id runtime không lưu; label hiển thị trên line). */
+export interface DiagramLayoutEdge {
+  source: string;
+  target: string;
+  /** Nhãn trên đường nối (vlan, mô tả link…). */
+  label?: string;
+}
+
+/** Node tự do người dùng thêm trực tiếp trên canvas (không thuộc danh mục thiết bị). */
+export interface DiagramLayoutCustomNode {
+  id: string;
+  name: string;
+  /** Loại thiết bị người dùng chọn khi thêm (code từ catalog) — quyết định icon. */
+  deviceType: string;
+}
+
+/**
+ * Bố cục lưu DB — vị trí node theo id (kèm node Internet), danh sách cạnh nối
+ * và các node tự do. Nếu `edges` vắng mặt/rỗng thì client dùng chain tự sinh
+ * theo tầng; khi người dùng đã tự nối/chỉnh đường thì lưu danh sách cạnh tường minh.
+ */
+export interface DiagramLayout {
+  version: 1;
+  nodes: Record<string, { x: number; y: number }>;
+  edges?: DiagramLayoutEdge[];
+  customNodes?: DiagramLayoutCustomNode[];
+  /** Ghi chú trên node theo id (IP, dải IP, vlan…) — đè lên IP tự động của thiết bị. */
+  notes?: Record<string, string>;
+}
+
+/**
+ * Bố cục lưu DB — vị trí node theo id (kèm node Internet / Máy trạm mặc định),
+ * danh sách cạnh nối, node tự do và ghi chú. Sơ đồ KHÔNG tự sinh đường nối:
+ * thiết bị được load vào để người dùng tự vẽ liên kết; khi đã lưu layout thì
+ * dùng đúng danh sách cạnh người dùng đã vẽ.
+ */
+export interface DiagramLayout {
+  version: 1;
+  nodes: Record<string, { x: number; y: number }>;
+  edges?: DiagramLayoutEdge[];
+  customNodes?: DiagramLayoutCustomNode[];
+  /** Ghi chú trên node theo id (IP, dải IP, vlan…) — đè lên IP tự động của thiết bị. */
+  notes?: Record<string, string>;
+}
+
+/** Bậc dọc giữa các tầng khi tự xếp layout (px). */
+const LAYER_GAP_X = 280;
+/** Khoảng cách dọc giữa các thiết bị cùng tầng (px). */
+const DEVICE_GAP_Y = 120;
+
+/**
+ * Sinh node sơ đồ từ danh mục thiết bị (KHÔNG sinh cạnh — người dùng tự nối),
+ * kèm vị trí tự xếp theo tầng: Internet → firewall → router → switch → …
+ * Luôn có node Internet và node "Máy trạm" mặc định làm 2 đầu mút (node máy
+ * trạm chỉ thêm khi danh mục chưa có thiết bị loại workstation).
+ * Vị trí đây là bản auto — client sẽ đè bằng layout đã lưu (nếu có).
+ */
+export function buildDevicesTopology(
   devices: SystemProfileDevice[],
   meta?: DeviceTypeMeta,
-): string {
+): { nodes: TopologyNode[]; edges: TopologyEdge[] } {
+  const nodes: TopologyNode[] = [
+    {
+      id: INTERNET_NODE_ID,
+      position: { x: 0, y: 0 },
+      data: { name: "Internet", deviceCode: null, deviceType: "internet", icon: "🌐" },
+    },
+  ];
   if (devices.length === 0) {
-    return "flowchart LR\n    Internet((\"🌐 Internet\")) --> FW[\"🛡️ Firewall biên giới\"]\n    FW --> SW[\"🔀 Core Switch\"]\n    SW --> SRV[\"🖥️ Máy chủ\"]";
+    // Rỗng: chỉ có Internet + Máy trạm mặc định — người dùng thêm thiết bị ở
+    // tab Thiết bị rồi quay lại vẽ liên kết
+    nodes.push({
+      id: DEFAULT_WORKSTATION_NODE_ID,
+      position: { x: LAYER_GAP_X, y: 0 },
+      data: {
+        name: "Máy trạm",
+        deviceCode: null,
+        deviceType: "workstation",
+        icon: iconFor("workstation", meta),
+      },
+    });
+    return { nodes, edges: [] };
   }
 
   const sorted = [...devices].sort((a, b) => a.sort_order - b.sort_order);
-  // Gom thiết bị theo tầng kết nối
   const byLayer = new Map<string, SystemProfileDevice[]>();
   for (const d of sorted) {
     const list = byLayer.get(d.device_type) ?? [];
@@ -76,91 +195,73 @@ export function generateDevicesMermaid(
     byLayer.set(d.device_type, list);
   }
 
-  const lines: string[] = ["flowchart LR", "    Internet((\"🌐 Internet\"))"];
-  const chainIds: string[] = ["Internet"];
-  let seq = 0;
-  const nextId = () => `N${++seq}`;
-
-  for (const layer of LAYER_ORDER) {
-    const items = byLayer.get(layer);
-    if (!items || items.length === 0) continue;
-    for (const d of items) {
-      const id = nextId();
-      const label = [d.name, d.device_code ? `(${d.device_code})` : null].filter(Boolean).join(" ");
-      lines.push(nodeLine(id, iconFor(layer, meta), label));
-      chainIds.push(id);
-    }
+  // Thứ tự xếp cột: theo tầng chuẩn rồi đến loại ngoài danh sách
+  const ordered: SystemProfileDevice[] = [];
+  const layers: string[] = [...LAYER_ORDER];
+  for (const layer of layers) {
+    ordered.push(...(byLayer.get(layer) ?? []));
     byLayer.delete(layer);
   }
-  // Thiết bị còn sót (loại ngoài thứ tự chuẩn) — nối vào cuối
-  for (const [type, items] of byLayer) {
-    for (const d of items) {
-      const id = nextId();
-      lines.push(nodeLine(id, iconFor(type, meta), d.name));
-      chainIds.push(id);
-    }
+  for (const [, items] of byLayer) {
+    ordered.push(...items);
   }
 
-  for (let i = 0; i < chainIds.length - 1; i++) {
-    lines.push(`    ${chainIds[i]} --> ${chainIds[i + 1]}`);
+  // Tính vị trí: cột theo tầng (theo thứ tự xuất hiện), hàng theo thứ tự trong tầng
+  const layerIndexOf = new Map<string, number>();
+  let col = 1;
+  for (const d of ordered) {
+    if (!layerIndexOf.has(d.device_type)) layerIndexOf.set(d.device_type, col++);
   }
-  return lines.join("\n");
+  const rowCount = new Map<number, number>();
+  for (const d of ordered) {
+    const c = layerIndexOf.get(d.device_type)!;
+    const r = rowCount.get(c) ?? 0;
+    rowCount.set(c, r + 1);
+    nodes.push({
+      id: d.id,
+      position: { x: c * LAYER_GAP_X, y: r * DEVICE_GAP_Y },
+      data: {
+        name: d.name,
+        deviceCode: d.device_code,
+        deviceType: d.device_type,
+        typeLabel: labelFor(d.device_type, meta),
+        icon: iconFor(d.device_type, meta),
+        note: d.ip ?? undefined,
+        ip: d.ip,
+        model: d.model,
+        location: d.location,
+        purpose: d.purpose,
+      },
+    });
+  }
+
+  // Máy trạm mặc định: chỉ thêm khi danh mục chưa có thiết bị workstation,
+  // đặt ở cột cuối để làm điểm kết thúc của sơ đồ
+  if (!devices.some((d) => d.device_type === "workstation")) {
+    nodes.push({
+      id: DEFAULT_WORKSTATION_NODE_ID,
+      position: { x: col * LAYER_GAP_X, y: 0 },
+      data: {
+        name: "Máy trạm",
+        deviceCode: null,
+        deviceType: "workstation",
+        icon: iconFor("workstation", meta),
+      },
+    });
+  }
+
+  // Không tự sinh đường nối — người dùng tự vẽ liên kết và lưu vào layout
+  return { nodes, edges: [] };
 }
 
-/**
- * Kiểm tra sơ đồ Mermaid do người dùng nhập có khớp với thiết bị đã khai báo.
- *
- * Parse các label node dạng `id["..."]` (bỏ node Internet/cụm `((...))`), so
- * với danh sách thiết bị theo tên. Trả về danh sách cảnh báo (rỗng = khớp):
- * số node khác số thiết bị, thiết bị chưa xuất hiện trên sơ đồ, node lạ.
- */
-export function validateDevicesMermaid(
-  code: string,
-  devices: SystemProfileDevice[],
-): string[] {
-  const warnings: string[] = [];
-  // Node định nghĩa: `ID["label"]` hoặc `ID(label)` — bỏ edge `-->`
-  const nodeDefs = [...code.matchAll(/(^|\n)\s*([A-Za-z0-9_]+)\s*(?:\["([^"]*)"?\]|\["([^"]*)"|"([^"]*)"\]|\(([^)]*)\))/g)];
-  const labels = nodeDefs
-    .map((m) => (m[3] ?? m[4] ?? m[5] ?? m[6] ?? "").trim())
-    .filter((l) => l && !/^internet$/i.test(l) && !/🌐/.test(l));
-  // Loại node khai báo không nhãn (vd `A --> B` cuối) — đếm cả dạng trần
-  const bareNodes = [...code.matchAll(/(^|\n)\s*([A-Za-z0-9_]+)\s*$/g)].map((m) => m[2]);
-  const nodeCount = labels.length + bareNodes.length;
-
-  if (devices.length === 0) return warnings;
-  if (nodeCount === 0) {
-    warnings.push("Không tìm thấy node thiết bị nào trong sơ đồ.");
-    return warnings;
-  }
-  if (nodeCount !== devices.length) {
-    warnings.push(
-      `Sơ đồ có ${nodeCount} node thiết bị nhưng hồ sơ đã khai ${devices.length} thiết bị.`,
-    );
-  }
-  const lower = (s: string) => s.toLowerCase().replace(/\s+/g, " ");
-  const missing = devices.filter((d) => {
-    const codeNorm = lower(d.device_code ?? "");
-    const nameNorm = lower(d.name);
-    return !labels.some((l) => {
-      const ll = lower(l);
-      return ll.includes(nameNorm) || nameNorm.includes(ll) ||
-        (!!codeNorm && (ll.includes(codeNorm) || codeNorm.includes(ll)));
-    });
+/** G đè vị trí auto bằng layout đã lưu; thiết bị mới (chưa có trong layout) giữ vị trí auto. */
+export function applyDiagramLayout(
+  nodes: TopologyNode[],
+  layout: DiagramLayout | null | undefined,
+): TopologyNode[] {
+  if (!layout?.nodes) return nodes;
+  return nodes.map((n) => {
+    const saved = layout.nodes[n.id];
+    return saved ? { ...n, position: { x: saved.x, y: saved.y } } : n;
   });
-  if (missing.length > 0) {
-    warnings.push(
-      `Thiết bị đã khai nhưng chưa thấy trên sơ đồ: ${missing.map((d) => d.name).join(", ")}.`,
-    );
-  }
-  const knownLabels = devices.map((d) => lower(d.name)).concat(devices.map((d) => lower(d.device_code ?? "")));
-  const unknown = labels.filter(
-    (l) => !knownLabels.some((k) => k && (lower(l).includes(k) || k.includes(lower(l)))),
-  );
-  if (unknown.length > 0) {
-    warnings.push(
-      `Có node trên sơ đồ không trùng thiết bị nào đã khai: ${unknown.join(", ")} (có thể là node nhóm — bỏ qua nếu cố ý).`,
-    );
-  }
-  return warnings;
 }

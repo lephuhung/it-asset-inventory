@@ -45,6 +45,21 @@ from app.services.llm_prompts import (
 logger = logging.getLogger("llm.dfir")
 
 
+class DispatchUncertain(LlmError):
+    """BLOCKER 1 fix: Dispatch outcome ambiguous (timeout, connect error, 5xx,
+    408, 429, malformed response body). Request có thể đã tới server nhưng không
+    xác minh được job_id. Worker PHẢI giữ <c>hermes_status="dispatch_uncertain"</c>
+    và KHÔNG set <c>status="failed"</c>. Reconcile loop ở tick sau sẽ GET /v1/jobs/{id}
+    để quyết định tiếp (2xx → dispatched, 404 → recovery_required).
+    """
+
+
+class DispatchFailed(LlmError):
+    """BLOCKER 1 fix: Dispatch outcome DEFINITIVE — không thể recover từ
+    generic exceptions. Worker set <c>status="failed"</c>, <c>completed_at</c>.
+    """
+
+
 class ExternalInvestigationNotFound(LlmError):
     """Investigation external không tồn tại."""
 
@@ -384,7 +399,38 @@ async def run_pending_investigations() -> dict:
             try:
                 await _state_dispatch_deepagent(db, inv)
                 processed.append(str(inv.id))
-            except Exception as e:  # noqa: BLE001
+            except DispatchUncertain as e:
+                # BLOCKER 1 fix: ambiguous outcome KHÔNG được worker set thành
+                # failed. Đã được _state_dispatch_deepagent set
+                # hermes_status="dispatch_uncertain"; worker chỉ log warning,
+                # reconcile loop ở tick sau sẽ GET /v1/jobs/{id} để quyết định.
+                err = f"{type(e).__name__}: {e}"
+                # KHÔNG set failed, KHÔNG set completed_at, KHÔNG overwrite status.
+                # State đã được helper commit; giữ nguyên.
+                logger.warning(
+                    "Investigation %s dispatch ambiguous; worker KHÔNG set failed. "
+                    "Reconcile loop sẽ xử lý ở tick sau. (%s)",
+                    inv.id, err,
+                )
+                # Vẫn count là "processed" để loop không retry sớm — nhưng
+                # trạng thái cuối cùng là dispatch_uncertain để reconcile phía sau.
+                processed.append(str(inv.id))
+            except DispatchFailed as e:
+                # Typed state-machine exception — definitive failure.
+                # Helper đã set status=failed + completed_at + hermes status;
+                # worker boundary chỉ log + commit idempotent. Giữ clause riêng
+                # (không trộn vào generic Exception) để typed semantics visible.
+                err = f"{type(e).__name__}: {e}"
+                errors.append(f"{inv.id}: {err}")
+                logger.warning("Investigation %s dispatch failed definitively: %s", inv.id, err)
+                if inv.status != "failed":
+                    inv.status = "failed"
+                    inv.error = err[:2000]
+                    inv.completed_at = datetime.now(UTC)
+                    await db.commit()
+            except Exception as e:
+                # Unexpected — definitive failure (KHÔNG bao gồm
+                # DispatchUncertain vì clause trên đã bắt riêng).
                 err = f"{type(e).__name__}: {e}"
                 errors.append(f"{inv.id}: {err}")
                 logger.exception("Investigation %s failed", inv.id)
@@ -413,7 +459,7 @@ async def run_pending_investigations() -> dict:
             try:
                 await _process_one(db, inv)
                 processed.append(str(inv.id))
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 err = f"{type(e).__name__}: {e}"
                 errors.append(f"{inv.id}: {err}")
                 logger.exception("Investigation %s failed", inv.id)
@@ -456,11 +502,22 @@ async def _process_one(db: AsyncSession, inv: DfirInvestigation) -> None:
 
 
 async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -> None:
-    """Requeue a job lost by a DeepAgent process restart.
+    """Reconcile DeepAgent job state sau khi dispatch có outcome không chắc chắn.
 
-    The backend owns the investigation state, while DeepAgent keeps its short-lived
-    job registry in memory. A missing job is therefore safe to dispatch again;
-    network errors leave the current investigation untouched for a later poll.
+    State machine:
+        `dispatching`    + external_job_id=None + timeout   → `recovery_required`
+        `dispatch_uncertain` + external_job_id (đã set)     → GET /v1/jobs/{id}:
+            * 2xx → `dispatched` (job tồn tại, request đã tới DeepAgent).
+            * 404 → `recovery_required` (job không tồn tại, re-dispatch an toàn).
+            * 401/403 → terminal auth/config failure → `reconcile_failed`
+              (status=failed + completed_at — giải phóng capacity slot).
+            * 400/422 → terminal protocol/request incompatibility →
+              `reconcile_failed` (status=failed + completed_at).
+            * 408/429/5xx / network error → giữ nguyên `dispatch_uncertain`,
+              retry tick sau — NHƯNG nếu `dispatch_uncertain` kéo dài quá
+              `deepagent_reconcile_max_uncertain_seconds` (age-based bound
+              tính từ `started_at`) → `reconcile_timeout` terminal để slot
+              không bị giữ vô hạn khi backend unhealthy kéo dài.
     """
     if not inv.external_job_id:
         dispatch_started_at = inv.started_at
@@ -476,6 +533,34 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
             await db.commit()
             logger.warning("DeepAgent dispatch interrupted for investigation %s", inv.id)
         return
+
+    # P2 bounded uncertain reconciliation: `dispatch_uncertain` không được giữ
+    # capacity slot vô hạn. Nếu uncertain kéo dài quá age bound (tính từ
+    # `started_at` lúc dispatch) — dù nguyên nhân là 5xx/timeout liên tục —
+    # chuyển terminal `reconcile_timeout` để giải phóng slot cho job mới.
+    # Age-based (dùng `started_at`) nên không cần schema migration.
+    uncertain = inv.hermes_status == "dispatch_uncertain"
+    if (
+        uncertain
+        and inv.started_at
+        and (datetime.now(UTC) - inv.started_at).total_seconds()
+        > settings.deepagent_reconcile_max_uncertain_seconds
+    ):
+        inv.status = "failed"
+        inv.hermes_status = "reconcile_timeout"
+        inv.error = (
+            "dispatch_uncertain không reconcile được sau "
+            f"{settings.deepagent_reconcile_max_uncertain_seconds}s — "
+            "DeepAgent backend có thể unhealthy kéo dài"
+        )[:2000]
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning(
+            "Investigation %s: dispatch_uncertain vượt age bound → reconcile_timeout "
+            "(giải phóng capacity slot)",
+            inv.id,
+        )
+        return
     try:
         async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
             response = await client.get(
@@ -485,9 +570,61 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
     except Exception as exc:  # noqa: BLE001 - retry on the next worker tick
         logger.warning("DeepAgent job check failed for %s: %s", inv.id, exc)
         return
-    if response.status_code != 404:
+
+    # 2xx → job tồn tại. Request đã tới DeepAgent — chuyển sang dispatched
+    # để orchestrator poll tiếp như bình thường.
+    if 200 <= response.status_code < 300:
+        if inv.hermes_status == "dispatch_uncertain":
+            try:
+                body = response.json()
+            except Exception:  # noqa: BLE001 - body không quan trọng cho reconcile
+                body = {}
+            inv.hermes_status = "dispatched"
+            inv.hermes_response = {
+                "job_id": inv.external_job_id,
+                "status": body.get("status"),
+                "reconciled": True,
+            }
+            await db.commit()
+            logger.info(
+                "Investigation %s reconciled: DeepAgent đang chạy job_id=%s",
+                inv.id, inv.external_job_id,
+            )
         return
 
+    if response.status_code != 404:
+        if uncertain and response.status_code in (400, 401, 403, 422):
+            # P2 v4 terminal classification: đây là lỗi auth/config (401/403)
+            # hoặc protocol/request incompatibility (400/422) của GET
+            # reconciliation — KHÔNG BAO GIỜ thành công bằng cách retry.
+            # Nếu giữ dispatch_uncertain thì capacity lại tính row này vào
+            # `analyzing` vô hạn (capacity starvation). Terminal fail để
+            # thoát khỏi analyzing + giải phóng slot.
+            inv.status = "failed"
+            inv.hermes_status = "reconcile_failed"
+            inv.error = (
+                f"DeepAgent GET /v1/jobs/{inv.external_job_id} returned "
+                f"HTTP {response.status_code} — terminal auth/config hoặc "
+                "protocol incompatibility, không thể reconcile"
+            )[:2000]
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+            logger.error(
+                "Investigation %s: reconcile GET returned HTTP %s (terminal) → "
+                "reconcile_failed, capacity slot released",
+                inv.id, response.status_code,
+            )
+            return
+        # 408/429/5xx từ DeepAgent — chưa rõ job có tồn tại hay không.
+        # Giữ nguyên `dispatch_uncertain`, retry tick sau (age bound phía trên
+        # đảm bảo không giữ slot vô hạn).
+        logger.warning(
+            "Investigation %s: GET returned HTTP %s (transient); keep dispatch_uncertain",
+            inv.id, response.status_code,
+        )
+        return
+
+    # 404 → DeepAgent không có job này. An toàn để re-dispatch.
     inv.status = "pending"
     inv.external_job_id = None
     inv.hermes_status = "recovery_required"
@@ -551,9 +688,37 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
                 json=request_body,
             )
         response.raise_for_status()
-        body = response.json()
+        try:
+            body = response.json()
+        except Exception as exc:
+            # BLOCKER 1 follow-up: response body JSON decode fail SAU HTTP 2xx.
+            # Request đã tới server (HTTP 2xx), nhưng body corrupt → không verify
+            # được job_id. Có thể DeepAgent đã tạo job trong DB nội bộ của nó.
+            # Phân loại UNCERTAIN (không definitive) — reconcile loop ở tick sau
+            # GET /v1/jobs/{expected_id} để quyết định cuối cùng.
+            inv.hermes_status = "dispatch_uncertain"
+            inv.hermes_response = {
+                "reason": "ambiguous_dispatch_outcome",
+                "kind": "response_body_json_decode_failed",
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            }
+            await db.commit()
+            logger.warning(
+                "Investigation %s dispatch: HTTP 2xx nhưng body JSON decode fail "
+                "(%s) — đánh dấu ambiguous; reconcile sẽ GET job_id=%s",
+                inv.id, type(exc).__name__, inv.external_job_id,
+            )
+            raise DispatchUncertain(
+                f"Response body không phải JSON hợp lệ ({type(exc).__name__}); "
+                "request có thể đã tới server. Đã lưu dispatch_uncertain + reconcile job."
+            ) from exc
         if body.get("job_id") != expected_job_id:
-            raise LlmError("DeepAgent trả về job ID không khớp investigation")
+            inv.status = "failed"
+            inv.hermes_status = "dispatch_failed"
+            inv.error = "DeepAgent trả về job ID không khớp investigation"
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+            raise DispatchFailed("DeepAgent trả về job ID không khớp investigation")
         inv.external_job_id = expected_job_id
         inv.hermes_status = "dispatched"
         inv.hermes_response = {
@@ -562,13 +727,112 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         }
         await db.commit()
         logger.info("Investigation %s dispatched to DeepAgent job=%s", inv.id, inv.external_job_id)
+    except httpx.HTTPStatusError as exc:
+        # HTTP error response (4xx/5xx). Cần phân biệt:
+        # - 4xx (trừ 408/429): request không thể tới DeepAgent thành công
+        #   → definitive failure, đánh dấu failed ngay.
+        # - 5xx / 408 / 429: gateway timeout hoặc request có thể đã tới server
+        #   trước khi upstream trả lỗi → AMBIGUOUS, KHÔNG set failed;
+        #   reconcile sẽ GET job_id để quyết định tiếp.
+        status_code = exc.response.status_code if exc.response else 0
+        if 400 <= status_code < 500 and status_code not in (408, 429):
+            inv.status = "failed"
+            inv.hermes_status = "dispatch_failed"
+            inv.error = f"DeepAgent dispatch 4xx: {status_code}: {exc}"[:2000]
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+            raise DispatchFailed(f"DeepAgent dispatch 4xx: {status_code}")
+        # 5xx / 408 / 429: ambiguous — KHÔNG set failed; raise typed
+        # DispatchUncertain để worker boundary xử lý riêng.
+        inv.hermes_status = "dispatch_uncertain"
+        inv.hermes_response = {
+            "reason": "ambiguous_dispatch_outcome",
+            "status_code": status_code,
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        await db.commit()
+        logger.warning(
+            "Investigation %s dispatch ambiguous (HTTP %s): reconcile sẽ GET job_id=%s",
+            inv.id, status_code, inv.external_job_id,
+        )
+        raise DispatchUncertain(
+            f"HTTP {status_code} ambiguous — request có thể đã tới server."
+        )
+    except (
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.ConnectError,
+        httpx.RemoteProtocolError,
+    ) as exc:
+        # Ambiguous network failure — request có thể đã tới server. KHÔNG set
+        # failed; chuyển sang `dispatch_uncertain` để vòng reconcile (xem
+        # `_state_check_deepagent_job`) GET job_id và quyết định:
+        #   - job tồn tại → `dispatched`.
+        #   - 404 → `recovery_required` (re-dispatch).
+        inv.hermes_status = "dispatch_uncertain"
+        inv.hermes_response = {
+            "reason": "ambiguous_dispatch_outcome",
+            "kind": "network",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+        await db.commit()
+        logger.warning(
+            "Investigation %s dispatch ambiguous (%s): reconcile sẽ GET job_id=%s",
+            inv.id, type(exc).__name__, inv.external_job_id,
+        )
+        raise DispatchUncertain(
+            f"{type(exc).__name__}: request có thể đã tới server."
+        )
+    except DispatchUncertain:
+        # Đã được xử lý và set hermes_status + commit bên trên; re-raise để
+        # worker biết ambiguous outcome.
+        raise
+    except DispatchFailed:
+        # BLOCKER 1 v3: dispatch đã set status=failed + completed_at + error
+        # rồi raise DispatchFailed. KHÔNG reclassify — keep semantics:
+        # worker catch DispatchFailed → set status=failed (idempotent).
+        # Nếu để fall qua `except Exception`, `inv.external_job_id is not None`
+        # → reclassify thành DispatchUncertain, state inconsistent
+        # (status=failed + hermes=dispatch_uncertain + completed_at set).
+        raise
     except Exception as exc:
+        # BLOCKER 1 follow-up: chỉ definitive failure khi lỗi xảy ra TRƯỚC khi
+        # request được gửi đi (vd bad local config, validation body trước khi POST).
+        # Nếu exception xảy ra SAU khi POST (vd JSON parse fail được phân loại
+        # riêng ở trên), KHÔNG nên mặc định definitive — kiểm tra xem
+        # external_job_id đã set hay chưa:
+        #   - external_job_id is None → request CHƯA gửi → definitive.
+        #   - external_job_id đã set → request có thể đã gửi → uncertain.
+        # Hầu hết exception path (vd config validation, key exception) chỉ raise
+        # trước khi commit + set external_job_id, nên default về definitive vẫn
+        # đúng cho phần lớn case. Nếu sau này code phát sinh post-POST exception,
+        # path sẽ cần refactor để ensure external_job_id chỉ set sau khi commit OK.
+        is_after_post = inv.external_job_id is not None
+        if is_after_post:
+            inv.hermes_status = "dispatch_uncertain"
+            inv.hermes_response = {
+                "reason": "ambiguous_dispatch_outcome",
+                "kind": "post_request_exception",
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            }
+            await db.commit()
+            logger.warning(
+                "Investigation %s dispatch: post-POST exception %s — ambiguous; "
+                "reconcile GET job_id=%s",
+                inv.id, type(exc).__name__, inv.external_job_id,
+            )
+            raise DispatchUncertain(
+                f"Post-POST exception: {type(exc).__name__}"
+            )
+        # Lỗi trước khi request được gửi → definitive failure.
         inv.status = "failed"
         inv.hermes_status = "dispatch_failed"
         inv.error = f"DeepAgent dispatch: {type(exc).__name__}: {exc}"[:2000]
         inv.completed_at = datetime.now(UTC)
         await db.commit()
-        raise
+        raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}")
 
 
 async def _state_start(db: AsyncSession, inv: DfirInvestigation) -> None:
@@ -603,7 +867,7 @@ async def _state_start(db: AsyncSession, inv: DfirInvestigation) -> None:
                     err = f"{type(e).__name__}: {e}"
                     flows.append({"artifact": art, "error": err})
                     logger.warning("Investigation %s: collect %s failed: %s", inv.id, art, err)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Không tạo được VelociraptorClient (sai config, mất kết nối…) → fail toàn bộ
         err = f"{type(e).__name__}: {e}"
         inv.status = "failed"
@@ -685,7 +949,7 @@ async def _state_poll_collect(db: AsyncSession, inv: DfirInvestigation) -> None:
                         inv.id, flow_id, e,
                     )
                     all_done = False
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Không tạo được VelociraptorClient → fail cả investigation
         inv.status = "failed"
         inv.error = f"Velociraptor poll: {type(e).__name__}: {e}"[:2000]

@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.db.models import MachineStatus, TokenStatus
 
@@ -1852,13 +1852,24 @@ class SystemProfileCreate(BaseModel):
 
 class SystemProfileUpdate(BaseModel):
     """Cập nhật hồ sơ — không cho sửa qua endpoint này khi đã approved
-    (trừ Super Admin, xử lý ở router)."""
+    (trừ Super Admin, xử lý ở router).
 
+    BLOCKER 3 v3: Contract nullable rõ ràng:
+      - `name`, `level` là NOT NULL trong DB. Explicit null bị reject 422.
+      - Các field khác (description, diagram_mermaid, v.v.) cho phép explicit
+        null để clear (nullable clearing feature).
+    """
+
+    # NOT NULL fields: explicit null phải raise validation error.
     name: str | None = Field(default=None, min_length=1, max_length=255)
     level: int | None = Field(default=None, ge=1, le=3)
     description: str | None = None
     diagram_mermaid: str | None = None
     physical_diagram_mermaid: str | None = None
+    # Bố cục sơ đồ React Flow (vị trí node kéo thả) — dict tự do, server chỉ
+    # lưu thô; client tự validate shape khi đọc.
+    diagram_layout: dict | None = None
+    physical_diagram_layout: dict | None = None
     physical_location: str | None = None
     user_accounts: int | None = Field(default=None, ge=0)
     data_volume: str | None = None
@@ -1866,6 +1877,22 @@ class SystemProfileUpdate(BaseModel):
     managed_by: str | None = Field(default=None, max_length=255)
     document_number: str | None = Field(default=None, max_length=128)
     document_date: date | None = None
+
+    @field_validator("name", "level")
+    @classmethod
+    def _no_explicit_null_for_required_fields(cls, value, info):
+        """BLOCKER 3 v3: name/level phải là giá trị thực (NOT NULL), KHÔNG null.
+
+        Trước fix: schema cho phép null; router setattr(field, None) → DB
+        IntegrityError / 500.
+        Sau fix: explicit null reject 422 controlled.
+        """
+        if value is None:
+            raise ValueError(
+                f"{info.field_name} không được null (DB NOT NULL); "
+                "để giữ nguyên, bỏ field khỏi body PATCH."
+            )
+        return value
 
 
 # ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ──
@@ -1907,7 +1934,17 @@ class SystemProfileApplicationOut(SystemProfileApplicationIn):
 
 
 class SystemProfileIpRangeIn(BaseModel):
-    """Dải IP trong quy hoạch vùng mạng."""
+    """Dải IP trong quy hoạch vùng mạng.
+
+    Validation:
+      - `cidr` phải là CIDR hợp lệ (vd `192.168.0.0/24`, `2001:db8::/32`). Parse
+        bằng Python `ipaddress.ip_network(strict=False)` để chấp nhận cả
+        `192.168.0.5/24` (host bits set) → reject nếu không phải prefix length.
+      - `gateway` (optional) phải là IP hợp lệ nếu có.
+      - Nếu gateway tồn tại + cùng IP version (CIDR/gateway cùng family), không
+        bắt buộc gateway phải nằm trong network (business rule có thể relax; hiện
+        chỉ check version match).
+    """
 
     zone: str = Field(min_length=1, max_length=128)
     zone_description: str | None = None
@@ -1915,6 +1952,57 @@ class SystemProfileIpRangeIn(BaseModel):
     ip_kind: str = Field(default="private", pattern="^(private|public)$")
     gateway: str | None = Field(default=None, max_length=45)
     note: str | None = None
+
+    @field_validator("cidr")
+    @classmethod
+    def _validate_cidr(cls, value: str) -> str:
+        import ipaddress as _ip
+        try:
+            # strict=False chấp nhận host bits set — sau đó check bằng prefixlen
+            # để đảm bảo là network thực sự. Nếu network == IP thì mask che toàn bộ → OK.
+            net = _ip.ip_network(value, strict=False)
+            if net.num_addresses == 1 and "/" not in value:
+                raise ValueError(
+                    f"cidr phải là dải CIDR (vd 10.0.0.0/24); nhận {value!r}"
+                )
+        except ValueError as exc:
+            raise ValueError(f"cidr không hợp lệ {value!r}: {exc}") from exc
+        return value
+
+    @field_validator("gateway")
+    @classmethod
+    def _validate_gateway(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return value
+        import ipaddress as _ip
+        try:
+            _ip.ip_address(value)
+        except ValueError as exc:
+            raise ValueError(f"gateway không phải IP hợp lệ {value!r}: {exc}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _validate_cidr_gateway_same_family(self) -> "SystemProfileIpRangeIn":
+        """P2 v3: cidr và gateway phải cùng IP family (IPv4 hoặc IPv6).
+        Business rule hiện tại chỉ enforce family match (chưa enforce gateway ∈ network).
+        Document rõ nếu sau này muốn enforce membership.
+        """
+        if self.gateway is None or self.gateway == "":
+            return self
+        import ipaddress as _ip
+        try:
+            network = _ip.ip_network(self.cidr, strict=False)
+            gateway = _ip.ip_address(self.gateway)
+        except ValueError as exc:
+            # _validate_cidr / _validate_gateway đã catch các lỗi format; đến đây
+            # chỉ là safety net nếu validator bị skip.
+            raise ValueError(f"cidr/gateway format invalid: {exc}") from exc
+        if network.version != gateway.version:
+            raise ValueError(
+                f"cidr {self.cidr} (IPv{network.version}) và gateway {self.gateway} "
+                f"(IPv{gateway.version}) phải cùng IP family"
+            )
+        return self
 
 
 class SystemProfileIpRangeOut(SystemProfileIpRangeIn):
@@ -2049,6 +2137,7 @@ class SystemProfileOut(BaseModel):
     review_note: str | None = None
     reviewed_at: datetime | None = None
     diagram_mermaid: str | None = None
+    diagram_layout: dict | None = None
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
@@ -2070,6 +2159,7 @@ class SystemProfileDetailOut(SystemProfileOut):
     requirements_verified: int = 0
     level_compliant: bool = False
     physical_diagram_mermaid: str | None = None
+    physical_diagram_layout: dict | None = None
     physical_location: str | None = None
     user_accounts: int | None = None
     data_volume: str | None = None

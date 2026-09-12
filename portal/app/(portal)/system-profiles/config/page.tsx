@@ -2,7 +2,7 @@
 
 /**
  * Trang cấu hình hồ sơ cấp độ (chỉ Super Admin):
- * - Tab "Loại thiết bị": CRUD catalog `/api/device-types` (icon emoji dùng trên sơ đồ Mermaid).
+ * - Tab "Loại thiết bị": CRUD catalog `/api/device-types` (icon emoji dùng trên sơ đồ mạng).
  * - Tab "Yêu cầu ATTT": CRUD catalog `/api/level-requirements` theo cấp độ 1–3.
  *
  * Sidebar đặt trong nhóm "Vận hành" — đây là trang cấu hình hệ thống, không thuộc nhóm
@@ -275,7 +275,7 @@ export default function SystemProfileConfigPage() {
             <Field label="Mã loại" required hint={dtModal === "new" ? "Chữ thường, không dấu (vd: camera)" : "Không đổi được sau khi tạo"}>
               <Input value={dtCode} onChange={(e) => setDtCode(e.target.value)} disabled={dtModal !== "new"} placeholder="camera" />
             </Field>
-            <Field label="Icon (emoji)" hint="Hiển thị kèm node trên sơ đồ Mermaid">
+            <Field label="Icon (emoji)" hint="Hiển thị kèm node trên sơ đồ mạng">
               <Input value={dtIcon} onChange={(e) => setDtIcon(e.target.value)} placeholder="📷" />
             </Field>
           </div>

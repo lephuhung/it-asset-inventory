@@ -159,6 +159,140 @@ async def test_graph_enforces_three_step_initial_triage_limit() -> None:
     ]
 
 
+# -------------------------------------------------------------------------
+# P1-4: Tier-2 budget must be INDEPENDENT from initial triage budget
+# -------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_graph_tier2_runs_even_when_initial_uses_full_budget() -> None:
+    """P1-4 regression: khi initial triage dùng hết `max_steps=3`, Tier-2 vẫn
+    được phép chạy tối đa 2 step theo budget riêng.
+
+    Trước fix: Tier-2 budget được tính `max(max_steps - len(initial_steps), 0)` →
+    nếu initial dùng 3 step, Tier-2 còn 0 → Tier-2 không bao giờ chạy.
+    """
+
+    class ThreeStepInitialModel(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            # 3 Tier-1 steps — chiếm hết max_steps=3 budget cũ.
+            return InvestigationPlan(
+                hypothesis="Three-step Tier 1 triage",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="T1-A",
+                    ),
+                    InvestigationStep(
+                        tool="windows_pslist",
+                        rationale="T1-B",
+                    ),
+                    InvestigationStep(
+                        tool="windows_netstat_enriched",
+                        rationale="T1-C",
+                    ),
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            # Tier-2 vẫn được phép đề xuất.
+            return [
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="T2 from evidence",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Persistence",
+                    rationale="T2 from evidence",
+                ),
+            ]
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=ThreeStepInitialModel(),
+        settings=Settings(max_steps=3),
+    )
+
+    result = await graph.ainvoke({"request": tiered_request()})
+
+    # Expected sau fix: 3 Tier-1 + 2 Tier-2 (max Tier-2 = 2 riêng)
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "windows_pslist",
+        "windows_netstat_enriched",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+    assert [item.tool for item in result["evidence"]] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "windows_pslist",
+        "windows_netstat_enriched",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_tier2_capped_at_two_even_when_model_proposes_more() -> None:
+    """Tier-2 budget phải là constant riêng (MAX_TIER2_STEPS=2)."""
+
+    class GreedyTier2Model(FakeModel):
+        async def plan(self, _request: InvestigationRequest) -> InvestigationPlan:
+            return InvestigationPlan(
+                hypothesis="Short Tier 1",
+                steps=[
+                    InvestigationStep(
+                        tool="custom:Custom.DFIR.Windows.Triage",
+                        rationale="T1",
+                    ),
+                ],
+            )
+
+        async def plan_tier2_expansion(
+            self,
+            _request: InvestigationRequest,
+            _evidence: list[EvidenceItem],
+            _candidates: set[str],
+        ) -> list[InvestigationStep]:
+            # Đề xuất nhiều Tier-2, chỉ 2 đầu được chấp nhận.
+            return [
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="T2-1",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Persistence",
+                    rationale="T2-2",
+                ),
+                InvestigationStep(
+                    tool="custom:Custom.DFIR.Windows.Execution",
+                    rationale="T2-3 duplicate",
+                ),
+            ]
+
+    mcp = FakeMCP()
+    graph = build_investigation_graph(
+        mcp=mcp,
+        model=GreedyTier2Model(),
+        settings=Settings(max_steps=3),
+    )
+
+    await graph.ainvoke({"request": tiered_request()})
+
+    # Tier-2 cap = 2 (MAX_TIER2_STEPS)
+    assert [call["tool_name"] for call in mcp.calls] == [
+        "custom:Custom.DFIR.Windows.Triage",
+        "custom:Custom.DFIR.Windows.Execution",
+        "custom:Custom.DFIR.Windows.Persistence",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_graph_asks_llm_for_one_tier2_after_tier1_evidence() -> None:
     class TieredModel(FakeModel):

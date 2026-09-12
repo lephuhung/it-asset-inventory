@@ -145,11 +145,12 @@ def build_investigation_graph(
                 break
         if not accepted_steps:
             return {"tier2_planned": True}
+        # P1-4 fix: Tier-2 budget là constant riêng (MAX_TIER2_STEPS),
+        # KHÔNG tính từ `settings.max_steps - len(initial_steps)`. Trước fix,
+        # nếu initial triage dùng hết budget (vd max_steps=3 + 3 steps) thì
+        # Tier-2 còn 0 slot và không bao giờ chạy.
+        # (`MAX_TIER2_STEPS` đã giới hạn `accepted_steps` ở trên — không cần slice lại.)
         current_plan = state["plan"]
-        remaining_steps = max(settings.max_steps - len(current_plan.steps), 0)
-        accepted_steps = accepted_steps[:remaining_steps]
-        if not accepted_steps:
-            return {"tier2_planned": True}
         expanded_plan = InvestigationPlan(
             hypothesis=current_plan.hypothesis,
             steps=[*current_plan.steps, *accepted_steps],
