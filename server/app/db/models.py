@@ -599,6 +599,41 @@ class FingerprintDrift(Base):
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
+class EnrollAttempt(Base):
+    """Yêu cầu enroll bị TỪ CHỐI ở server (token used/expired/revoked/không tồn tại).
+
+    Trước đây enroll fail vì token cũ → 401 im lặng, admin không bao giờ thấy máy
+    "xin vào" và agent retry vô hạn. Server giờ lưu attempt để portal hiển thị
+    hàng đợi duyệt:
+      - Approve → sinh token thay thế cho cùng org (reissue) + trả lại install command.
+      - Reject  → đánh dấu chặn, không sinh token.
+    `machine_uuid` (weighted id) dùng để DEDUPE retry từ cùng 1 máy; nếu trùng
+    fingerprint của 1 máy đã có trong org thì ghi `matched_machine_id` làm gợi ý
+    "đây có thể là máy X đã tồn tại" cho admin.
+    """
+
+    __tablename__ = "enroll_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)  # null khi token lạ
+    token_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("enroll_tokens.id"), nullable=True)
+    token_status: Mapped[str] = mapped_column(String(16), nullable=False)  # unknown | used | expired | revoked
+    token_prefix: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    machine_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # weighted id — dedupe retry
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    fingerprint: Mapped[dict] = mapped_column(JSONB, default=dict)
+    matched_machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | approved | rejected
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    org: Mapped["Organization"] = relationship()
+    matched_machine: Mapped["Machine"] = relationship()
+
+
 class ApiKey(Base):
     """API mở cho hệ thống khác (#22, Phase 4) — key theo scope, chỉ lưu hash.
 

@@ -15,7 +15,9 @@ ProtectSystem=strict
 PrivateTmp=yes
 ProtectHome=yes
 RestrictSUIDSGID=yes
-MemoryDenyWriteExecute=yes
+# MemoryDenyWriteExecute=no: .NET 8 cần JIT — bật=yes gây SEGV khi start.
+# (Khớp với unit do install.sh render — 2 đường cài phải cho cùng kết quả.)
+MemoryDenyWriteExecute=no
 ReadWritePaths=/var/lib/orginventory /var/log/orginventory /run/orginventory
 AmbientCapabilities=
 CapabilityBoundingSet=

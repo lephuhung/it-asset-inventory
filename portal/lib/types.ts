@@ -1366,3 +1366,34 @@ export interface SystemProfileContact {
   note: string | null;
   added_at: string;
 }
+
+/** Yêu cầu enroll bị từ chối ở cổng token (máy xin vào với token cũ/lạ) — hàng đợi duyệt. */
+export interface EnrollAttempt {
+  id: string;
+  org_id: string | null;
+  org_name: string | null;
+  token_status: "unknown" | "used" | "expired" | "revoked";
+  token_prefix: string | null;
+  hostname: string | null;
+  ip: string | null;
+  fingerprint: Record<string, unknown>;
+  matched_machine_id: string | null;
+  matched_machine_hostname: string | null;
+  status: "pending" | "approved" | "rejected";
+  note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/** Kết quả Approve attempt — token thay thế + lệnh cài 1 dòng. */
+export interface EnrollAttemptApproveResult {
+  attempt_id: string;
+  token: string;
+  install_command: string;
+  install_command_windows: string;
+  install_command_windows_org_only: string;
+  install_command_linux: string;
+  install_offline_url: string;
+  install_url_warnings: string[];
+  expires_at: string;
+}

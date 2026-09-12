@@ -682,6 +682,37 @@ class MachineDecision(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class EnrollAttemptOut(BaseModel):
+    """1 yêu cầu enroll bị từ chối ở cổng token (máy xin vào với token cũ/lạ)."""
+
+    id: uuid.UUID
+    org_id: uuid.UUID | None
+    org_name: str | None = None
+    token_status: str  # unknown | used | expired | revoked
+    token_prefix: str | None
+    hostname: str | None
+    ip: str | None
+    fingerprint: dict = {}
+    matched_machine_id: uuid.UUID | None = None
+    matched_machine_hostname: str | None = None
+    status: str  # pending | approved | rejected
+    note: str | None
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class EnrollAttemptDecision(BaseModel):
+    """Approve/Reject 1 enroll attempt (note tùy chọn)."""
+
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class EnrollAttemptApproveResponse(TokenCreateResponse):
+    """Approve attempt → sinh token thay thế (kèm lệnh cài) — trả về cho admin."""
+
+    attempt_id: uuid.UUID
+
+
 class AssignUserRequest(BaseModel):
     """Gán người sử dụng cho máy (sau khi upload ZIP cách ly).
 

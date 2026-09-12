@@ -1,6 +1,7 @@
 """Route enroll — agent đăng ký máy (token + fingerprint + CSR)."""
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -13,7 +14,7 @@ from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import hash_token
-from app.db.models import EnrollToken, FingerprintDrift, Machine, MachineStatus, TokenStatus, User
+from app.db.models import EnrollAttempt, EnrollToken, FingerprintDrift, Machine, MachineStatus, TokenStatus, User
 from app.db.session import get_db
 from app.schemas import EnrollRequest, EnrollResponse
 from app.services.agent_settings import effective_agent_config
@@ -22,6 +23,72 @@ from app.services.fingerprint import compute_weighted_id, is_same_machine
 
 router = APIRouter(prefix="/api/enroll", tags=["enroll"])
 limiter = Limiter(key_func=get_remote_address)
+
+
+async def _record_enroll_attempt(
+    db: AsyncSession,
+    *,
+    token_str: str,
+    token_status: str,
+    token_row: EnrollToken | None,
+    hostname: str | None,
+    fingerprint_dict: dict,
+    ip: str | None,
+) -> None:
+    """Lưu/refresh 1 EnrollAttempt — máy xin vào hệ thống nhưng bị từ chối ở cổng token.
+
+    Trước đây các case này chỉ 401 im lặng: admin không bao giờ thấy máy "xin vào",
+    agent thì retry 60s/lần vô hạn. Giờ attempt xuất hiện ở portal để admin
+    Approve (sinh token thay thế) hoặc Reject (chặn).
+
+    Dedupe theo machine_uuid (weighted id) + token_status: retry từ cùng 1 máy
+    KHÔNG tạo hàng loạt attempt — chỉ refresh attempt pending trong 24h gần nhất.
+    """
+    now = datetime.now(UTC)
+    weighted = compute_weighted_id(fingerprint_dict)
+
+    matched_machine_id: uuid.UUID | None = None
+    if token_row is not None:
+        exact_match = (
+            await db.execute(
+                select(Machine).where(
+                    Machine.org_id == token_row.org_id, Machine.machine_uuid == weighted
+                )
+            )
+        ).scalar_one_or_none()
+        matched_machine_id = exact_match.id if exact_match else None
+
+    recent = (
+        await db.execute(
+            select(EnrollAttempt).where(
+                EnrollAttempt.machine_uuid == weighted,
+                EnrollAttempt.token_status == token_status,
+                EnrollAttempt.status == "pending",
+                EnrollAttempt.created_at >= now - timedelta(hours=24),
+            )
+        )
+    ).scalar_one_or_none()
+    if recent is not None:
+        recent.hostname = hostname or recent.hostname
+        recent.ip = ip or recent.ip
+        recent.fingerprint = fingerprint_dict or recent.fingerprint
+        recent.created_at = now
+        return
+
+    db.add(
+        EnrollAttempt(
+            org_id=token_row.org_id if token_row else None,
+            token_id=token_row.id if token_row else None,
+            token_status=token_status,
+            token_prefix=(token_str or "")[:8] + "…",
+            machine_uuid=weighted,
+            hostname=hostname,
+            ip=ip,
+            fingerprint=fingerprint_dict or {},
+            matched_machine_id=matched_machine_id,
+        )
+    )
+    await db.flush()
 
 
 async def perform_enroll(
@@ -51,6 +118,10 @@ async def perform_enroll(
         await db.execute(select(EnrollToken).where(EnrollToken.token_hash == token_hash))
     ).scalar_one_or_none()
     if token_row is None:
+        await _record_enroll_attempt(
+            db, token_str=token_str, token_status="unknown", token_row=None,
+            hostname=hostname, fingerprint_dict=fingerprint_dict, ip=audit_ip,
+        )
         await append_audit(
             db,
             action="enroll.invalid_token",
@@ -63,11 +134,33 @@ async def perform_enroll(
 
     now = datetime.now(UTC)
     if token_row.status == TokenStatus.REVOKED.value:
+        await _record_enroll_attempt(
+            db, token_str=token_str, token_status="revoked", token_row=token_row,
+            hostname=hostname, fingerprint_dict=fingerprint_dict, ip=audit_ip,
+        )
+        await append_audit(db, action="enroll.denied", actor=audit_actor,
+                           target=f"token:{token_row.id} (revoked)", ip=audit_ip)
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token đã bị thu hồi")
     if token_row.status == TokenStatus.USED.value:
+        # Token cũ — đúng case "máy xin push dữ liệu bằng token đã dùng": ghi nhận
+        # attempt để admin duyệt (Approve → sinh token thay thế) thay vì 401 im lặng.
+        await _record_enroll_attempt(
+            db, token_str=token_str, token_status="used", token_row=token_row,
+            hostname=hostname, fingerprint_dict=fingerprint_dict, ip=audit_ip,
+        )
+        await append_audit(db, action="enroll.denied", actor=audit_actor,
+                           target=f"token:{token_row.id} (used)", ip=audit_ip)
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token đã dùng")
     if token_row.expires_at.replace(tzinfo=UTC) < now:
         token_row.status = TokenStatus.EXPIRED.value
+        await _record_enroll_attempt(
+            db, token_str=token_str, token_status="expired", token_row=token_row,
+            hostname=hostname, fingerprint_dict=fingerprint_dict, ip=audit_ip,
+        )
+        await append_audit(db, action="enroll.denied", actor=audit_actor,
+                           target=f"token:{token_row.id} (expired)", ip=audit_ip)
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Token hết hạn")
 
@@ -126,7 +219,12 @@ async def perform_enroll(
     else:
         existing.hostname = hostname or existing.hostname
         existing.last_seen_at = now
-        existing.status = MachineStatus.ONLINE.value
+        if existing.status == MachineStatus.DECOMMISSIONED.value:
+            # Máy đã bị decline/thanh lý nhưng lại enroll (fingerprint khớp) →
+            # quay về hàng chờ duyệt, KHÔNG tự online. Approve phải qua admin.
+            existing.status = MachineStatus.PENDING.value
+        else:
+            existing.status = MachineStatus.ONLINE.value
         machine = existing
 
         if existing.machine_uuid != weighted:

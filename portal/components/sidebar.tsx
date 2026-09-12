@@ -26,6 +26,7 @@ import {
   Brain,
   ServerCog,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Tags,
   Ticket,
@@ -67,6 +68,7 @@ const NAV_GROUPS: Array<{ group: string; items: NavItem[] }> = [
     items: [
       { href: "/machines", label: "Máy tính", icon: Monitor },
       { href: "/approvals", label: "Máy chờ duyệt", icon: ClipboardCheck, roles: ADMIN_ROLES },
+      { href: "/enroll-requests", label: "Yêu cầu enroll bị từ chối", icon: ShieldAlert, roles: ADMIN_ROLES },
       { href: "/ghost-machines", label: "Máy mất kết nối", icon: Ghost },
       {
         href: "/tokens",

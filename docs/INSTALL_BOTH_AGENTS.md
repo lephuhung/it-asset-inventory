@@ -103,16 +103,32 @@ curl -fsSL https://portal.gov.vn/i/<token> | sudo bash
 
 **Luồng xử lý** (template: `server/app/templates/install.sh.j2`):
 
-1. Phát hiện distro (Debian/Ubuntu ↔ `.deb`, RHEL/Rocky ↔ `.rpm`) + architecture.
+1. Phát hiện distro (Debian/Ubuntu ↔ `.deb`, RHEL/Rocky ↔ `.rpm`) + architecture
+   (`x86_64` → amd64, `aarch64` → arm64 — cả binary OrgInventory lẫn package Velociraptor).
 2. **OrgInventory Agent**:
-   - Tải binary self-contained từ `/download/agent-linux-x64` + SHA256 → verify.
-   - Tạo user `orginventory`, data dir `/var/lib/orginventory`.
-   - Ghi `/etc/orginventory/config.json` với token + endpoints; tạo + enable systemd unit
-     `orginventory-agent.service`.
-3. **Velociraptor Client**: tải gói từ `/download/velociraptor-linux-amd64.{deb,rpm}` →
+   - Tải binary self-contained từ `/download/agent-<rid>` → verify **SHA256** (thiếu
+     `.sha256` → cảnh báo; sai → dừng).
+   - Tạo user `orginventory`, data dir `/var/lib/orginventory`, ghi file
+     `/opt/orginventory/VERSION` (so sánh manifest để auto-upgrade).
+   - Ghi `/etc/orginventory/config.json` (bootstrap) + tạo + enable systemd unit
+     `orginventory-agent.service` với `MemoryDenyWriteExecute=no` (.NET 8 JIT).
+3. **Velociraptor Client**: tải gói từ `/download/velociraptor-linux-<arch>.{deb,rpm}` →
    `dpkg -i` / `dnf install` → `systemctl enable --now velociraptor_client`; đè
    `client.config.yaml` từ `/download/velociraptor-client.config.yaml` → restart.
 4. Verify cả 2 service (OrgInventory + Velociraptor).
+
+### Contract reinstall thống nhất (Windows + Linux)
+
+Update endpoint/config **không bao giờ làm mất identity** (`enrolled` / `machineId` /
+`clientCertThumbprint` — Linux giữ trong state `/var/lib/orginventory/config.json`,
+Windows trong `%ProgramData%\OrgInventory\config.json`). Cụ thể:
+
+| Tình huống | Hành vi |
+|---|---|
+| Chạy lại lệnh với **token mới**, máy đã enroll | Chỉ update endpoints; identity giữ nguyên; token KHÔNG nạp (tránh 401 loop) |
+| Chạy lại **lệnh cũ** (token đã dùng) | Vô hại — không re-enroll, không đốt token |
+| Server có **phiên bản mới hơn** (manifest `/download/agent-version`) | Tự nâng binary/MSI, enrollment giữ nguyên. Tắt bằng `NO_AUTO_UPGRADE=1` |
+| **REENROLL=1** / `--reenroll` (Linux) / `-Reenroll` (Windows) | Rotate identity EXPLICIT: xoá identity + nạp token mới → agent enroll lại |
 
 > ⚠️ Gói `.deb`/`.rpm` phải là gói **đã nhúng `client.config.yaml`** (tạo bằng
 > `Server.Utils.CreateLinuxPackages` hoặc `velociraptor debian client --config client.config.yaml`
@@ -129,9 +145,12 @@ Trong `server/app/api/routes/downloads.py`:
 | Route | Nội dung |
 |---|---|
 | `GET /download/install-both.ps1` | Script Windows (serve từ `app/templates/install-both.ps1`) |
-| `GET /download/agent-linux-x64` | Binary Linux OrgInventoryAgent (từ `agent_dist/OrgInventoryAgent-linux-x64`) |
+| `GET /download/agent-{rid}` | Binary Linux OrgInventoryAgent theo RID (`linux-x64` / `linux-arm64`) |
+| `GET /download/agent-{rid}.sha256` | SHA256 của binary Linux (script verify trước khi cài) |
+| `GET /download/agent-version` | Manifest phiên bản (JSON, từ sidecar `.version`) — script so sánh để auto-upgrade |
 | `GET /download/velociraptor-linux-amd64.deb` | Gói `.deb` từ `agent_dist/velociraptor_client_amd64.deb` |
 | `GET /download/velociraptor-linux-amd64.rpm` | Gói `.rpm` từ `agent_dist/velociraptor_client_amd64.rpm` |
+| `GET /download/velociraptor-linux-arm64.{deb,rpm}` | Gói Velociraptor **ARM64** — máy aarch64 tải đúng arch (không nhầm amd64) |
 
 Đã thêm test trong `server/tests/test_downloads.py` (13 tests pass).
 
@@ -151,11 +170,17 @@ Trong `server/app/api/routes/downloads.py`:
 4. Đặt tất cả file vào thư mục agent_dist của Inventory Server:
      agent_dist/
      ├── OrgInventoryAgent.msi               (đã có sẵn)
+     ├── OrgInventoryAgent.msi.version       (phiên bản MSI — cho /download/agent-version)
      ├── OrgInventoryAgent-linux-x64         (binary Linux, bước 3)
+     ├── OrgInventoryAgent-linux-x64.sha256  (SHA256 binary — script verify)
+     ├── OrgInventoryAgent-linux-x64.version (phiên bản binary — cho auto-upgrade)
+     ├── OrgInventoryAgent-linux-arm64(.sha256/.version)  (nếu hỗ trợ ARM64)
      ├── velociraptor-windows-amd64.msi      (nếu dùng MSI repack, đặt tên này để
      │                                        /download/velociraptor-windows-amd64.msi phục vụ)
      ├── velociraptor_client_amd64.deb
-     └── velociraptor_client_amd64.rpm
+     ├── velociraptor_client_amd64.rpm
+     ├── velociraptor_client_arm64.deb       (nếu hỗ trợ ARM64)
+     └── velociraptor_client_arm64.rpm
 ```
 
 > Lưu ý cổng: config client phải trỏ `server_urls` về **`wss://<host>:8888/`** (host port

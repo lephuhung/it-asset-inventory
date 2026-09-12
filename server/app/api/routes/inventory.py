@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_client_machine_id
-from app.db.models import Machine, MachineSpec
+from app.db.models import Machine, MachineSpec, MachineStatus
 from app.db.session import get_db
 from app.schemas import InventoryRequest, InventoryResponse
 from app.services.inventory_normalize import derive_os_fields
@@ -54,6 +54,13 @@ async def submit_inventory(
     ).scalar_one_or_none()
     if machine is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Máy không tồn tại")
+    if machine.status == MachineStatus.DECOMMISSIONED.value:
+        # Máy đã bị admin decline/thanh lý — decline phải có tác dụng thật:
+        # không thu thập thêm dữ liệu gì từ máy này.
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="Máy đã bị thu hồi/decline — không nhận inventory. Liên hệ quản trị viên.",
+        )
 
     new_hash = body.config_hash or _config_hash(body)
     latest = (

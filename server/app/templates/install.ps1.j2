@@ -42,6 +42,39 @@ Write-Host ''
 Write-Host 'Nếu bạn không đồng ý với việc thu thập dữ liệu, hãy đóng cửa sổ này.' -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 
+# 2b. Máy đã cài agent? → chỉ tiếp tục khi server có phiên bản mới hơn (nâng cấp
+#     qua MajorUpgrade giữ nguyên enrollment); ngược lại thoát 0, không đốt token.
+$productCode = $null
+$installedVersion = $null
+foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*') {
+    $item = Get-ItemProperty $root -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*OrgInventory*' -and $_.PSChildName -match '^\{[0-9A-Fa-f\-]+\}$' } |
+        Select-Object -First 1
+    if ($item) {
+        $productCode = $item.PSChildName
+        $installedVersion = $item.DisplayVersion
+        break
+    }
+}
+if ($productCode) {
+    $serverVersion = $null
+    try {
+        $manifest = Invoke-RestMethod -Uri "$baseUrl/download/agent-version" -UseBasicParsing -TimeoutSec 30
+        $serverVersion = $manifest.msi_version
+    } catch { }
+    $needsUpgrade = $false
+    if ($serverVersion -and $installedVersion) {
+        try { $needsUpgrade = ([version]$serverVersion -gt [version]$installedVersion) } catch { $needsUpgrade = $false }
+    }
+    if (-not $needsUpgrade) {
+        Write-Host "Agent đã cài$(if ($installedVersion) { " (v$installedVersion)" }) và không có phiên bản mới hơn — không cần cài lại." -ForegroundColor Green
+        Write-Host '  Update endpoint/config: dùng lệnh cài chính (install-both). Re-enroll: -Reenroll.' -ForegroundColor Gray
+        exit 0
+    }
+    Write-Host "Đang nâng cấp: v$installedVersion -> v$serverVersion (giữ nguyên enrollment) ..." -ForegroundColor Cyan
+}
+
 # 3. Tải MSI
 Write-Host "[1/4] Đang tải agent từ $msiUrl ..." -ForegroundColor Cyan
 try {
@@ -52,8 +85,22 @@ try {
     exit 1
 }
 
-# 4. Verify SHA256 + chữ ký Authenticode
-Write-Host '[2/4] Xác thực chữ ký số ...' -ForegroundColor Cyan
+# 4. Verify SHA256 (file .sha256 do server cung cấp cạnh MSI)
+Write-Host '[2/4] Xác thực file (SHA256 + chữ ký số) ...' -ForegroundColor Cyan
+try {
+    $expectedHash = (Invoke-WebRequest -Uri "$baseUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
+    $actualHash = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
+    if ($expectedHash.ToLower() -ne $actualHash) {
+        Write-Host "[LỖI] SHA256 không khớp (server: $expectedHash, file: $actualHash). Đã dừng cài đặt." -ForegroundColor Red
+        Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Write-Host '      ✓ SHA256 khớp' -ForegroundColor Green
+} catch {
+    Write-Host '      ⚠ Không verify được SHA256 (thiếu agent.msi.sha256 trên server) — tiếp tục.' -ForegroundColor Yellow
+}
+
+# 5. Verify chữ ký Authenticode
 $sig = Get-AuthenticodeSignature -FilePath $msiPath
 # MSI chưa ký chỉ được phép cài khi admin chủ động set ORGINV_ALLOW_UNSIGNED=1 (test).
 # Mặc định (không set) vẫn BẮT BUỘC chữ ký Authenticode hợp lệ.
@@ -69,7 +116,7 @@ if ($sig.Status -eq 'Valid') {
     Write-Host "      ⚠ MSI KHÔNG ký Authenticode (Status: $($sig.Status)) — bỏ qua vì ORGINV_ALLOW_UNSIGNED=1 (CHỈ DÙNG TEST)" -ForegroundColor Yellow
 }
 
-# 5. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
+# 6. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
 Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
 $install = Start-Process msiexec.exe -ArgumentList @(
     '/i', "`"$msiPath`"", '/qn', '/norestart',
@@ -83,7 +130,7 @@ if ($install.ExitCode -ne 0) {
     exit 1
 }
 
-# 6. Hoàn tất
+# 7. Hoàn tất
 Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
 try { Remove-MpPreference -ExclusionPath $msiPath -ErrorAction SilentlyContinue } catch { }
 Write-Host '[4/4] Hoàn tất.' -ForegroundColor Cyan

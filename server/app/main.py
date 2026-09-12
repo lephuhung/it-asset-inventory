@@ -28,6 +28,7 @@ from app.api.routes import (
     device_types,
     drifts,
     enroll,
+    enroll_attempts,
     heartbeat,
     install,
     inventory,
@@ -157,6 +158,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.include_router(auth.router)
 app.include_router(enroll.router)
+app.include_router(enroll_attempts.router)
 app.include_router(heartbeat.router)
 app.include_router(inventory.router)
 app.include_router(tokens.router)

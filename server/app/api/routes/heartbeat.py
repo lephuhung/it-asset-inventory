@@ -42,7 +42,13 @@ async def heartbeat(
     now = datetime.now(UTC)
     was_online = machine.status == MachineStatus.ONLINE.value
     machine.last_seen_at = now
-    machine.status = MachineStatus.ONLINE.value
+    if machine.status == MachineStatus.DECOMMISSIONED.value:
+        # Máy đã bị admin decline/thanh lý — ghi nhận last_seen (để admin thấy máy
+        # vẫn bật) nhưng KHÔNG tự bật lại online. Vẫn nhận heartbeat, không nhận
+        # inventory (xem /api/inventory).
+        pass
+    else:
+        machine.status = MachineStatus.ONLINE.value
 
     hb = Heartbeat(
         machine_id=machine.id,
@@ -75,7 +81,7 @@ async def heartbeat(
     await db.commit()
 
     # Publish sự kiện realtime khi máy từ trạng thái khác sang ONLINE (tránh spam)
-    if not was_online:
+    if not was_online and machine.status == MachineStatus.ONLINE.value:
         from app.services.realtime import publish_machine_event
 
         await publish_machine_event(machine.id, MachineStatus.ONLINE.value, machine.hostname)

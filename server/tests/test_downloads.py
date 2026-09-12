@@ -148,6 +148,62 @@ async def test_download_velociraptor_linux_deb_not_found(client, tmp_path, monke
     assert "Không tìm thấy" in r.json()["detail"]
 
 
+async def test_download_velociraptor_linux_arm64_ok(client, msi_dir):
+    """Velociraptor arm64 — install.sh trên aarch64 tải đúng arch (không nhầm amd64)."""
+    (msi_dir / "velociraptor_client_arm64.deb").write_bytes(b"DEB-ARM64-FAKE")
+    r = await client.get("/download/velociraptor-linux-arm64.deb")
+    assert r.status_code == 200, r.text
+    assert r.content == b"DEB-ARM64-FAKE"
+    assert "velociraptor_client_arm64.deb" in r.headers.get("content-disposition", "")
+
+
+async def test_download_velociraptor_linux_arm64_not_found(client, msi_dir):
+    """Chưa bổ sung package arm64 vào agent_dist → 404 kèm tên file cần có."""
+    r = await client.get("/download/velociraptor-linux-arm64.rpm")
+    assert r.status_code == 404
+    assert "velociraptor_client_arm64.rpm" in r.json()["detail"]
+
+
+async def test_download_velociraptor_linux_unsupported_arch(client, msi_dir):
+    r = await client.get("/download/velociraptor-linux-mips64.deb")
+    assert r.status_code == 404
+    assert "Kiến trúc không hỗ trợ" in r.json()["detail"]
+
+
+async def test_download_agent_version_manifest(client, msi_dir):
+    """Manifest phiên bản: đọc sidecar .version; thiếu → null (script không auto-upgrade)."""
+    (msi_dir / "OrgInventoryAgent.msi.version").write_text("1.2.0\n")
+    (msi_dir / "OrgInventoryAgent-linux-arm64.version").write_text("1.2.0")
+    r = await client.get("/download/agent-version")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["msi_version"] == "1.2.0"
+    assert data["linux"]["linux-arm64"] == "1.2.0"
+    assert data["linux"]["linux-x64"] is None
+    assert data["velociraptor_msi_version"] is None
+
+
+async def test_download_agent_linux_sha256(client, msi_dir):
+    """Script install.sh verify SHA256 binary trước khi cài."""
+    (msi_dir / "OrgInventoryAgent-linux-x64.sha256").write_text(
+        "abc123  OrgInventoryAgent-linux-x64\n"
+    )
+    r = await client.get("/download/agent-linux-x64.sha256")
+    assert r.status_code == 200
+    assert r.text.startswith("abc123")
+
+
+async def test_download_agent_linux_sha256_missing(client, msi_dir):
+    r = await client.get("/download/agent-linux-x64.sha256")
+    assert r.status_code == 404
+
+
+async def test_download_agent_linux_rejects_bad_rid(client, msi_dir):
+    r = await client.get("/download/agent-linux-mips64")
+    assert r.status_code == 404
+    assert "RID không hỗ trợ" in r.json()["detail"]
+
+
 # ── Offline package — ZIP KHÔNG password (yêu cầu nghiệp vụ) ────────────────
 
 
