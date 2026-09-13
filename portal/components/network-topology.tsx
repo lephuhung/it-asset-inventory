@@ -522,7 +522,11 @@ function TopologyCanvasInner({
     setTimeout(() => setAiCopied(false), 2000);
   }, [aiPrompt]);
 
-  /** Dán JSON do AI trả về → validate → render lên canvas (chưa lưu DB). */
+  /**
+   * Dán JSON do AI trả về → validate → GỘP vào sơ đồ hiện tại (không phá hủy):
+   * node/đường không được nhắc tới được giữ nguyên; edges chỉ thay thế khi JSON
+   * có danh sách edges mới không rỗng.
+   */
   const applyAiJson = useCallback(() => {
     setAiPasteError(null);
     const res = parseAiLayoutJson(aiPaste);
@@ -543,24 +547,57 @@ function TopologyCanvasInner({
     }
     pushHistory();
     const allIds = new Set([...known, ...customSet]);
-    const customs: FlowNode[] = (parsed.customNodes ?? []).map((c, i) => ({
-      id: c.id,
-      type: "device",
-      deletable: true,
-      position: parsed.nodes[c.id] ?? { x: 200 + i * 40, y: 220 },
-      data: {
-        name: c.name,
-        deviceCode: null,
-        deviceType: c.deviceType,
-        icon: "🏷️",
-        note: parsed.notes?.[c.id],
-      },
-    }));
-    setNodes([...toFlowNodes(applyDiagramLayout(topology.nodes, parsed), parsed.notes), ...customs]);
-    setEdges(savedEdgesToFlow(parsed.edges, allIds, []));
+
+    // Gộp vị trí/ghi chú: node không được nhắc tới giữ nguyên như đang có
+    const mergedNodes: FlowNode[] = nodes.map((n) => {
+      const pos = parsed.nodes[n.id];
+      const note = parsed.notes?.[n.id];
+      return {
+        ...n,
+        position: pos ?? n.position,
+        data: note !== undefined ? { ...n.data, note: note || undefined } : n.data,
+      };
+    });
+    // customNodes: giữ custom cũ, thêm custom mới (cập nhật tên/loại/vị trí nếu JSON khai trùng id)
+    const customMeta = new Map((parsed.customNodes ?? []).map((c) => [c.id, c]));
+    const existingCustoms = nodes
+      .filter((n) => n.id.startsWith("custom-"))
+      .map((n) => {
+        const meta = customMeta.get(n.id);
+        return meta
+          ? {
+              ...n,
+              position: parsed.nodes[n.id] ?? n.position,
+              data: { ...n.data, name: meta.name, deviceType: meta.deviceType, note: parsed.notes?.[n.id] },
+            }
+          : n;
+      });
+    const newCustoms: FlowNode[] = (parsed.customNodes ?? [])
+      .filter((c) => !existingCustoms.some((e) => e.id === c.id))
+      .map((c, i) => ({
+        id: c.id,
+        type: "device" as const,
+        deletable: true,
+        position: parsed.nodes[c.id] ?? { x: 200 + i * 40, y: 220 },
+        data: {
+          name: c.name,
+          deviceCode: null,
+          deviceType: c.deviceType,
+          icon: "🏷️",
+          note: parsed.notes?.[c.id],
+        },
+      }));
+    setNodes([...mergedNodes, ...existingCustoms, ...newCustoms]);
+
+    // edges: chỉ thay thế khi JSON có danh sách edges mới; ngoài ra giữ nguyên
+    setEdges(
+      parsed.edges && parsed.edges.length > 0
+        ? savedEdgesToFlow(parsed.edges, allIds, [])
+        : edges,
+    );
     setAiOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiPaste, topology.nodes, setNodes, setEdges, pushHistory]);
+  }, [aiPaste, topology.nodes, nodes, edges, setNodes, setEdges, pushHistory]);
 
   /* ── Gọi AI phía server (dùng chung cấu hình LLM-DFIR) ── */
 
@@ -573,7 +610,7 @@ function TopologyCanvasInner({
     try {
       const res = await api.post<{ layout: Record<string, unknown>; model: string }>(
         `/system-profiles/${profileId}/diagram/ai-generate`,
-        { variant: apiVariant },
+        { variant: apiVariant, layout: savedLayout ?? null },
       );
       setAiPaste(JSON.stringify(res.layout, null, 2));
     } catch (e) {
@@ -581,7 +618,7 @@ function TopologyCanvasInner({
     } finally {
       setAiCalling(false);
     }
-  }, [profileId, apiVariant]);
+  }, [profileId, apiVariant, savedLayout]);
 
   const runAiReview = useCallback(async () => {
     if (!profileId) return;
@@ -957,7 +994,7 @@ function TopologyCanvasInner({
               <p className="mt-1 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">{aiPasteError}</p>
             )}
             <p className="mt-1 text-xs text-slate-400">
-              JSON hợp lệ sẽ render lên canvas — kiểm tra rồi bấm <b>Lưu bố cục</b> để ghi vào hồ sơ.
+              JSON sẽ được <b>gộp</b> vào sơ đồ hiện tại — node/đường cũ không bị xóa; kiểm tra rồi bấm <b>Lưu bố cục</b> để ghi vào hồ sơ.
             </p>
           </div>
         </div>
