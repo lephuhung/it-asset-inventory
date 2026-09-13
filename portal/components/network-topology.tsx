@@ -36,30 +36,43 @@ import {
 import {
   AppWindow,
   BatteryCharging,
+  Bot,
   Camera,
   CircleHelp,
+  ClipboardCopy,
+  ClipboardPaste,
+  Download,
   Globe,
   HardDrive,
+  LayoutTemplate,
   Monitor,
   Network,
   Package,
   Phone,
   Printer,
+  Redo2,
   RotateCcw,
   Router,
+  ScanSearch,
   Scale,
   Server,
   Shield,
   Save,
   Tag,
+  Undo2,
   Wifi,
 } from "lucide-react";
-import { Button, Field, Input, Modal } from "@/components/ui";
+import { toPng } from "html-to-image";
+import { api } from "@/lib/api";
+import { Button, Field, Input, Modal, Textarea } from "@/components/ui";
 import {
   applyDiagramLayout,
+  buildAiDiagramPrompt,
   buildDevicesTopology,
+  buildLevelTemplate,
   DEVICE_TYPE_ICON,
   DEVICE_TYPE_LABEL,
+  parseAiLayoutJson,
   type DeviceTypeMeta,
   type DiagramLayout,
   type TopologyNodeData,
@@ -196,6 +209,11 @@ export function NetworkTopologyCanvas(props: {
   canEdit?: boolean;
   saving?: boolean;
   onSave?: (layout: DiagramLayout) => Promise<void>;
+  /** Tên hồ sơ + nhãn sơ đồ — dùng trong prompt AI. */
+  profileName?: string;
+  profileId?: string;
+  profileLevel?: 1 | 2 | 3;
+  variant?: string;
 }) {
   return (
     <ReactFlowProvider>
@@ -211,6 +229,10 @@ function TopologyCanvasInner({
   canEdit = false,
   saving = false,
   onSave,
+  profileName,
+  profileId,
+  profileLevel,
+  variant = "mạng",
 }: {
   devices: SystemProfileDevice[];
   meta?: DeviceTypeMeta;
@@ -218,6 +240,10 @@ function TopologyCanvasInner({
   canEdit?: boolean;
   saving?: boolean;
   onSave?: (layout: DiagramLayout) => Promise<void>;
+  profileName?: string;
+  profileId?: string;
+  profileLevel?: 1 | 2 | 3;
+  variant?: string;
 }) {
   const topology = useMemo(() => buildDevicesTopology(devices, meta), [devices, meta]);
   const initialNodes = useMemo(
@@ -244,6 +270,20 @@ function TopologyCanvasInner({
   const [noteEditor, setNoteEditor] = useState<{ nodeId: string; nodeName: string; value: string } | null>(null);
   const [renameEditor, setRenameEditor] = useState<{ nodeId: string; value: string } | null>(null);
   const [edgeLabelEditor, setEdgeLabelEditor] = useState<{ edgeId: string; title: string; value: string } | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiPaste, setAiPaste] = useState("");
+  const [aiPasteError, setAiPasteError] = useState<string | null>(null);
+  const [aiCopied, setAiCopied] = useState(false);
+  const [aiCalling, setAiCalling] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewFindings, setReviewFindings] = useState<{ severity: string; title: string; detail: string }[]>([]);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewModel, setReviewModel] = useState<string | null>(null);
+  /* Undo/redo: snapshot = JSON {nodes, edges} rút gọn */
+  const [past, setPast] = useState<string[]>([]);
+  const [future, setFuture] = useState<string[]>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
@@ -329,16 +369,84 @@ function TopologyCanvasInner({
   );
   const dirty = stableStringify(currentLayout) !== stableStringify(savedLayout);
 
+  /* ── Undo / Redo ── (định nghĩa trước các mutation để deps không TDZ) */
+  const snapshot = useCallback(
+    () =>
+      JSON.stringify({
+        nodes: nodes.map((n) => ({ id: n.id, position: n.position, data: n.data, deletable: n.deletable })),
+        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, label: e.label })),
+      }),
+    [nodes, edges],
+  );
+  const pushHistory = useCallback(
+    (pre?: string) => {
+      setPast((p) => [...p.slice(-49), pre ?? snapshot()]);
+      setFuture([]);
+    },
+    [snapshot],
+  );
+  const restore = useCallback(
+    (snap: string) => {
+      const parsed = JSON.parse(snap) as { nodes: FlowNode[]; edges: Edge[] };
+      setNodes(parsed.nodes);
+      setEdges(parsed.edges);
+    },
+    [setNodes, setEdges],
+  );
+  const undo = useCallback(() => {
+    if (past.length === 0) return;
+    const prev = past[past.length - 1];
+    setPast(past.slice(0, -1));
+    setFuture([snapshot(), ...future].slice(0, 50));
+    restore(prev);
+  }, [past, future, snapshot, restore]);
+  const redo = useCallback(() => {
+    if (future.length === 0) return;
+    const next = future[0];
+    setPast([...past.slice(-49), snapshot()]);
+    setFuture(future.slice(1));
+    restore(next);
+  }, [past, future, snapshot, restore]);
+  const dragSnapshot = useRef<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
+  /** Bọc onNodesChange/onEdgesChange: có xóa phần tử thì ghi lịch sử trước. */
+  const handleNodesChange = useCallback(
+    (changes: Parameters<typeof onNodesChange>[0]) => {
+      if (changes.some((c) => c.type === "remove")) pushHistory();
+      onNodesChange(changes);
+    },
+    [onNodesChange, pushHistory],
+  );
+  const handleEdgesChange = useCallback(
+    (changes: Parameters<typeof onEdgesChange>[0]) => {
+      if (changes.some((c) => c.type === "remove")) pushHistory();
+      onEdgesChange(changes);
+    },
+    [onEdgesChange, pushHistory],
+  );
+
   const onConnect = useCallback(
     (c: Connection) => {
       if (c.source === c.target) return;
       setError(null);
+      pushHistory();
       setEdges((es) => {
         if (es.some((e) => e.source === c.source && e.target === c.target)) return es;
         return addEdge({ id: `e-${c.source}-${c.target}-${es.length}-${Date.now()}`, ...c }, es);
       });
     },
-    [setEdges],
+    [setEdges, pushHistory],
   );
 
   /** Thêm node tự do (đã chọn loại) vào giữa khung nhìn đang nhìn. */
@@ -349,6 +457,7 @@ function TopologyCanvasInner({
         ? screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
         : { x: 0, y: 0 };
       const id = `custom-${Date.now()}`;
+      pushHistory();
       setNodes((ns) => [
         ...ns,
         {
@@ -360,22 +469,172 @@ function TopologyCanvasInner({
         },
       ]);
     },
-    [screenToFlowPosition, setNodes],
+    [screenToFlowPosition, setNodes, pushHistory],
   );
 
   /** Sắp xếp lại: thiết bị về vị trí auto theo tầng; giữ nguyên node tự do + đường nối. */
   const rearrange = useCallback(() => {
+    pushHistory();
     setNodes((current) => [
       ...toFlowNodes(topology.nodes, savedLayout?.notes),
       ...current.filter((n) => n.id.startsWith("custom-")),
     ]);
-  }, [topology.nodes, savedLayout?.notes, setNodes]);
+  }, [topology.nodes, savedLayout?.notes, setNodes, pushHistory]);
 
   /** Chuột phải vào node → mở modal đặt/sửa ghi chú (IP, dải IP, vlan…). */
   const onNodeContextMenu = useCallback((event: React.MouseEvent, node: FlowNode) => {
     event.preventDefault();
     setNoteEditor({ nodeId: node.id, nodeName: node.data.name, value: node.data.note ?? "" });
   }, []);
+
+  /* ── Vẽ bằng AI ── */
+
+  const openAiModal = useCallback(() => {
+    setAiPrompt(
+      buildAiDiagramPrompt({
+        profileTitle: profileName ?? "hồ sơ",
+        variant,
+        devices,
+        meta,
+        layout: savedLayout,
+      }),
+    );
+    setAiPaste("");
+    setAiPasteError(null);
+    setAiCopied(false);
+    setAiOpen(true);
+  }, [profileName, variant, devices, meta, savedLayout]);
+
+  const copyPrompt = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(aiPrompt);
+      setAiCopied(true);
+    } catch {
+      // Clipboard API bị chặn (iframe/webview) — fallback select + execCommand
+      const ta = document.getElementById("ai-prompt-text") as HTMLTextAreaElement | null;
+      if (ta) {
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        setAiCopied(true);
+      }
+    }
+    setTimeout(() => setAiCopied(false), 2000);
+  }, [aiPrompt]);
+
+  /** Dán JSON do AI trả về → validate → render lên canvas (chưa lưu DB). */
+  const applyAiJson = useCallback(() => {
+    setAiPasteError(null);
+    const res = parseAiLayoutJson(aiPaste);
+    if (!res.ok) {
+      setAiPasteError(res.error);
+      return;
+    }
+    const parsed = res.layout;
+    const known = new Set(topology.nodes.map((n) => n.id));
+    const customSet = new Set((parsed.customNodes ?? []).map((c) => c.id));
+    const unknown = Object.keys(parsed.nodes).filter((id) => !known.has(id) && !customSet.has(id));
+    if (unknown.length > 0) {
+      setAiPasteError(
+        `JSON chứa node không thuộc hồ sơ: ${unknown.slice(0, 5).join(", ")}${unknown.length > 5 ? "…" : ""}. ` +
+          "Chỉ dùng id thiết bị đã khai, __internet__, __workstation__ hoặc id khai trong customNodes.",
+      );
+      return;
+    }
+    pushHistory();
+    const allIds = new Set([...known, ...customSet]);
+    const customs: FlowNode[] = (parsed.customNodes ?? []).map((c, i) => ({
+      id: c.id,
+      type: "device",
+      deletable: true,
+      position: parsed.nodes[c.id] ?? { x: 200 + i * 40, y: 220 },
+      data: {
+        name: c.name,
+        deviceCode: null,
+        deviceType: c.deviceType,
+        icon: "🏷️",
+        note: parsed.notes?.[c.id],
+      },
+    }));
+    setNodes([...toFlowNodes(applyDiagramLayout(topology.nodes, parsed), parsed.notes), ...customs]);
+    setEdges(savedEdgesToFlow(parsed.edges, allIds, []));
+    setAiOpen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiPaste, topology.nodes, setNodes, setEdges, pushHistory]);
+
+  /* ── Gọi AI phía server (dùng chung cấu hình LLM-DFIR) ── */
+
+  const apiVariant = variant === "vật lý" ? "physical" : "logic";
+
+  const callAiGenerate = useCallback(async () => {
+    if (!profileId) return;
+    setAiCalling(true);
+    setAiPasteError(null);
+    try {
+      const res = await api.post<{ layout: Record<string, unknown>; model: string }>(
+        `/system-profiles/${profileId}/diagram/ai-generate`,
+        { variant: apiVariant },
+      );
+      setAiPaste(JSON.stringify(res.layout, null, 2));
+    } catch (e) {
+      setAiPasteError(e instanceof Error ? e.message : "Lỗi khi gọi AI vẽ sơ đồ");
+    } finally {
+      setAiCalling(false);
+    }
+  }, [profileId, apiVariant]);
+
+  const runAiReview = useCallback(async () => {
+    if (!profileId) return;
+    setReviewOpen(true);
+    setReviewLoading(true);
+    setReviewError(null);
+    setReviewFindings([]);
+    setReviewModel(null);
+    try {
+      const res = await api.post<{
+        findings: { severity: string; title: string; detail: string }[];
+        model: string;
+      }>(`/system-profiles/${profileId}/diagram/ai-review`, {
+        variant: apiVariant,
+        layout: savedLayout ?? null,
+      });
+      setReviewFindings(res.findings);
+      setReviewModel(res.model);
+    } catch (e) {
+      setReviewError(e instanceof Error ? e.message : "Lỗi khi gọi AI rà soát");
+    } finally {
+      setReviewLoading(false);
+    }
+  }, [profileId, apiVariant, savedLayout]);
+
+  /* ── Template mẫu theo cấp độ ── */
+
+  const applyLevelTemplate = useCallback(() => {
+    if (!profileLevel) return;
+    pushHistory();
+    const tpl = buildLevelTemplate(devices, profileLevel, meta);
+    const allIds = new Set(topology.nodes.map((n) => n.id));
+    setNodes(toFlowNodes(applyDiagramLayout(topology.nodes, tpl), savedLayout?.notes));
+    setEdges(savedEdgesToFlow(tpl.edges, allIds, []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileLevel, devices, meta, topology.nodes, savedLayout?.notes, setNodes, setEdges, pushHistory]);
+
+  /* ── Xuất PNG ── */
+
+  const exportPng = useCallback(async () => {
+    const el = canvasRef.current;
+    if (!el) return;
+    setError(null);
+    try {
+      const dataUrl = await toPng(el, { backgroundColor: "#f8fafc", pixelRatio: 2 });
+      const a = document.createElement("a");
+      a.download = `so-do-${(profileName ?? "ho-so").replace(/\s+/g, "-").toLowerCase()}-${variant}.png`;
+      a.href = dataUrl;
+      a.click();
+    } catch {
+      setError("Không xuất được PNG — thử thu nhỏ sơ đồ rồi xuất lại.");
+    }
+  }, [profileName, variant]);
 
   /** Double-click node tự do → mở modal đổi tên (tên thiết bị thuộc danh mục). */
   const onNodeDoubleClick = useCallback(
@@ -427,7 +686,8 @@ function TopologyCanvasInner({
           <li>Sơ đồ load <b>toàn bộ thiết bị</b> đã khai (chưa có đường sẵn) — <b>nối đường</b>: kéo từ chấm tròn dưới node này lên đỉnh node khác.</li>
           <li><b>Nhãn đường nối</b> (vlan, link…): double-click vào đường; <b>ghi chú node</b> (IP…): chuột phải vào node.</li>
           <li><b>Gỡ đường / xóa node tự do</b>: chọn rồi nhấn <kbd className="rounded border bg-white px-1 font-mono text-[10px]">Delete</kbd>; <b>đổi tên node tự do</b>: double-click.</li>
-          <li>Lăn chuột thu phóng, chuột phải di chuyển. Nhớ bấm <b>Lưu bố cục</b>.</li>
+          <li><b>Vẽ bằng AI</b>: copy prompt (đã có sẵn thông tin hệ thống) gửi cho ChatGPT/Gemini… hoặc bấm "Gọi AI vẽ ngay"; dán JSON trả về để render. <b>AI rà soát</b>: nhờ AI kiểm tra an toàn + ghi chú.</li>
+          <li><b>Hoàn tác/làm lại</b>: Ctrl+Z / Ctrl+Shift+Z. Lăn chuột thu phóng, chuột phải di chuyển. Nhớ bấm <b>Lưu bố cục</b>.</li>
         </ul>
       </details>
       <div ref={canvasRef} className="h-[480px] overflow-hidden rounded-lg border border-slate-200 bg-slate-50" data-testid="topology-canvas">
@@ -435,12 +695,21 @@ function TopologyCanvasInner({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          onNodesChange={handleNodesChange}
+          onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
           onNodeContextMenu={onNodeContextMenu}
           onNodeDoubleClick={onNodeDoubleClick}
           onEdgeDoubleClick={onEdgeDoubleClick}
+          onNodeDragStart={() => {
+            dragSnapshot.current = snapshot();
+          }}
+          onNodeDragStop={() => {
+            if (dragSnapshot.current) {
+              pushHistory(dragSnapshot.current);
+              dragSnapshot.current = null;
+            }
+          }}
           deleteKeyCode={["Backspace", "Delete"]}
           minZoom={0.2}
           fitView
@@ -483,9 +752,31 @@ function TopologyCanvasInner({
               </>
             )}
           </div>
+          <Button variant="secondary" onClick={openAiModal}>
+            <Bot className="size-4" /> Vẽ bằng AI
+          </Button>
+          <Button variant="secondary" onClick={() => void runAiReview()}>
+            <ScanSearch className="size-4" /> AI rà soát
+          </Button>
+          {profileLevel && (
+            <Button variant="secondary" onClick={applyLevelTemplate} title={`Dùng bố cục mẫu cho hồ sơ cấp độ ${profileLevel}`}>
+              <LayoutTemplate className="size-4" /> Mẫu cấp độ {profileLevel}
+            </Button>
+          )}
+          <Button variant="secondary" onClick={() => void exportPng()}>
+            <Download className="size-4" /> Xuất PNG
+          </Button>
           <Button variant="secondary" onClick={rearrange}>
             <RotateCcw className="size-4" /> Sắp xếp lại
           </Button>
+          <div className="ml-auto flex gap-1">
+            <Button variant="secondary" onClick={undo} disabled={past.length === 0} title="Hoàn tác (Ctrl+Z)">
+              <Undo2 className="size-4" />
+            </Button>
+            <Button variant="secondary" onClick={redo} disabled={future.length === 0} title="Làm lại (Ctrl+Shift+Z)">
+              <Redo2 className="size-4" />
+            </Button>
+          </div>
         </div>
       )}
 
@@ -500,6 +791,7 @@ function TopologyCanvasInner({
             <Button
               onClick={() => {
                 if (!noteEditor) return;
+                pushHistory();
                 patchNodeData(noteEditor.nodeId, { note: noteEditor.value.trim() || undefined });
                 setNoteEditor(null);
               }}
@@ -518,6 +810,7 @@ function TopologyCanvasInner({
               placeholder="10.10.0.1/24"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
+                  pushHistory();
                   patchNodeData(noteEditor.nodeId, { note: noteEditor.value.trim() || undefined });
                   setNoteEditor(null);
                 }
@@ -539,6 +832,7 @@ function TopologyCanvasInner({
               disabled={!renameEditor?.value.trim()}
               onClick={() => {
                 if (!renameEditor?.value.trim()) return;
+                pushHistory();
                 patchNodeData(renameEditor.nodeId, { name: renameEditor.value.trim() });
                 setRenameEditor(null);
               }}
@@ -570,6 +864,7 @@ function TopologyCanvasInner({
             <Button
               onClick={() => {
                 if (!edgeLabelEditor) return;
+                pushHistory();
                 const label = edgeLabelEditor.value.trim() || undefined;
                 setEdges((es) => es.map((e) => (e.id === edgeLabelEditor.edgeId ? { ...e, label } : e)));
                 setEdgeLabelEditor(null);
@@ -589,6 +884,7 @@ function TopologyCanvasInner({
               placeholder="VLAN 10 — trunk"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
+                  pushHistory();
                   const label = edgeLabelEditor.value.trim() || undefined;
                   setEdges((es) => es.map((x) => (x.id === edgeLabelEditor.edgeId ? { ...x, label } : x)));
                   setEdgeLabelEditor(null);
@@ -597,6 +893,114 @@ function TopologyCanvasInner({
             />
           </Field>
         )}
+      </Modal>
+
+      {/* Modal vẽ sơ đồ bằng AI: copy prompt → dán JSON trả về để render */}
+      <Modal
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        title={`Vẽ sơ đồ ${variant} bằng AI`}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setAiOpen(false)}>Đóng</Button>
+            <Button onClick={applyAiJson} disabled={!aiPaste.trim()}>
+              <ClipboardPaste className="size-4" /> Dán &amp; render JSON
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-sm font-medium text-slate-700">Bước 1 — Prompt cho AI</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => void copyPrompt()}>
+                  <ClipboardCopy className="size-3.5" /> {aiCopied ? "Đã sao chép!" : "Sao chép"}
+                </Button>
+              </div>
+            </div>
+            {profileId && (
+              <div className="mb-2 rounded-lg border border-brand-200 bg-brand-50 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-slate-600">
+                    Hoặc gọi thẳng AI đã cấu hình trong hệ thống (dùng chung LLM-DFIR) — kết quả tự điền vào bước 2.
+                  </p>
+                  <Button size="sm" onClick={() => void callAiGenerate()} loading={aiCalling}>
+                    <Bot className="size-3.5" /> Gọi AI vẽ ngay
+                  </Button>
+                </div>
+              </div>
+            )}
+            <Textarea
+              id="ai-prompt-text"
+              className="h-56 font-mono text-[11px]"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              readOnly
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              Prompt đã gồm danh sách thiết bị, id node bắt buộc và quy cách JSON. Dán vào ChatGPT/Gemini/Copilot…
+            </p>
+          </div>
+          <div>
+            <span className="mb-1 block text-sm font-medium text-slate-700">Bước 2 — Dán JSON AI trả về</span>
+            <Textarea
+              className="h-40 font-mono text-[11px]"
+              value={aiPaste}
+              onChange={(e) => {
+                setAiPaste(e.target.value);
+                setAiPasteError(null);
+              }}
+              placeholder={'{"version": 1, "nodes": {"__internet__": {"x": 0, "y": 0}, ...}, "edges": [...]}'}
+            />
+            {aiPasteError && (
+              <p className="mt-1 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">{aiPasteError}</p>
+            )}
+            <p className="mt-1 text-xs text-slate-400">
+              JSON hợp lệ sẽ render lên canvas — kiểm tra rồi bấm <b>Lưu bố cục</b> để ghi vào hồ sơ.
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal AI rà soát sơ đồ */}
+      <Modal
+        open={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+        title={`AI rà soát sơ đồ ${variant}`}
+        footer={
+          <Button variant="secondary" onClick={() => setReviewOpen(false)}>Đóng</Button>
+        }
+      >
+        <div className="space-y-2">
+          {reviewLoading && <p className="text-sm text-slate-500">Đang gọi AI rà soát… (có thể mất vài chục giây)</p>}
+          {reviewError && (
+            <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">{reviewError}</p>
+          )}
+          {!reviewLoading && !reviewError && reviewFindings.length === 0 && (
+            <p className="text-sm text-slate-500">AI không phát hiện vấn đề nào — sơ đồ hợp lý và ghi chú đầy đủ.</p>
+          )}
+          {reviewFindings.map((f, i) => {
+            const cls =
+              f.severity === "high"
+                ? "border-red-200 bg-red-50 text-red-800"
+                : f.severity === "low"
+                  ? "border-sky-200 bg-sky-50 text-sky-800"
+                  : "border-amber-200 bg-amber-50 text-amber-800";
+            const label = f.severity === "high" ? "Nghiêm trọng" : f.severity === "low" ? "Gợi ý" : "Cần lưu ý";
+            return (
+              <div key={i} className={`rounded-lg border p-2.5 ${cls}`}>
+                <p className="text-xs font-semibold">
+                  [{label}] {f.title}
+                </p>
+                <p className="mt-0.5 whitespace-pre-wrap text-xs leading-relaxed">{f.detail}</p>
+              </div>
+            );
+          })}
+          {reviewModel && !reviewLoading && (
+            <p className="text-[11px] text-slate-400">Model: {reviewModel}</p>
+          )}
+        </div>
       </Modal>
     </div>
   );

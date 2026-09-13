@@ -1623,6 +1623,10 @@ export default function SystemProfileDetailPage() {
               layout={profile.diagram_layout}
               canEdit={canEdit}
               saving={busy}
+              profileName={profile.name}
+              profileId={profile.id}
+              profileLevel={profile.level}
+              variant="lô-gic"
               onSave={(layout) => act(() => api.patch(`/system-profiles/${profile.id}`, { diagram_layout: layout }))}
             />
           </Card>
@@ -1633,6 +1637,10 @@ export default function SystemProfileDetailPage() {
               layout={profile.physical_diagram_layout}
               canEdit={canEdit}
               saving={busy}
+              profileName={profile.name}
+              profileId={profile.id}
+              profileLevel={profile.level}
+              variant="vật lý"
               onSave={(layout) => act(() => api.patch(`/system-profiles/${profile.id}`, { physical_diagram_layout: layout }))}
             />
           </Card>

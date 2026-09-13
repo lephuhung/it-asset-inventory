@@ -44,6 +44,7 @@ from app.api.routes import (
     officers,
     reports,
     stats,
+    system_profile_diagram_ai,
     system_profiles,
     tags,
     telegram_bot_admin,
@@ -167,6 +168,7 @@ app.include_router(stats.router)
 app.include_router(tags.router)
 app.include_router(system_profiles.router)
 app.include_router(system_profiles.catalog_router)
+app.include_router(system_profile_diagram_ai.router)
 app.include_router(device_types.router)
 app.include_router(it_contacts.router)
 app.include_router(orgs.router)

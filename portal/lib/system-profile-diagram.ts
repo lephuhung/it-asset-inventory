@@ -265,3 +265,260 @@ export function applyDiagramLayout(
     return saved ? { ...n, position: { x: saved.x, y: saved.y } } : n;
   });
 }
+
+/* ── Template mẫu theo cấp độ hồ sơ ───────────────────────── */
+
+export type LevelTemplate = DiagramLayout;
+
+/**
+ * Sinh template bố cục + liên kết theo cấp độ hồ sơ (1/2/3), ánh xạ lên đúng
+ * các thiết bị đã khai:
+ *  - Cấp 1: chuỗi tuyến tính đơn giản Internet → fw → switch → (còn lại) → máy trạm.
+ *  - Cấp 2: lõi Internet → fw → router → switch, các thiết bị còn lại nối vào switch (hub).
+ *  - Cấp 3: lõi có dự phòng (fw/router/switch nối chuỗi hết), server nối qua load balancer
+ *    nếu có, storage gắn server, UPS gắn storage/switch.
+ */
+export function buildLevelTemplate(
+  devices: SystemProfileDevice[],
+  level: 1 | 2 | 3,
+  meta?: DeviceTypeMeta,
+): LevelTemplate {
+  const topo = buildDevicesTopology(devices, meta);
+  const nodes = Object.fromEntries(topo.nodes.map((n) => [n.id, n.position]));
+  const byType = new Map<string, SystemProfileDevice[]>();
+  for (const d of [...devices].sort((a, b) => a.sort_order - b.sort_order)) {
+    const list = byType.get(d.device_type) ?? [];
+    list.push(d);
+    byType.set(d.device_type, list);
+  }
+  const workstationIncluded = topo.nodes.some((n) => n.id === DEFAULT_WORKSTATION_NODE_ID);
+  const ids = {
+    internet: INTERNET_NODE_ID,
+    firewalls: byType.get("firewall") ?? [],
+    routers: byType.get("router") ?? [],
+    switches: byType.get("switch") ?? [],
+    servers: byType.get("server") ?? [],
+    lbs: byType.get("load_balancer") ?? [],
+    storages: byType.get("storage") ?? [],
+    upses: byType.get("ups") ?? [],
+    websites: byType.get("website") ?? [],
+    rest: devices.filter(
+      (d) => !["firewall", "router", "switch", "server", "load_balancer", "storage", "ups", "website"].includes(d.device_type),
+    ),
+    workstation: workstationIncluded ? [DEFAULT_WORKSTATION_NODE_ID] : (byType.get("workstation") ?? []).map((d) => d.id),
+  };
+
+  const edges: DiagramLayoutEdge[] = [];
+  const link = (source: string | undefined | null, target: string | undefined | null, label?: string) => {
+    if (source && target && source !== target) edges.push({ source, target, label });
+  };
+  const chain = (list: { id: string }[]) => list.map((d) => d.id);
+
+  if (level === 1) {
+    // Chuỗi tuyến tính: Internet → từng thiết bị → máy trạm
+    const seq = [ids.internet, ...chain(devices), ...ids.workstation];
+    for (let i = 0; i < seq.length - 1; i++) link(seq[i], seq[i + 1]);
+    return { version: 1, nodes, edges };
+  }
+
+  // Lõi chung cho cấp 2/3: Internet → (fw chain) → (router chain) → (switch chain)
+  const core: string[] = [ids.internet];
+  if (level === 2) {
+    core.push(...chain(ids.firewalls).slice(0, 1));
+    core.push(...chain(ids.routers).slice(0, 1));
+    core.push(...chain(ids.switches).slice(0, 1));
+  } else {
+    core.push(...chain(ids.firewalls));
+    core.push(...chain(ids.routers));
+    core.push(...chain(ids.switches));
+  }
+  for (let i = 0; i < core.length - 1; i++) link(core[i], core[i + 1]);
+  const coreTail = core[core.length - 1] ?? ids.internet;
+  const attachPoint = ids.switches[ids.switches.length - 1]?.id ?? coreTail;
+
+  if (level === 2) {
+    // Hub: mọi thiết bị còn lại nối vào switch cuối
+    for (const d of [...ids.servers, ...ids.websites, ...ids.storages, ...ids.upses, ...ids.rest]) {
+      link(attachPoint, d.id);
+    }
+    for (const ws of ids.workstation) link(attachPoint, ws);
+  } else {
+    // Cấp 3: LB → server; website vào DMZ qua fw; storage gắn server; UPS gắn storage/switch
+    const serverTail = ids.servers[ids.servers.length - 1]?.id;
+    if (ids.lbs.length > 0 && serverTail) {
+      link(attachPoint, ids.lbs[0].id, "uplink");
+      let prev = ids.lbs[0].id;
+      for (const d of ids.servers) {
+        link(prev, d.id);
+        prev = d.id;
+      }
+    } else {
+      for (const d of ids.servers) link(attachPoint, d.id);
+    }
+    for (const d of ids.websites) link(ids.firewalls[0]?.id ?? attachPoint, d.id, "DMZ");
+    for (const d of ids.storages) link(ids.servers[0]?.id ?? attachPoint, d.id, "iSCSI/NFS");
+    let upPrev = ids.storages[0]?.id ?? attachPoint;
+    for (const d of ids.upses) {
+      link(upPrev, d.id, "nguồn");
+      upPrev = d.id;
+    }
+    for (const d of ids.rest) link(attachPoint, d.id);
+    for (const ws of ids.workstation) link(attachPoint, ws);
+  }
+  return { version: 1, nodes, edges };
+}
+
+/* ── Vẽ sơ đồ bằng AI ─────────────────────────────────────── */
+
+export interface AiDiagramPromptInput {
+  /** Tên hồ sơ — đưa vào ngữ cảnh prompt. */
+  profileTitle: string;
+  /** Nhãn sơ đồ đang vẽ: "lô-gic" / "vật lý". */
+  variant: string;
+  devices: SystemProfileDevice[];
+  meta?: DeviceTypeMeta;
+  /** Layout hiện tại (nếu đã lưu) — AI cập nhật thay vì vẽ lại từ đầu. */
+  layout: DiagramLayout | null;
+}
+
+/**
+ * Sinh prompt gửi cho AI (ChatGPT/Gemini...) để nhờ vẽ sơ đồ mạng dưới dạng
+ * JSON layout React Flow của hệ thống. Prompt gồm: quy cách JSON bắt buộc,
+ * danh sách node hợp lệ (id thiết bị phải giữ nguyên), dữ liệu chi tiết từng
+ * thiết bị và layout hiện tại (nếu có).
+ */
+export function buildAiDiagramPrompt(input: AiDiagramPromptInput): string {
+  const { profileTitle, variant, devices, meta, layout } = input;
+  const sorted = [...devices].sort((a, b) => a.sort_order - b.sort_order);
+  const deviceLines = sorted
+    .map(
+      (d) =>
+        `- id: ${d.id} | tên: ${d.name} | loại: ${labelFor(d.device_type, meta)} (${d.device_type}) |` +
+        ` mã: ${d.device_code ?? "—"} | IP: ${d.ip ?? "—"} | model: ${d.model ?? "—"} |` +
+        ` vị trí: ${d.location ?? "—"} | mục đích: ${d.purpose ?? "—"}`,
+    )
+    .join("\n") || "(hồ sơ chưa khai thiết bị nào)";
+
+  const typeCatalog = Object.entries(meta?.labels && Object.keys(meta.labels).length ? meta.labels : DEVICE_TYPE_LABEL)
+    .map(([code, label]) => `${code}="${label}"`)
+    .join(", ");
+
+  return `Bạn là chuyên gia thiết kế mạng. Hãy vẽ sơ đồ mạng ${variant} cho hồ sơ "${profileTitle}" và trả về DUY NHẤT một JSON (không giải thích, không bọc markdown) theo đúng quy cách bên dưới.
+
+## Quy cách JSON (React Flow layout của hệ thống)
+{
+  "version": 1,
+  "nodes": { "<nodeId>": { "x": 280, "y": 0 } },        // tọa độ pixel, bắt buộc cho MỌI node
+  "edges": [ { "source": "<nodeId>", "target": "<nodeId>", "label": "VLAN 10 — trunk" } ],
+  "customNodes": [ { "id": "custom-1", "name": "Tên node mới", "deviceType": "other" } ],
+  "notes": { "<nodeId>": "ghi chú hiển thị trên node (IP, dải IP, vlan...)" }
+}
+
+## Quy tắc bắt buộc
+1. "nodes" phải chứa đủ TẤT CẢ id dưới đây (copy nguyên xi, không đặt lại id):
+   - "__internet__"  (node Internet — đầu nguồn, luôn có)
+   - "__workstation__" (node Máy trạm mặc định — chỉ thêm khi danh sách thiết bị chưa có loại workstation)
+   - id của từng thiết bị đã khai.
+2. Muốn thêm node mới (nhóm, vùng mạng, dịch vụ...): khai trong "customNodes" với id mới dạng "custom-..." và khai tọa độ trong "nodes".
+3. "edges": mỗi cạnh nối 2 id TỒN TẠI, không tự nối vào chính nó. Node có thể nối nhiều cạnh (firewall/router nhiều đường vật lý). Dùng "label" cho vlan/đường trunk.
+4. Bố cục: luồng dữ liệu từ Internet (bên trái) sang máy trạm (bên phải); cách nhau ~280px theo ngang, ~120px theo dọc theo tầng: firewall → router → switch → server → workstation; storage/UPS/website... xếp tầng phụ. Không để node chồng lên nhau.
+5. "notes": ghi chú rõ ràng cho các node quan trọng (IP, dải IP).
+
+## Danh sách loại thiết bị hợp lệ (deviceType)
+${typeCatalog}
+
+## Thiết bị của hồ sơ (id phải giữ nguyên)
+${deviceLines}
+
+## Layout hiện tại (nếu có — ưu tiên chỉnh sửa/bổ sung thay vì vẽ lại)
+${layout ? JSON.stringify(layout, null, 2) : "(chưa có — hãy vẽ mới)"}
+
+Trả về JSON hoàn chỉnh theo quy cách trên.`;
+}
+
+/** Kết quả parse JSON do AI trả về. */
+export type AiLayoutParseResult =
+  | { ok: true; layout: DiagramLayout }
+  | { ok: false; error: string };
+
+/**
+ * Parse JSON layout do AI trả về: bỏ markdown fence nếu có, kiểm tra cấu trúc
+ * tối thiểu (version 1, nodes là map {x,y} số). Trả về layout đã chuẩn hóa.
+ */
+export function parseAiLayoutJson(raw: string): AiLayoutParseResult {
+  const cleaned = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    return { ok: false, error: "Nội dung dán vào không phải JSON hợp lệ (đã tự bỏ ``` nếu có)." };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: "JSON phải là một object." };
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.version !== undefined && obj.version !== 1) {
+    return { ok: false, error: `"version" phải là 1 (nhận được: ${String(obj.version)}).` };
+  }
+  if (!obj.nodes || typeof obj.nodes !== "object" || Array.isArray(obj.nodes)) {
+    return { ok: false, error: 'Thiếu "nodes" (map nodeId → {x, y}).' };
+  }
+  const nodes: Record<string, { x: number; y: number }> = {};
+  for (const [id, pos] of Object.entries(obj.nodes as Record<string, unknown>)) {
+    if (!pos || typeof pos !== "object" || Array.isArray(pos)) {
+      return { ok: false, error: `Node "${id}" thiếu tọa độ {x, y}.` };
+    }
+    const x = Number((pos as Record<string, unknown>).x);
+    const y = Number((pos as Record<string, unknown>).y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { ok: false, error: `Tọa độ của node "${id}" phải là số.` };
+    }
+    nodes[id] = { x, y };
+  }
+  const edges: DiagramLayoutEdge[] = [];
+  if (obj.edges !== undefined) {
+    if (!Array.isArray(obj.edges)) return { ok: false, error: '"edges" phải là mảng.' };
+    for (const e of obj.edges) {
+      if (!e || typeof e !== "object") return { ok: false, error: "Phần tử edges phải là object {source, target}." };
+      const eo = e as Record<string, unknown>;
+      if (typeof eo.source !== "string" || typeof eo.target !== "string") {
+        return { ok: false, error: 'Mỗi edge cần "source" và "target" là string.' };
+      }
+      edges.push({
+        source: eo.source,
+        target: eo.target,
+        label: typeof eo.label === "string" && eo.label.trim() ? eo.label.trim() : undefined,
+      });
+    }
+  }
+  const customNodes: DiagramLayoutCustomNode[] = [];
+  if (obj.customNodes !== undefined) {
+    if (!Array.isArray(obj.customNodes)) return { ok: false, error: '"customNodes" phải là mảng.' };
+    for (const c of obj.customNodes) {
+      if (!c || typeof c !== "object") return { ok: false, error: "Phần tử customNodes phải là object." };
+      const co = c as Record<string, unknown>;
+      if (typeof co.id !== "string" || typeof co.name !== "string") {
+        return { ok: false, error: 'Mỗi customNode cần "id" và "name" là string.' };
+      }
+      customNodes.push({
+        id: co.id,
+        name: co.name,
+        deviceType: typeof co.deviceType === "string" && co.deviceType ? co.deviceType : "custom",
+      });
+    }
+  }
+  const notes: Record<string, string> = {};
+  if (obj.notes !== undefined) {
+    if (!obj.notes || typeof obj.notes !== "object" || Array.isArray(obj.notes)) {
+      return { ok: false, error: '"notes" phải là map nodeId → string.' };
+    }
+    for (const [id, v] of Object.entries(obj.notes as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim()) notes[id] = v.trim();
+    }
+  }
+  return { ok: true, layout: { version: 1, nodes, edges, customNodes, notes } };
+}
