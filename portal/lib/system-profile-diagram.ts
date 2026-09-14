@@ -89,6 +89,8 @@ export interface TopologyNodeData extends Record<string, unknown> {
   model?: string | null;
   location?: string | null;
   purpose?: string | null;
+  /** Node mẫu (id `sample-*`) — người dùng xóa/thay được, không thuộc danh mục thiết bị. */
+  virtual?: boolean;
 }
 
 export interface TopologyNode {
@@ -269,6 +271,120 @@ export function applyDiagramLayout(
 /* ── Template mẫu theo cấp độ hồ sơ ───────────────────────── */
 
 export type LevelTemplate = DiagramLayout;
+
+/** Node thiết bị mẫu dùng để lấp vị trí còn thiếu trong sơ đồ mẫu theo cấp độ. */
+const LEVEL_ESSENTIALS: Record<1 | 2 | 3, string[]> = {
+  1: ["firewall", "switch"],
+  2: ["firewall", "router", "switch", "server"],
+  3: ["firewall", "router", "switch", "server", "load_balancer", "storage"],
+};
+
+/**
+ * Sinh sơ đồ MẪU theo cấp độ để hiển thị mặc định khi hồ sơ chưa lưu bố cục:
+ * thiết bị thật chiếm vị trí của chúng, các loại thiết bị trọng yếu còn thiếu
+ * được lấp bằng node "(mẫu)" (id `sample-*`, người dùng xóa/thay được), và các
+ * tầng được nối sẵn thành backbone Internet → … → máy trạm theo cấu trúc cấp độ.
+ */
+export function buildLevelSample(
+  devices: SystemProfileDevice[],
+  level: 1 | 2 | 3,
+  meta?: DeviceTypeMeta,
+): { nodes: TopologyNode[]; layout: DiagramLayout } {
+  const topo = buildDevicesTopology(devices, meta);
+  const tpl = buildLevelTemplate(devices, level, meta);
+  const byType = new Map<string, SystemProfileDevice[]>();
+  for (const d of [...devices].sort((a, b) => a.sort_order - b.sort_order)) {
+    const list = byType.get(d.device_type) ?? [];
+    list.push(d);
+    byType.set(d.device_type, list);
+  }
+
+  // Node mẫu cho loại trọng yếu còn thiếu
+  const sampleTypes = (LEVEL_ESSENTIALS[level] ?? []).filter((t) => !byType.get(t)?.length);
+  const sampleNodes: TopologyNode[] = sampleTypes.map((type) => ({
+    id: `sample-${type}`,
+    position: { x: 0, y: 0 },
+    data: {
+      name: `${labelFor(type, meta)} (mẫu)`,
+      deviceCode: null,
+      deviceType: type,
+      icon: iconFor(type, meta),
+      note: "Node mẫu — xóa hoặc thay bằng thiết bị thật",
+      virtual: true,
+    },
+  }));
+  const nodes: TopologyNode[] = [
+    ...topo.nodes.map((n) => ({ ...n, data: { ...n.data, virtual: false } })),
+    ...sampleNodes,
+  ];
+
+  // Cột theo tầng: loại có thiết bị / có node mẫu (theo LAYER_ORDER + sample types) rồi đến loại ngoài
+  const layerSeq: string[] = [];
+  for (const t of [...LAYER_ORDER, ...sampleTypes]) {
+    if ((byType.has(t) || sampleTypes.includes(t)) && !layerSeq.includes(t)) layerSeq.push(t);
+  }
+  for (const d of devices) if (!layerSeq.includes(d.device_type)) layerSeq.push(d.device_type);
+  const colOf = new Map<string, number>();
+  layerSeq.forEach((t, i) => colOf.set(t, i + 1));
+
+  // Node id từng tầng (thứ tự khai báo, node mẫu đứng đầu tầng trống)
+  const layerNodes = new Map<string, string[]>();
+  for (const t of layerSeq) {
+    layerNodes.set(t, byType.get(t)?.length ? byType.get(t)!.map((d) => d.id) : [`sample-${t}`]);
+  }
+  // Tầng máy trạm luôn có mặt (thiết bị hoặc node mặc định) để backbone khép kín
+  if (!layerSeq.includes("workstation")) {
+    if (byType.get("workstation")?.length) {
+      layerNodes.set("workstation", byType.get("workstation")!.map((d) => d.id));
+    } else if (topo.nodes.some((n) => n.id === DEFAULT_WORKSTATION_NODE_ID)) {
+      layerNodes.set("workstation", [DEFAULT_WORKSTATION_NODE_ID]);
+    }
+    if (layerNodes.has("workstation")) layerSeq.push("workstation");
+  }
+
+  // Tính lại vị trí: Internet ở cột 0, thiết bị/node mẫu theo tầng, hàng theo thứ tự trong tầng
+  const rowCount = new Map<number, number>();
+  for (const n of nodes) {
+    const c = n.data.deviceType === "internet" ? 0 : (colOf.get(n.data.deviceType) ?? layerSeq.length + 1);
+    const r = rowCount.get(c) ?? 0;
+    rowCount.set(c, r + 1);
+    n.position = { x: c * LAYER_GAP_X, y: r * DEVICE_GAP_Y };
+  }
+
+  // Cạnh: template theo thiết bị thật (đã dedupe) + backbone nối đuôi tầng trước → đầu tầng sau.
+  // Bỏ cạnh nối thẳng Internet → máy trạm của template — backbone sẽ nối qua các tầng.
+  const edges: DiagramLayoutEdge[] = [];
+  const seen = new Set<string>();
+  const addEdge = (source: string, target: string, label?: string) => {
+    if (source === target) return;
+    const key = `${source}->${target}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push(label ? { source, target, label } : { source, target });
+  };
+  const workstationIds = layerNodes.get("workstation") ?? [];
+  for (const e of tpl.edges ?? []) {
+    if (e.source === INTERNET_NODE_ID && workstationIds.includes(e.target)) continue;
+    addEdge(e.source, e.target, e.label);
+  }
+  for (let i = 0; i < layerSeq.length - 1; i++) {
+    const cur = layerNodes.get(layerSeq[i]) ?? [];
+    const next = layerNodes.get(layerSeq[i + 1]) ?? [];
+    if (cur.length > 0 && next.length > 0) addEdge(cur[cur.length - 1], next[0]);
+  }
+  if (layerSeq.length > 0) {
+    const first = layerNodes.get(layerSeq[0]) ?? [];
+    if (first.length > 0) addEdge(INTERNET_NODE_ID, first[0]);
+  }
+  return {
+    nodes,
+    layout: {
+      version: 1,
+      nodes: Object.fromEntries(nodes.map((n) => [n.id, n.position])),
+      edges,
+    },
+  };
+}
 
 /**
  * Sinh template bố cục + liên kết theo cấp độ hồ sơ (1/2/3), ánh xạ lên đúng

@@ -69,6 +69,7 @@ import {
   applyDiagramLayout,
   buildAiDiagramPrompt,
   buildDevicesTopology,
+  buildLevelSample,
   buildLevelTemplate,
   DEVICE_TYPE_ICON,
   DEVICE_TYPE_LABEL,
@@ -160,6 +161,9 @@ function DeviceNode({ data, selected }: NodeProps<FlowNode>) {
 
 const nodeTypes = { device: DeviceNode };
 
+/** Node không thuộc danh mục thiết bị (node tự do `custom-*` / node mẫu `sample-*`). */
+const isVirtualNode = (id: string) => id.startsWith("custom-") || id.startsWith("sample-");
+
 /** Gắn type custom node; node thiết bị khóa xóa (phản chiếu danh mục thiết bị). */
 function toFlowNodes(
   topo: { id: string; position: { x: number; y: number }; data: TopologyNodeData }[],
@@ -168,7 +172,7 @@ function toFlowNodes(
   return topo.map((n) => ({
     ...n,
     type: "device" as const,
-    deletable: false,
+    deletable: !!n.data.virtual,
     data: { ...n.data, note: notes?.[n.id] ?? n.data.note },
   }));
 }
@@ -246,11 +250,22 @@ function TopologyCanvasInner({
   variant?: string;
 }) {
   const topology = useMemo(() => buildDevicesTopology(devices, meta), [devices, meta]);
-  const initialNodes = useMemo(
-    () => [
-      ...toFlowNodes(applyDiagramLayout(topology.nodes, layout), layout?.notes),
-      ...customNodesFromLayout(layout),
-    ],
+  // Sơ đồ mẫu theo cấp độ — hiển thị khi hồ sơ chưa lưu bố cục nào
+  const levelSample = useMemo(
+    () => buildLevelSample(devices, profileLevel ?? 2, meta),
+    [devices, profileLevel, meta],
+  );
+  const initialNodes = useMemo<FlowNode[]>(
+    () => {
+      if (layout) {
+        return [
+          ...toFlowNodes(applyDiagramLayout(topology.nodes, layout), layout.notes),
+          ...customNodesFromLayout(layout),
+        ];
+      }
+      // Chưa lưu bố cục → hiển thị sơ đồ mẫu theo cấp độ
+      return toFlowNodes(levelSample.nodes);
+    },
     // Chỉ tính lúc mount — các cập nhật sau xử lý trong effect theo topologyKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -262,7 +277,11 @@ function TopologyCanvasInner({
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(
-    savedEdgesToFlow(layout?.edges, validIds, autoEdges),
+    savedEdgesToFlow(
+      layout?.edges ?? levelSample.layout.edges,
+      new Set([...validIds, ...levelSample.nodes.map((n) => n.id)]),
+      autoEdges,
+    ),
   );
   const [savedLayout, setSavedLayout] = useState<DiagramLayout | null>(layout ?? null);
   const [error, setError] = useState<string | null>(null);
@@ -337,15 +356,26 @@ function TopologyCanvasInner({
     return result;
   }
 
-  // Danh mục thiết bị thay đổi (thêm/xóa/sửa sau khi load) → sinh lại node thiết
-  // bị, giữ node tự do; cạnh: ưu tiên cạnh đã lưu (bỏ cạnh trỏ node đã xóa)
-  const topologyKey = stableStringify([topology.edges, topology.nodes.map((n) => n.id)]);
+  // Danh mục thiết bị thay đổi (thêm/xóa/sửa sau khi load) → sinh lại node:
+  // đã lưu bố cục thì theo layout; chưa lưu thì về sơ đồ mẫu theo cấp độ
+  const topologyKey = stableStringify([
+    topology.edges,
+    levelSample.nodes.map((n) => n.id),
+    levelSample.layout.edges,
+  ]);
   useEffect(() => {
-    setNodes((current) => {
-      const customs = current.filter((n) => n.id.startsWith("custom-"));
-      return [...toFlowNodes(applyDiagramLayout(topology.nodes, savedLayout), savedLayout?.notes), ...customs];
-    });
-    setEdges(savedEdgesToFlow(savedLayout?.edges, validIds, autoEdges));
+    if (savedLayout) {
+      setNodes((current) => {
+        const virtuals = current.filter((n) => isVirtualNode(n.id));
+        return [...toFlowNodes(applyDiagramLayout(topology.nodes, savedLayout), savedLayout?.notes), ...virtuals];
+      });
+      setEdges(savedEdgesToFlow(savedLayout.edges, validIds, autoEdges));
+    } else {
+      setNodes(toFlowNodes(levelSample.nodes));
+      setEdges(
+        savedEdgesToFlow(levelSample.layout.edges, new Set(levelSample.nodes.map((n) => n.id)), autoEdges),
+      );
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topologyKey]);
 
@@ -359,7 +389,7 @@ function TopologyCanvasInner({
         label: typeof e.label === "string" ? e.label : undefined,
       })),
       customNodes: nodes
-        .filter((n) => n.id.startsWith("custom-"))
+        .filter((n) => isVirtualNode(n.id))
         .map((n) => ({ id: n.id, name: n.data.name, deviceType: n.data.deviceType })),
       notes: Object.fromEntries(
         nodes.filter((n) => n.data.note?.trim()).map((n) => [n.id, n.data.note!.trim()]),
@@ -477,7 +507,7 @@ function TopologyCanvasInner({
     pushHistory();
     setNodes((current) => [
       ...toFlowNodes(topology.nodes, savedLayout?.notes),
-      ...current.filter((n) => n.id.startsWith("custom-")),
+      ...current.filter((n) => isVirtualNode(n.id)),
     ]);
   }, [topology.nodes, savedLayout?.notes, setNodes, pushHistory]);
 
@@ -535,7 +565,7 @@ function TopologyCanvasInner({
       return;
     }
     const parsed = res.layout;
-    const known = new Set(topology.nodes.map((n) => n.id));
+    const known = new Set(levelSample.nodes.map((n) => n.id));
     const customSet = new Set((parsed.customNodes ?? []).map((c) => c.id));
     const unknown = Object.keys(parsed.nodes).filter((id) => !known.has(id) && !customSet.has(id));
     if (unknown.length > 0) {
@@ -561,7 +591,7 @@ function TopologyCanvasInner({
     // customNodes: giữ custom cũ, thêm custom mới (cập nhật tên/loại/vị trí nếu JSON khai trùng id)
     const customMeta = new Map((parsed.customNodes ?? []).map((c) => [c.id, c]));
     const existingCustoms = nodes
-      .filter((n) => n.id.startsWith("custom-"))
+      .filter((n) => isVirtualNode(n.id))
       .map((n) => {
         const meta = customMeta.get(n.id);
         return meta
@@ -597,7 +627,7 @@ function TopologyCanvasInner({
     );
     setAiOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiPaste, topology.nodes, nodes, edges, setNodes, setEdges, pushHistory]);
+  }, [aiPaste, levelSample.nodes, nodes, edges, setNodes, setEdges, pushHistory]);
 
   /* ── Gọi AI phía server (dùng chung cấu hình LLM-DFIR) ── */
 
@@ -711,8 +741,8 @@ function TopologyCanvasInner({
       )}
       {devices.length === 0 && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-          Hồ sơ chưa khai thiết bị — thêm thiết bị ở tab <b>Thiết bị</b> để vẽ sơ đồ đầy đủ. Hiện chỉ có node
-          Internet và Máy trạm mặc định.
+          Hồ sơ chưa khai thiết bị — đang hiển thị <b>sơ đồ mẫu cấp độ {profileLevel ?? 2}</b> với các node
+          "(mẫu)". Thêm thiết bị ở tab <b>Thiết bị</b> để thay các node mẫu bằng thiết bị thật.
         </p>
       )}
       <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
