@@ -45,6 +45,8 @@ DIAGRAM_SCHEMA_DOC = """{
 
 class DiagramAiGenerateIn(BaseModel):
     variant: str = Field(default="logic", pattern="^(logic|physical)$")
+    """Layout hiện tại (nếu có) — AI được yêu cầu giữ nguyên và chỉ chỉnh/bổ sung."""
+    layout: dict | None = None
 
 
 class DiagramAiGenerateOut(BaseModel):
@@ -197,6 +199,7 @@ async def ai_generate_diagram(
     profile = await _load_profile(db, profile_id)
     cfg = await _load_llm_config(db)
     catalog = await _device_type_catalog(db)
+    current_layout = json.dumps(body.layout, ensure_ascii=False, indent=2) if body.layout else "(chưa có)"
 
     system_prompt = (
         "Bạn là chuyên gia thiết kế mạng và trực quan hóa sơ đồ kỹ thuật. "
@@ -204,20 +207,33 @@ async def ai_generate_diagram(
     )
     user_prompt = (
         f"{_system_context(profile, body.variant, catalog)}\n"
-        "Nhiệm vụ: vẽ sơ đồ mạng dưới dạng JSON layout theo đúng quy cách dưới đây.\n\n"
+        "## Layout hiện tại (BẮT BUỘC giữ nguyên mọi node/edges/notes đã có — chỉ sắp xếp lại vị trí và bổ sung)\n"
+        f"{current_layout}\n\n"
+        "Nhiệm vụ: trả về JSON layout HOÀN CHỈNH theo quy cách dưới đây — gồm TẤT CẢ node hiện tại "
+        "cộng với mọi thiết bị, không được bỏ rơi hay xóa node nào.\n\n"
         f"## Quy cách JSON\n{DIAGRAM_SCHEMA_DOC}\n\n"
         "## Quy tắc\n"
-        f'1. "nodes" phải chứa đủ MỌI id thiết bị ở trên (copy nguyên xi) và "{INTERNET_NODE_ID}".\n'
-        f'2. "{WORKSTATION_NODE_ID}" chỉ thêm khi danh sách chưa có thiết bị loại workstation.\n'
+        f'1. "nodes" phải chứa: toàn bộ node của layout hiện tại + MỌI id thiết bị ở trên (copy nguyên xi) + "{INTERNET_NODE_ID}".\n'
+        f'2. "{WORKSTATION_NODE_ID}" chỉ thêm khi danh sách chưa có thiết bị loại workstation và chưa có trong layout hiện tại.\n'
         '3. Node mới (nhóm/DMZ/dịch vụ) khai trong "customNodes" với id dạng "custom-..." và có tọa độ trong "nodes".\n'
-        "4. \"edges\" nối giữa các id TỒN TẠI, không self-loop; một node nối được nhiều cạnh; dùng \"label\" cho vlan/trunk.\n"
+        "4. \"edges\": giữ nguyên các cạnh hiện tại, được bổ sung cạnh mới; nối giữa các id TỒN TẠI, không self-loop; "
+        "một node nối được nhiều cạnh; dùng \"label\" cho vlan/trunk.\n"
         "5. Bố cục: Internet bên trái, luồng sang phải theo tầng firewall → router → switch → server → workstation; "
         "storage/UPS/website xếp tầng phụ; cách nhau ~280px ngang, ~120px dọc; không chồng node.\n"
-        '6. "notes": ghi chú IP/dải IP/vlan cho các node quan trọng.\n\n'
+        '6. "notes": giữ nguyên ghi chú hiện có, bổ sung IP/dải IP/vlan cho các node quan trọng còn thiếu.\n\n'
         "Chỉ trả về JSON hoàn chỉnh theo quy cách."
     )
     data, model, total = await _chat_json(cfg, system_prompt, user_prompt)
     _validate_layout_payload(data)
+    # Self-heal: AI hay bỏ sót node — đảm bảo node Internet + mọi thiết bị đều có trong layout
+    nodes = data["nodes"]
+    if INTERNET_NODE_ID not in nodes:
+        nodes[INTERNET_NODE_ID] = {"x": 0, "y": 0}
+    missing = [d.id for d in profile.devices if d.id not in nodes]
+    for i, device_id in enumerate(missing):
+        nodes[device_id] = {"x": 280 * (i + 1), "y": 240}
+    if missing:
+        logger.warning("ai-generate: LLM bỏ sót %d node thiết bị — đã tự bổ sung: %s", len(missing), missing)
     return DiagramAiGenerateOut(layout=data, model=model, total_tokens=total)
 
 
