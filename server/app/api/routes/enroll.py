@@ -6,11 +6,10 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.client_ip import get_client_ip
+from app.core.client_ip import get_client_ip, rate_limit_key
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import hash_token
@@ -22,7 +21,7 @@ from app.services.ca import get_ca_service
 from app.services.fingerprint import compute_weighted_id, is_same_machine
 
 router = APIRouter(prefix="/api/enroll", tags=["enroll"])
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=rate_limit_key)
 
 
 async def _record_enroll_attempt(

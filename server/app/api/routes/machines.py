@@ -439,7 +439,7 @@ def _inv_to_out(inv: DfirInvestigation, machine: Machine | None) -> DfirInvestig
 async def list_machine_investigations(
     machine_id: str,
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_admin()),
+    user: User = Depends(require_admin()),
     page: int = Query(1, ge=1),
     limit: int = Query(20, le=100),
     status_filter: str | None = Query(None, alias="status"),
@@ -447,7 +447,8 @@ async def list_machine_investigations(
     """Investigations của 1 máy cụ thể — dùng cho panel 'Lịch sử điều tra AI' trong trang máy.
 
     Hỗ trợ phân trang. Cho phép user thường (admin_org, viewer) truy cập
-    (chỉ super_admin mới tạo được, nhưng tất cả admin đều đọc được).
+    (chỉ super_admin mới tạo được, nhưng tất cả admin đều đọc được —
+    trong phạm vi cây tổ chức của mình).
     """
     from sqlalchemy import func as sa_func
 
@@ -457,12 +458,9 @@ async def list_machine_investigations(
     except (ValueError, TypeError):
         raise HTTPException(404, f"Machine ID không hợp lệ: {machine_id!r}")
 
-    # Check máy tồn tại (không cần scope check vì require_admin đủ)
-    machine = (
-        await db.execute(select(Machine).where(Machine.id == machine_uuid))
-    ).scalar_one_or_none()
-    if machine is None:
-        raise HTTPException(404, "Máy không tồn tại")
+    # Scope check — report/IOC chứa dữ liệu DFIR nhạy cảm, không được leak
+    # sang org_admin của đơn vị khác.
+    machine = await _get_machine_in_scope(db, machine_uuid, user)
 
     # Build query
     base_stmt = select(DfirInvestigation).where(DfirInvestigation.machine_id == machine_uuid)
@@ -770,14 +768,11 @@ async def request_rescan(
 ):
     """On-demand rescan (#23): đặt cờ Redis → agent nhận `rescan_requested` ở heartbeat kế tiếp."""
     machine = await _get_machine_in_scope(db, machine_id, admin)
-    from app.core.config import settings as _s
 
     try:
-        import redis.asyncio as aioredis
+        from app.core.redis_client import get_redis
 
-        r = aioredis.from_url(_s.redis_url, decode_responses=True)
-        await r.set(f"machine:rescan:{machine.id}", "1", ex=600)
-        await r.aclose()
+        await get_redis().set(f"machine:rescan:{machine.id}", "1", ex=600)
     except Exception:  # noqa: BLE001 — Redis down: fallback ghi flag trong DB để heartbeat đọc
         machine._rescan_pending = True
     await append_audit(db, action="machine.rescan_requested", actor=str(admin.id), target=str(machine.id), machine_id=machine.id, ip=get_client_ip(request))

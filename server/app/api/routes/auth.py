@@ -2,17 +2,16 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_current_user_allow_password_change
 from app.core.audit import append_audit
-from app.core.client_ip import get_client_ip
+from app.core.client_ip import get_client_ip, rate_limit_key
 from app.core.config import settings
 from app.core.security import (
     create_access_token,
@@ -22,11 +21,12 @@ from app.core.security import (
     generate_backup_codes,
     generate_totp_secret,
     hash_password,
+    hash_token,
     totp_uri,
     verify_password,
-    verify_totp,
+    verify_totp_counter,
 )
-from app.db.models import User, UserRole
+from app.db.models import RefreshToken, User, UserRole
 from app.db.session import get_db
 from app.schemas import (
     ChangePasswordRequest,
@@ -40,16 +40,50 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=rate_limit_key)
 
 
-def _issue_tokens(user: User) -> LoginResponse:
+async def _issue_tokens(
+    user: User, db: AsyncSession, family_id: uuid.UUID | None = None
+) -> LoginResponse:
+    """Phát access + refresh token. Refresh token chỉ lưu SHA-256 hash vào DB —
+    rotation/revoke/reuse-detection đều dựa trên bảng `refresh_tokens`."""
     access = create_access_token(str(user.id), user.role, str(user.org_id))
     refresh = create_refresh_token(str(user.id))
+    db.add(
+        RefreshToken(
+            user_id=user.id,
+            token_hash=hash_token(refresh),
+            family_id=family_id or uuid.uuid4(),
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days),
+        )
+    )
     return LoginResponse(
         access_token=access,
         refresh_token=refresh,
         must_change_password=user.must_change_password,
+    )
+
+
+async def _revoke_user_refresh_tokens(db: AsyncSession, user_id: uuid.UUID) -> None:
+    """Thu hồi mọi refresh token của user (đổi/reset mật khẩu...)."""
+    from sqlalchemy import update
+
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
+
+
+async def _revoke_refresh_family(db: AsyncSession, family_id: uuid.UUID) -> None:
+    """Thu hồi toàn bộ family — dùng khi phát hiện replay refresh token."""
+    from sqlalchemy import update
+
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.family_id == family_id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
     )
 
 
@@ -83,9 +117,26 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
         if not body.totp_code:
             # Yêu cầu nhập mã TOTP — trả requires_2fa
             return LoginResponse(access_token="", refresh_token="", requires_2fa=True)
-        if not user.totp_secret_encrypted or not verify_totp(
-            decrypt_aes_gcm(user.totp_secret_encrypted), body.totp_code
-        ):
+        ok = False
+        if user.totp_secret_encrypted:
+            counter = verify_totp_counter(
+                decrypt_aes_gcm(user.totp_secret_encrypted), body.totp_code
+            )
+            # Chống replay: từ chối mã của counter đã từng được chấp nhận
+            if counter is not None and counter > (user.totp_last_counter or -1):
+                user.totp_last_counter = counter
+                ok = True
+        if not ok:
+            # Fallback backup code (dùng 1 lần) — user mất thiết bị 2FA
+            codes = list(user.backup_codes or [])
+            matched = next(
+                (h for h in codes if verify_password(body.totp_code, h)), None
+            )
+            if matched is not None:
+                codes.remove(matched)
+                user.backup_codes = codes
+                ok = True
+        if not ok:
             await append_audit(db, action="auth.totp_failed", actor=str(user.id),
                                ip=get_client_ip(request))
             await db.commit()
@@ -95,8 +146,9 @@ async def login(request: Request, body: LoginRequest, db: AsyncSession = Depends
     user.last_login_at = datetime.now(UTC)
     await append_audit(db, action="auth.login", actor=str(user.id),
                        ip=get_client_ip(request))
+    resp = await _issue_tokens(user, db)
     await db.commit()
-    return _issue_tokens(user)
+    return resp
 
 
 @router.post("/refresh", response_model=LoginResponse)
@@ -106,10 +158,42 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
         user_id = uuid.UUID(payload["sub"])
     except Exception:  # noqa: BLE001 — mọi lỗi giải mã/expired đều là token không hợp lệ
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token không hợp lệ")
+
+    row = (
+        await db.execute(
+            select(RefreshToken).where(RefreshToken.token_hash == hash_token(body.refresh_token))
+        )
+    ).scalar_one_or_none()
+    if row is None or row.expires_at.replace(tzinfo=UTC) <= datetime.now(UTC):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token không hợp lệ")
+    if row.revoked_at is not None:
+        # Token hợp lệ về chữ ký nhưng đã bị rotate/revoke → đang bị replay.
+        # Thu hồi toàn bộ family để chặn cả session lẫn kẻ trộm.
+        await _revoke_refresh_family(db, row.family_id)
+        await append_audit(
+            db, action="auth.refresh_reuse_detected", actor=str(row.user_id),
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token không hợp lệ")
+
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User không tồn tại")
-    return _issue_tokens(user)
+
+    # Rotation: token cũ revoke ngay, token mới kế thừa family.
+    row.revoked_at = datetime.now(UTC)
+    resp = await _issue_tokens(user, db, family_id=row.family_id)
+    await db.flush()
+    # replaced_by = id của row token mới vừa add (lấy qua hash)
+    new_row = (
+        await db.execute(
+            select(RefreshToken).where(RefreshToken.token_hash == hash_token(resp.refresh_token))
+        )
+    ).scalar_one_or_none()
+    if new_row is not None:
+        row.replaced_by = new_row.id
+    await db.commit()
+    return resp
 
 
 @router.get("/me", response_model=dict)
@@ -149,16 +233,36 @@ async def totp_confirm(
 ):
     if not user.totp_secret_encrypted:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Chưa thiết lập 2FA")
-    if not verify_totp(decrypt_aes_gcm(user.totp_secret_encrypted), body.code):
+    counter = verify_totp_counter(decrypt_aes_gcm(user.totp_secret_encrypted), body.code)
+    if counter is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Mã xác nhận không đúng")
     user.is_2fa_enabled = True
+    # Ghi nhận counter của mã confirm — mã này không được phép replay ở login.
+    user.totp_last_counter = counter
     await append_audit(db, action="auth.totp_enabled", actor=str(user.id))
+    resp = await _issue_tokens(user, db)
     await db.commit()
-    return _issue_tokens(user)
+    return resp
 
 
 @router.post("/logout")
-async def logout(user: User = Depends(get_current_user_allow_password_change), db: AsyncSession = Depends(get_db)):
+async def logout(
+    body: RefreshRequest | None = None,
+    user: User = Depends(get_current_user_allow_password_change),
+    db: AsyncSession = Depends(get_db),
+):
+    """Logout: revoke refresh token được gửi kèm (nếu có) để kết thúc phiên."""
+    if body and body.refresh_token:
+        row = (
+            await db.execute(
+                select(RefreshToken).where(
+                    RefreshToken.token_hash == hash_token(body.refresh_token),
+                    RefreshToken.revoked_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            row.revoked_at = datetime.now(UTC)
     await append_audit(db, action="auth.logout", actor=str(user.id))
     await db.commit()
     return {"ok": True}
@@ -189,6 +293,9 @@ async def change_password(
         )
     user.password_hash = hash_password(body.new_password)
     user.must_change_password = False
+    # Đổi mật khẩu → thu hồi mọi phiên refresh đang tồn tại (access token còn
+    # sống tối đa access_token_expire_minutes — trade-off chấp nhận được).
+    await _revoke_user_refresh_tokens(db, user.id)
     await append_audit(db, action="auth.change_password", actor=str(user.id), target=str(user.id))
     await db.commit()
     return {"ok": True}
@@ -231,6 +338,7 @@ async def disable_my_totp(
     user.is_2fa_enabled = False
     user.totp_secret_encrypted = None
     user.backup_codes = None
+    user.totp_last_counter = None
     await append_audit(db, action="auth.totp_disabled", actor=str(user.id), target=str(user.id))
     await db.commit()
     return {"ok": True}

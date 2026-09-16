@@ -33,6 +33,25 @@ from app.schemas import (
 router = APIRouter(prefix="/api/keys", tags=["api-keys"])
 public_router = APIRouter(prefix="/api/public", tags=["api-public"])
 
+# Scope hợp lệ — key có thể mang nhiều scope (phân tách khoảng trắng).
+# `read:machines` → GET /api/public/machines; `investigation:*` → external
+# LLM-DFIR callbacks; `notify:write` → POST /api/external/notifications.
+_ALLOWED_SCOPES = {
+    "read:machines",
+    "investigation:read",
+    "investigation:write",
+    "notify:write",
+}
+
+
+def _validate_scope(scope: str) -> None:
+    scopes = set(scope.split())
+    if not scopes or not scopes.issubset(_ALLOWED_SCOPES):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Scope không được hỗ trợ (cho phép: {sorted(_ALLOWED_SCOPES)})",
+        )
+
 
 def _hash_key(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
@@ -78,8 +97,7 @@ async def create_key(
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    if body.scope not in {"read:machines"}:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Scope không được hỗ trợ")
+    _validate_scope(body.scope)
     if body.org_id:
         visible = await visible_org_ids(db, admin)
         if str(body.org_id) not in visible:
@@ -99,6 +117,7 @@ async def create_key(
 async def update_key(
     key_id: uuid.UUID,
     body: ApiKeyUpdate,
+    request: Request,
     admin: User = Depends(require_super_admin()),
     db: AsyncSession = Depends(get_db),
 ):
@@ -108,11 +127,11 @@ async def update_key(
     if body.name is not None:
         key.name = body.name
     if body.scope is not None:
-        if body.scope not in {"read:machines"}:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Scope không được hỗ trợ")
+        _validate_scope(body.scope)
         key.scope = body.scope
     if body.enabled is not None:
         key.enabled = body.enabled
+    await append_audit(db, action="apikey.update", actor=str(admin.id), target=str(key_id), ip=get_client_ip(request))
     await db.commit()
     return _to_out(key)
 
@@ -160,9 +179,11 @@ async def public_machines(
     db: AsyncSession = Depends(get_db),
     org_id: uuid.UUID | None = None,
     status_filter: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ):
     """Danh sách máy cho hệ thống ngoài — xác thực bằng X-API-Key (scope read:machines)."""
-    if api_key.scope != "read:machines":
+    if "read:machines" not in api_key.scope.split():
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="Scope không cho phép")
     # User ảo để tái dùng visible_org_ids (chỉ đọc role/org_id)
     fake_user = SimpleNamespace(
@@ -178,7 +199,9 @@ async def public_machines(
         q = q.where(Machine.org_id == org_id)
     if status_filter:
         q = q.where(Machine.status == status_filter)
-    rows = (await db.execute(q.order_by(Machine.enrolled_at.desc()))).scalars().all()
+    rows = (
+        await db.execute(q.order_by(Machine.enrolled_at.desc()).limit(limit).offset(offset))
+    ).scalars().all()
     return [
         MachineListItem(
             id=m.id, hostname=m.hostname, machine_uuid=m.machine_uuid, status=m.status,

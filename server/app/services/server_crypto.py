@@ -30,6 +30,11 @@ logger = logging.getLogger("server_crypto")
 _CACHED_PRIVATE_KEY: rsa.RSAPrivateKey | None = None
 _CACHED_PUBLIC_KEY_PEM: str | None = None
 
+# Giới hạn kích thước gói ZIP upload — chặn zip-bomb/DoS qua file khổng lồ
+# (endpoint chỉ mở cho admin nhưng vẫn nên bounded).
+MAX_ZIP_BYTES = 200 * 1024 * 1024          # 200 MB file nén
+MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024  # 512 MB tổng giải nén
+
 
 def get_or_create_server_keys() -> tuple[rsa.RSAPrivateKey, str]:
     """Lấy hoặc tự động tạo cặp khóa RSA 2048-bit cho Server."""
@@ -72,6 +77,8 @@ def get_or_create_server_keys() -> tuple[rsa.RSAPrivateKey, str]:
     try:
         priv_path.parent.mkdir(parents=True, exist_ok=True)
         priv_path.write_bytes(priv_bytes)
+        # Private key không encrypt → bắt buộc siết quyền file (owner-only).
+        priv_path.chmod(0o600)
         pub_path.write_text(pub_pem, encoding="utf-8")
         logger.info("Đã khởi tạo và lưu cặp khóa Server RSA tại %s và %s", priv_path, pub_path)
     except Exception as ex:
@@ -97,10 +104,22 @@ def decrypt_offline_bundle(zip_bytes: bytes) -> dict:
     - public_key_pem: khóa công khai ECDSA của máy trạm
     - manifest: dict metadata từ manifest.json
     """
+    if len(zip_bytes) > MAX_ZIP_BYTES:
+        raise ValueError(
+            f"Gói ZIP vượt giới hạn {MAX_ZIP_BYTES // (1024 * 1024)} MB "
+            f"(nhận {len(zip_bytes) // (1024 * 1024)} MB)"
+        )
+
     private_key, _ = get_or_create_server_keys()
 
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            # Zip-bomb guard: kiểm tổng kích thước giải nén trước khi đọc.
+            total_uncompressed = sum(i.file_size for i in zf.infolist())
+            if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError(
+                    f"Gói ZIP giải nén vượt {MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB"
+                )
             file_names = set(zf.namelist())
 
             # Kiểm tra các file bắt buộc trong ZIP

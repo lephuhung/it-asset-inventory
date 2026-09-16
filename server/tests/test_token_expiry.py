@@ -45,7 +45,8 @@ async def test_pending_token_expires_lazily(client, session_factory, seeded_env)
         )
         await s.commit()
 
-    # List → token quá hạn tự động bị xóa khỏi list, chỉ còn token còn hạn
+    # List → token quá hạn bị LỌC khỏi list, chỉ còn token còn hạn
+    # (GET không còn xóa DB — việc dọn dẹp do monitor._cleanup_tokens làm)
     r = await client.get("/api/tokens", headers=_auth(token))
     assert r.status_code == 200
     items = r.json()["items"]
@@ -54,10 +55,21 @@ async def test_pending_token_expires_lazily(client, session_factory, seeded_env)
     assert by_name["Còn hiệu lực"] == "pending"
     assert "Quá hạn 5 phút" not in by_name
 
-    # Trong DB, token quá hạn đã bị xóa
+    # Token quá hạn vẫn nằm trong DB cho tới khi monitor cleanup chạy
+    async with session_factory() as s:
+        row = (await s.execute(select(EnrollToken).where(EnrollToken.token_hash == "hash-expired-1"))).scalar_one_or_none()
+        assert row is not None
+
+    # Monitor cleanup xóa token hết hạn khỏi DB
+    from app.services.monitor import _cleanup_tokens
+
+    await _cleanup_tokens()
     async with session_factory() as s:
         row = (await s.execute(select(EnrollToken).where(EnrollToken.token_hash == "hash-expired-1"))).scalar_one_or_none()
         assert row is None
+        # Token còn hạn không bị xóa nhầm
+        row_valid = (await s.execute(select(EnrollToken).where(EnrollToken.token_hash == "hash-valid-1"))).scalar_one_or_none()
+        assert row_valid is not None
 
 
 async def test_revoke_token_removes_from_list(client, session_factory, seeded_env):

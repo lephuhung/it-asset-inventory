@@ -16,6 +16,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func as sa_func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -103,8 +104,11 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN_GLOBAL)),
 ):
-    # Kiểm tra email trùng
-    dup = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    # Chuẩn hoá trước khi check trùng — lưu DB cũng dạng lower() nên check
+    # phải cùng normalization, nếu không "A@x.com" qua được rồi crash 500 ở
+    # unique constraint.
+    email = body.email.strip().lower()
+    dup = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if dup:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Email đã tồn tại")
     # Kiểm tra org tồn tại
@@ -115,7 +119,7 @@ async def create_user(
     user = User(
         org_id=body.org_id,
         full_name=body.full_name,
-        email=body.email.lower(),
+        email=email,
         role=body.role,
         password_hash=hash_password(body.password),
         phone_encrypted=encrypt_phone(body.phone) if body.phone else None,
@@ -127,7 +131,12 @@ async def create_user(
         db, action="user.create", actor=str(admin.id), target=str(user.id),
         ip=get_client_ip(request),
     )
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Race: 2 request tạo cùng email song song → unique constraint bắt lại
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Email đã tồn tại")
     user.org = org
     await db.commit()
     await db.refresh(user)
@@ -205,6 +214,18 @@ async def reset_password(
     u.password_hash = hash_password(body.new_password)
     # Mật khẩu mới do admin đặt → buộc user tự đổi lại ở lần đăng nhập tới
     u.must_change_password = True
+    # Thu hồi mọi phiên đang đăng nhập — password reset phải đá session cũ
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    from app.db.models import RefreshToken
+
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == u.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(UTC))
+    )
     await append_audit(db, action="user.reset_password", actor=str(admin.id), target=str(u.id), ip=get_client_ip(request))
     await db.commit()
     return {"ok": True}
@@ -224,6 +245,7 @@ async def reset_2fa(
     u.is_2fa_enabled = False
     u.totp_secret_encrypted = None
     u.backup_codes = None
+    u.totp_last_counter = None
     await append_audit(db, action="user.reset_2fa", actor=str(admin.id), target=str(u.id), ip=get_client_ip(request))
     await db.commit()
     return {"ok": True}

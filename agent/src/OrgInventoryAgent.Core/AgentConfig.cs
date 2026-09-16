@@ -165,10 +165,27 @@ public sealed class AgentConfig
         int? inventoryIntervalHours, int? renewBeforePercent)
     {
         bool changed = false;
-        if (!string.IsNullOrWhiteSpace(serverUrl) && PrimaryEndpoint != serverUrl.Trim().TrimEnd('/'))
+        if (!string.IsNullOrWhiteSpace(serverUrl))
         {
-            SetPrimaryEndpoint(serverUrl);
-            changed = true;
+            var newUrl = serverUrl.Trim().TrimEnd('/');
+            if (PrimaryEndpoint != newUrl)
+            {
+                // Config server-push không được ký số → nếu đang chạy https mà
+                // server đẩy về endpoint không-https, coi là downgrade/MITM và
+                // TỪ CHỐI (đổi endpoint phải sửa tay trên máy, không qua push).
+                bool currentIsHttps = PrimaryEndpoint?.StartsWith("https://", StringComparison.OrdinalIgnoreCase) == true;
+                bool newIsHttps = newUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                if (currentIsHttps && !newIsHttps)
+                {
+                    Console.Error.WriteLine(
+                        $"[config] Từ chối đổi endpoint {PrimaryEndpoint} → {newUrl} (downgrade https→http qua server push)");
+                }
+                else
+                {
+                    SetPrimaryEndpoint(newUrl);
+                    changed = true;
+                }
+            }
         }
         if (heartbeatIntervalSec is > 0 && HeartbeatIntervalSeconds != heartbeatIntervalSec.Value)
         {

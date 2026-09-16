@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 
 from app.api.routes import (
@@ -73,15 +72,45 @@ def _configure_logging() -> None:
         handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
         )
-    root.addHandler(handler)
+        root.addHandler(handler)
 
-limiter = Limiter(key_func=get_remote_address)
+from app.core.client_ip import rate_limit_key
+
+limiter = Limiter(key_func=rate_limit_key)
+
+_DEV_ENVS = {"dev", "test"}
+
+
+def _assert_production_config() -> None:
+    """Fail-fast khi chạy non-dev mà cấu hình còn default/dev-only.
+
+    Chặn các lỗi deploy kinh điển: secret mặc định, tắt kiểm tra mTLS header
+    (agent endpoint trở nên spoof được bằng X-Machine-Id), debug bật.
+    """
+    if settings.app_env in _DEV_ENVS:
+        return
+    problems: list[str] = []
+    if settings.secret_key.startswith("CHANGE_ME"):
+        problems.append("SECRET_KEY còn giá trị mặc định")
+    if settings.data_encryption_key.startswith("CHANGE_ME"):
+        problems.append("DATA_ENCRYPTION_KEY còn giá trị mặc định")
+    if not settings.require_agent_mtls_header:
+        problems.append(
+            "REQUIRE_AGENT_MTLS_HEADER=false — agent endpoints tin X-Machine-Id tự khai"
+        )
+    if settings.debug:
+        problems.append("DEBUG=true ở môi trường non-dev")
+    if problems:
+        raise RuntimeError(
+            "Cấu hình production không an toàn: " + "; ".join(problems)
+        )
 
 
 @asynccontextmanager
 
 async def lifespan(app: FastAPI):
     _configure_logging()
+    _assert_production_config()
 
     # Fail-fast nếu DB chưa migrate — bắt lỗi `UndefinedColumnError` 500 từ code
     # mới truy vấn cột mới trong khi migration chưa chạy. Bỏ qua trong test env
@@ -139,6 +168,9 @@ app = FastAPI(
     version="0.1.0",
     description="Hệ thống quản lý tài sản máy tính — API cho agent + portal",
     lifespan=lifespan,
+    # Swagger/OpenAPI chỉ bật ở dev/test — production không cần lộ schema.
+    docs_url="/docs" if settings.app_env in _DEV_ENVS else None,
+    openapi_url="/openapi.json" if settings.app_env in _DEV_ENVS else None,
 )
 
 app.state.limiter = limiter
@@ -147,8 +179,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Requested-With"],
 )
 
 

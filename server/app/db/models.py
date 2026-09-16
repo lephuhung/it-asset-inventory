@@ -190,6 +190,9 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # True = đang dùng mật khẩu mặc định/được cấp → phải đổi mật khẩu ngay sau đăng nhập
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Time-step TOTP cuối cùng được chấp nhận — chống replay mã 2FA
+    # (mã đúng nhưng thuộc counter ≤ giá trị này bị từ chối).
+    totp_last_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Telegram bot linking (mỗi user link 1 chat_id với account)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     telegram_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -401,7 +404,6 @@ class EnrollToken(Base):
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    max_uses: Mapped[int] = mapped_column(Integer, default=1)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=TokenStatus.PENDING.value)
@@ -1529,4 +1531,27 @@ class DeviceType(Base):
     icon: Mapped[str | None] = mapped_column(String(16), nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class RefreshToken(Base):
+    """Refresh token đã phát hành — chỉ lưu SHA-256 hash của token.
+
+    Rotation + reuse detection theo "family": mọi token sinh ra từ cùng 1
+    lần login chia sẻ `family_id`. Khi /refresh được gọi, token cũ bị
+    `revoked_at` và token mới kế thừa family. Nếu 1 token đã revoke lại được
+    trình lên → có replay → thu hồi toàn bộ family (force re-login).
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)  # id token mới sau rotate
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))

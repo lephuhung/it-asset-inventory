@@ -2,7 +2,8 @@
 
 Tuân theo mục 7.3 tài liệu gốc:
 - Số điện thoại / TOTP seed: mã hóa AES-256-GCM, IV ngẫu nhiên mỗi giá trị.
-- 2FA TOTP (RFC 6238), ±1 bước clock-skew, chống replay bằng nonce window.
+- 2FA TOTP (RFC 6238), ±1 bước clock-skew; chống replay bằng cột
+  `users.totp_last_counter` (mã của counter đã dùng bị từ chối).
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -32,7 +34,14 @@ def create_access_token(subject: str, role: str, org_id: str, expires_minutes: i
 
 def create_refresh_token(subject: str) -> str:
     expire = datetime.now(UTC) + timedelta(days=settings.refresh_token_expire_days)
-    payload = {"sub": subject, "exp": expire, "type": "refresh"}
+    # jti bắt buộc: không có nó, 2 token cùng sub + exp (độ chính xác giây)
+    # sẽ ra JWT giống hệt nhau → trùng token_hash → rotation vỡ.
+    payload = {
+        "sub": subject,
+        "exp": expire,
+        "type": "refresh",
+        "jti": uuid.uuid4().hex,
+    }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -92,9 +101,27 @@ def totp_uri(secret: str, email: str, issuer: str = "ITAssetInventory") -> str:
 
 
 def verify_totp(secret: str, code: str) -> bool:
-    """Verify với dung sai ±1 bước (window=1) + chống replay theo thời gian."""
+    """Verify với dung sai ±1 bước (window=1). KHÔNG chống replay — caller phải
+    dùng `verify_totp_counter` + lưu counter đã dùng khi cần."""
     totp = pyotp.TOTP(secret)
     return totp.verify(code, valid_window=1)
+
+
+def verify_totp_counter(secret: str, code: str) -> int | None:
+    """Trả về time-step (counter) của mã TOTP khớp, hoặc None nếu sai.
+
+    Caller lưu counter vào `users.totp_last_counter` và từ chối mọi mã có
+    counter ≤ giá trị đã lưu → mã 2FA chỉ dùng được 1 lần (chống replay
+    trong cùng/bước trước của window ±1).
+    """
+    import time
+
+    totp = pyotp.TOTP(secret)
+    now = int(time.time())
+    for offset in (-1, 0, 1):
+        if hmac.compare_digest(str(totp.at(now + offset * totp.interval)), code.strip()):
+            return (now + offset * totp.interval) // totp.interval
+    return None
 
 
 def generate_backup_codes(n: int = 10) -> list[str]:

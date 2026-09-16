@@ -52,7 +52,9 @@ class BulkTagRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)  # Hỗ trợ cả email và username
     password: str
-    totp_code: str | None = Field(default=None, max_length=6)
+    totp_code: str | None = Field(
+        default=None, max_length=16
+    )  # mã TOTP 6 số hoặc backup code (10 ký tự hex)
 
 
 class LoginResponse(BaseModel):

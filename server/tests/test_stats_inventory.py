@@ -312,6 +312,15 @@ async def test_stats_inventory_rbac_scope(client, seeded_env):
 
     child_token = await _login(client, "cntt@test.gov.vn", "secret12345")
 
+    # Tài khoản mới bị gắn cờ must_change_password → đổi mật khẩu trước khi
+    # gọi API khác (get_current_user trả 403 nếu chưa đổi).
+    r = await client.post(
+        "/api/auth/change-password",
+        json={"current_password": "secret12345", "new_password": "NewPass!789"},
+        headers=_auth(child_token),
+    )
+    assert r.status_code == 200, r.text
+
     # Org admin con chỉ thấy máy trong phạm vi (0 máy) — không thấy máy của root
     r = await client.get("/api/stats/inventory", headers=_auth(child_token))
     assert r.status_code == 200

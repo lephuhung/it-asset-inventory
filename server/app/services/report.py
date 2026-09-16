@@ -10,6 +10,7 @@ Workbook gồm:
 """
 from __future__ import annotations
 
+import html
 import io
 import uuid
 from datetime import UTC, datetime
@@ -295,8 +296,15 @@ def build_machines_pdf(
     show_full_phone: bool = False,
     generated_by: str | None = None,
 ) -> bytes:
-    """Báo cáo PDF theo biểu mẫu hành chính (WeasyPrint, Phase 4)."""
+    """Báo cáo PDF theo biểu mẫu hành chính (WeasyPrint, Phase 4).
+
+    Mọi giá trị lấy từ DB/agent (hostname, user, org, spec...) đều qua
+    `html.escape` — agent kiểm soát được hostname → HTML injection trong
+    template sẽ render tag/script khi WeasyPrint sinh PDF.
+    """
     from weasyprint import HTML
+
+    esc = lambda v: html.escape(str(v or ""), quote=True)  # noqa: E731
 
     token_meta = token_meta or {}
     rows = []
@@ -315,24 +323,24 @@ def build_machines_pdf(
         rows.append(
             "<tr>"
             f"<td>{i}</td>"
-            f"<td>{m.hostname or ''}</td>"
-            f"<td>{m.machine_uuid[:12]}…</td>"
-            f"<td>{_label_status(m.status)}</td>"
-            f"<td>{m.lifecycle or ''}</td>"
-            f"<td>{_classification_label(m)}</td>"
-            f"<td>{_spec_field(spec, 'os_name')} {_spec_field(spec, 'os_build')}</td>"
-            f"<td>{_cpu_label(spec)}</td>"
-            f"<td>{spec.ram_gb if spec and spec.ram_gb else ''}</td>"
-            f"<td>{user_name}</td>"
-            f"<td>{phone_plain}</td>"
-            f"<td>{m.org.name if m.org else str(m.org_id)[:8]}</td>"
-            f"<td>{_fmt_dt(m.last_seen_at)}</td>"
+            f"<td>{esc(m.hostname)}</td>"
+            f"<td>{esc(m.machine_uuid[:12])}…</td>"
+            f"<td>{esc(_label_status(m.status))}</td>"
+            f"<td>{esc(m.lifecycle)}</td>"
+            f"<td>{esc(_classification_label(m))}</td>"
+            f"<td>{esc(_spec_field(spec, 'os_name'))} {esc(_spec_field(spec, 'os_build'))}</td>"
+            f"<td>{esc(_cpu_label(spec))}</td>"
+            f"<td>{esc(spec.ram_gb if spec and spec.ram_gb else '')}</td>"
+            f"<td>{esc(user_name)}</td>"
+            f"<td>{esc(phone_plain)}</td>"
+            f"<td>{esc(m.org.name if m.org else str(m.org_id)[:8])}</td>"
+            f"<td>{esc(_fmt_dt(m.last_seen_at))}</td>"
             "</tr>"
         )
-    html = _PDF_HTML.format(
+    html_str = _PDF_HTML.format(
         total=len(machines),
         generated=datetime.now(UTC).strftime("%Y-%m-%d %H:%M"),
-        generated_by=generated_by or "",
+        generated_by=esc(generated_by),
         rows="\n".join(rows),
     )
-    return HTML(string=html).write_pdf()
+    return HTML(string=html_str).write_pdf()

@@ -274,20 +274,11 @@ async def list_tokens(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    from sqlalchemy import delete, func as sa_func, or_
+    from sqlalchemy import func as sa_func
 
     now = datetime.now(UTC)
-
-    # Tự động dọn dẹp các token đã quá hạn hoặc đã bị thu hồi khỏi DB
-    await db.execute(
-        delete(EnrollToken).where(
-            or_(
-                EnrollToken.expires_at < now,
-                EnrollToken.status.in_([TokenStatus.EXPIRED.value, TokenStatus.REVOKED.value]),
-            )
-        )
-    )
-    await db.commit()
+    # Token hết hạn/revoked chỉ bị LỌC khỏi list — việc xóa khỏi DB do monitor
+    # làm định kỳ (endpoint GET không được phát sinh ghi).
 
     q = select(EnrollToken)
     visible = await visible_org_ids(db, admin)

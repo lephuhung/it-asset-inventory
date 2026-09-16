@@ -172,6 +172,10 @@ async def _get_profile_scoped(db: AsyncSession, profile_id: uuid.UUID, user: Use
                 selectinload(SystemProfile.contacts).selectinload(SystemProfileContact.contact),
                 selectinload(SystemProfile.events),
                 selectinload(SystemProfile.officer),
+                # machines + nested machine: _to_detail đọc m.machine.hostname —
+                # nếu collection chưa load, lazy-load sau refresh sẽ nổ
+                # MissingGreenlet (async context).
+                selectinload(SystemProfile.machines).selectinload(SystemProfileMachine.machine),
              )
             .where(SystemProfile.id == profile_id)
             # populate_existing: nạp lại collections (session dùng

@@ -34,7 +34,16 @@ async def test_disable_my_2fa_requires_current_password(client, seeded_env, sess
         user.backup_codes = ["hash"]
         await db.commit()
 
-    token = await _login(client, seeded_env["email"], seeded_env["password"])
+    # 2FA đã bật → login phải kèm mã TOTP thật
+    import pyotp
+
+    code = pyotp.TOTP("JBSWY3DPEHPK3PXP").now()
+    r = await client.post(
+        "/api/auth/login",
+        json={"email": seeded_env["email"], "password": seeded_env["password"], "totp_code": code},
+    )
+    assert r.status_code == 200, r.text
+    token = r.json()["access_token"]
     response = await client.post(
         "/api/auth/totp/disable",
         headers={"Authorization": f"Bearer {token}"},

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_client_machine_id
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.db.models import Heartbeat, Machine, MachineStatus
 from app.db.session import get_db
 from app.schemas import HeartbeatRequest, HeartbeatResponse
@@ -64,9 +65,7 @@ async def heartbeat(
     logger = logging.getLogger("heartbeat")
     rescan_requested = False
     try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        r = get_redis()
         await r.set(
             f"machine:online:{machine.id}", "1", ex=settings.effective_online_ttl_seconds
         )
@@ -74,7 +73,6 @@ async def heartbeat(
         if await r.get(f"machine:rescan:{machine.id}"):
             rescan_requested = True
             await r.delete(f"machine:rescan:{machine.id}")
-        await r.aclose()
     except Exception:  # noqa: BLE001
         logger.debug("Redis chưa khả dụng — dựa vào DB cho online status")
 

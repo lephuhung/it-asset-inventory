@@ -114,14 +114,14 @@ async def create_request(
     return await _request_to_out(req, include_vendor=False)
 
 
-@router.get("", response_model=None)
+@router.get("", response_model=list[DfirInvestigationRequestOut])
 async def list_requests(
     db: AsyncSession = Depends(db_session.get_db),
     user: User = Depends(get_current_user),
     status_filter: str | None = Query(default=None, alias="status"),
     machine_id: uuid.UUID | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-) -> List[DfirInvestigationRequestOut]:
+) -> list[DfirInvestigationRequestOut]:
     """List requests. Admin chỉ thấy của mình; Super Admin thấy tất cả."""
     is_super = user.role == "super_admin"
     q = select(DfirInvestigationRequest).order_by(DfirInvestigationRequest.created_at.desc())
