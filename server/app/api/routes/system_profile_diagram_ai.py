@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 
 import sqlalchemy as sa
@@ -133,20 +134,26 @@ def _system_context(profile: SystemProfile, variant: str, catalog: dict[str, str
 
 
 def _extract_json(content: str) -> dict:
-    """Bóc JSON từ câu trả lời LLM: bỏ markdown fence, lấy từ { đầu đến } cuối."""
-    text = content.strip()
+    """Bóc JSON từ câu trả lời LLM: bỏ khối <think> của reasoning model, bỏ
+    markdown fence, thử parse từng khối ứng viên rồi đến nhịp { đầu … } cuối."""
+    text = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    candidates: list[str] = []
     if "```" in text:
-        parts = text.split("```")
-        # ưu tiên khối có đánh dấu json, nếu không lấy khối dài nhất chứa '{'
-        candidates = [p for p in parts if "{" in p]
-        if candidates:
-            block = candidates[0]
-            block = block.split("\n", 1)[-1] if block.lower().startswith("json") else block
-            text = block
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        raise ValueError("Câu trả lời của AI không chứa JSON.")
-    return json.loads(text[start : end + 1])
+        for part in text.split("```"):
+            if "{" not in part:
+                continue
+            block = part.split("\n", 1)[-1] if part.lstrip().lower().startswith("json") else part
+            candidates.append(block)
+    candidates.append(text)
+    for cand in candidates:
+        start, end = cand.find("{"), cand.rfind("}")
+        if start == -1 or end <= start:
+            continue
+        try:
+            return json.loads(cand[start : end + 1])
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("Câu trả lời của AI không chứa JSON.")
 
 
 async def _chat_json(cfg, system_prompt: str, user_prompt: str) -> tuple[dict, str, int]:
@@ -159,7 +166,7 @@ async def _chat_json(cfg, system_prompt: str, user_prompt: str) -> tuple[dict, s
             resp = await llm.chat([LlmMessage(role="system", content=system_prompt), LlmMessage(role="user", content=user_prompt)])
     except LlmError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(502, f"Lỗi khi gọi AI: {exc}") from exc
     try:
         data = _extract_json(resp.content)
@@ -189,6 +196,65 @@ def _validate_layout_payload(data: dict) -> None:
                 raise HTTPException(502, "Có edge trỏ tới node không tồn tại trong layout AI trả về.")
 
 
+def _self_heal_layout(data: dict, profile: SystemProfile, old_layout: dict | None) -> None:
+    """AI hay bỏ sót node — đảm bảo node Internet/Máy trạm, mọi thiết bị đã khai
+    và các node của layout hiện tại đều còn trong layout trả về (non-destructive).
+
+    Lưu ý: id thiết bị là UUID — phải so sánh/ghi bằng ``str(d.id)`` vì key
+    ``nodes`` từ JSON của AI luôn là chuỗi.
+    """
+    nodes = data["nodes"]
+    if INTERNET_NODE_ID not in nodes:
+        nodes[INTERNET_NODE_ID] = {"x": 0, "y": 0}
+    missing = [d for d in profile.devices if str(d.id) not in nodes]
+    for i, d in enumerate(missing):
+        nodes[str(d.id)] = {"x": 280 * (i + 1), "y": 240}
+    if missing:
+        logger.warning(
+            "ai-generate: LLM bỏ sót %d node thiết bị — đã tự bổ sung: %s",
+            len(missing),
+            [str(d.id) for d in missing],
+        )
+    if not any(d.device_type == "workstation" for d in profile.devices) and WORKSTATION_NODE_ID not in nodes:
+        max_x = max((float(p.get("x", 0)) for p in nodes.values() if isinstance(p, dict)), default=0.0)
+        nodes[WORKSTATION_NODE_ID] = {"x": max_x + 280, "y": 0}
+    if not isinstance(old_layout, dict):
+        return
+    old_nodes = old_layout.get("nodes")
+    if not isinstance(old_nodes, dict):
+        return
+    # Chỉ khôi phục node có meta trong customNodes (node tự do/mẫu) — id lạ không
+    # có meta sẽ bị frontend từ chối nên không đưa lại.
+    meta_by_id = {
+        c["id"]: c
+        for c in (old_layout.get("customNodes") or [])
+        if isinstance(c, dict) and isinstance(c.get("id"), str)
+    }
+    new_customs = data.get("customNodes")
+    if not isinstance(new_customs, list):
+        new_customs = data["customNodes"] = []
+    declared = {c.get("id") for c in new_customs if isinstance(c, dict)}
+    restored = 0
+    for nid, pos in old_nodes.items():
+        if nid in nodes or nid not in meta_by_id or not isinstance(pos, dict):
+            continue
+        nodes[nid] = pos
+        if nid not in declared:
+            new_customs.append(meta_by_id[nid])
+            declared.add(nid)
+        restored += 1
+    if restored:
+        logger.warning("ai-generate: LLM bỏ sót %d node của layout hiện tại — đã khôi phục", restored)
+    old_notes = old_layout.get("notes")
+    if isinstance(old_notes, dict):
+        notes = data.get("notes")
+        if not isinstance(notes, dict):
+            notes = data["notes"] = {}
+        for nid, note in old_notes.items():
+            if nid not in notes:
+                notes[nid] = note
+
+
 @router.post("/{profile_id}/diagram/ai-generate", response_model=DiagramAiGenerateOut)
 async def ai_generate_diagram(
     profile_id: uuid.UUID,
@@ -197,6 +263,8 @@ async def ai_generate_diagram(
     _admin: User = Depends(require_admin()),
 ):
     profile = await _load_profile(db, profile_id)
+    if not profile.devices:
+        raise HTTPException(400, "Hồ sơ chưa khai thiết bị — khai báo thiết bị trước khi nhờ AI vẽ sơ đồ.")
     cfg = await _load_llm_config(db)
     catalog = await _device_type_catalog(db)
     current_layout = json.dumps(body.layout, ensure_ascii=False, indent=2) if body.layout else "(chưa có)"
@@ -224,16 +292,17 @@ async def ai_generate_diagram(
         "Chỉ trả về JSON hoàn chỉnh theo quy cách."
     )
     data, model, total = await _chat_json(cfg, system_prompt, user_prompt)
+    # AI hay khai customNodes mà quên tọa độ trong "nodes" — bù trước khi
+    # validate để edge trỏ tới node đó không bị coi là node không tồn tại.
+    customs = data.get("customNodes")
+    if isinstance(customs, list) and customs:
+        if not isinstance(data.get("nodes"), dict):
+            data["nodes"] = {}
+        for i, c in enumerate(customs):
+            if isinstance(c, dict) and isinstance(c.get("id"), str) and c["id"] not in data["nodes"]:
+                data["nodes"][c["id"]] = {"x": 200 + 60 * i, "y": 360}
     _validate_layout_payload(data)
-    # Self-heal: AI hay bỏ sót node — đảm bảo node Internet + mọi thiết bị đều có trong layout
-    nodes = data["nodes"]
-    if INTERNET_NODE_ID not in nodes:
-        nodes[INTERNET_NODE_ID] = {"x": 0, "y": 0}
-    missing = [d.id for d in profile.devices if d.id not in nodes]
-    for i, device_id in enumerate(missing):
-        nodes[device_id] = {"x": 280 * (i + 1), "y": 240}
-    if missing:
-        logger.warning("ai-generate: LLM bỏ sót %d node thiết bị — đã tự bổ sung: %s", len(missing), missing)
+    _self_heal_layout(data, profile, body.layout)
     return DiagramAiGenerateOut(layout=data, model=model, total_tokens=total)
 
 
@@ -245,6 +314,8 @@ async def ai_review_diagram(
     _admin: User = Depends(require_admin()),
 ):
     profile = await _load_profile(db, profile_id)
+    if not profile.devices:
+        raise HTTPException(400, "Hồ sơ chưa khai thiết bị — khai báo thiết bị trước khi nhờ AI rà soát sơ đồ.")
     cfg = await _load_llm_config(db)
     catalog = await _device_type_catalog(db)
 

@@ -526,14 +526,14 @@ function TopologyCanvasInner({
         variant,
         devices,
         meta,
-        layout: savedLayout,
+        layout: currentLayout,
       }),
     );
     setAiPaste("");
     setAiPasteError(null);
     setAiCopied(false);
     setAiOpen(true);
-  }, [profileName, variant, devices, meta, savedLayout]);
+  }, [profileName, variant, devices, meta, currentLayout]);
 
   const copyPrompt = useCallback(async () => {
     try {
@@ -578,8 +578,10 @@ function TopologyCanvasInner({
     pushHistory();
     const allIds = new Set([...known, ...customSet]);
 
-    // Gộp vị trí/ghi chú: node không được nhắc tới giữ nguyên như đang có
-    const mergedNodes: FlowNode[] = nodes.map((n) => {
+    // Gộp vị trí/ghi chú: node không được nhắc tới giữ nguyên như đang có.
+    // Node ảo (custom-*/sample-*) xử lý riêng ở existingCustoms/newCustoms —
+    // lọc ra khỏi đây để không bị nhân đôi id trên canvas.
+    const mergedNodes: FlowNode[] = nodes.filter((n) => !isVirtualNode(n.id)).map((n) => {
       const pos = parsed.nodes[n.id];
       const note = parsed.notes?.[n.id];
       return {
@@ -634,13 +636,16 @@ function TopologyCanvasInner({
   const apiVariant = variant === "vật lý" ? "physical" : "logic";
 
   const callAiGenerate = useCallback(async () => {
-    if (!profileId) return;
+    if (!profileId || devices.length === 0) return;
     setAiCalling(true);
     setAiPasteError(null);
     try {
       const res = await api.post<{ layout: Record<string, unknown>; model: string }>(
         `/system-profiles/${profileId}/diagram/ai-generate`,
-        { variant: apiVariant, layout: savedLayout ?? null },
+        // Gửi layout đang hiển thị trên canvas (kể cả node chưa lưu) — nếu chỉ
+        // gửi layout đã lưu DB, AI sẽ không thấy node mới và có thể trả về sơ
+        // đồ chỉ gồm 2 node mặc định.
+        { variant: apiVariant, layout: currentLayout },
       );
       setAiPaste(JSON.stringify(res.layout, null, 2));
     } catch (e) {
@@ -648,10 +653,10 @@ function TopologyCanvasInner({
     } finally {
       setAiCalling(false);
     }
-  }, [profileId, apiVariant, savedLayout]);
+  }, [profileId, apiVariant, currentLayout, devices.length]);
 
   const runAiReview = useCallback(async () => {
-    if (!profileId) return;
+    if (!profileId || devices.length === 0) return;
     setReviewOpen(true);
     setReviewLoading(true);
     setReviewError(null);
@@ -663,7 +668,7 @@ function TopologyCanvasInner({
         model: string;
       }>(`/system-profiles/${profileId}/diagram/ai-review`, {
         variant: apiVariant,
-        layout: savedLayout ?? null,
+        layout: currentLayout,
       });
       setReviewFindings(res.findings);
       setReviewModel(res.model);
@@ -672,7 +677,7 @@ function TopologyCanvasInner({
     } finally {
       setReviewLoading(false);
     }
-  }, [profileId, apiVariant, savedLayout]);
+  }, [profileId, apiVariant, currentLayout, devices.length]);
 
   /* ── Template mẫu theo cấp độ ── */
 
@@ -819,10 +824,20 @@ function TopologyCanvasInner({
               </>
             )}
           </div>
-          <Button variant="secondary" onClick={openAiModal}>
+          <Button
+            variant="secondary"
+            onClick={openAiModal}
+            disabled={devices.length === 0}
+            title={devices.length === 0 ? "Khai báo thiết bị ở tab Thiết bị trước khi nhờ AI vẽ sơ đồ" : undefined}
+          >
             <Bot className="size-4" /> Vẽ bằng AI
           </Button>
-          <Button variant="secondary" onClick={() => void runAiReview()}>
+          <Button
+            variant="secondary"
+            onClick={() => void runAiReview()}
+            disabled={devices.length === 0}
+            title={devices.length === 0 ? "Khai báo thiết bị ở tab Thiết bị trước khi nhờ AI rà soát sơ đồ" : undefined}
+          >
             <ScanSearch className="size-4" /> AI rà soát
           </Button>
           {profileLevel && (
