@@ -255,6 +255,7 @@ function TopologyCanvasInner({
     () => buildLevelSample(devices, profileLevel ?? 2, meta),
     [devices, profileLevel, meta],
   );
+  // initialNodes recomputes whenever layout prop changes (e.g., after save+reload)
   const initialNodes = useMemo<FlowNode[]>(
     () => {
       if (layout) {
@@ -266,9 +267,8 @@ function TopologyCanvasInner({
       // Chưa lưu bố cục → hiển thị sơ đồ mẫu theo cấp độ
       return toFlowNodes(levelSample.nodes);
     },
-    // Chỉ tính lúc mount — các cập nhật sau xử lý trong effect theo topologyKey
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [layout, topology, levelSample],
   );
   const validIds = useMemo(() => new Set(topology.nodes.map((n) => n.id)), [topology.nodes]);
   const autoEdges = useMemo<Edge[]>(
@@ -377,7 +377,21 @@ function TopologyCanvasInner({
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [topologyKey]);
+  }, [topologyKey, savedLayout]);
+
+  // Khi layout prop thay đổi (sau save+reload) → đồng bộ lại nodes/edges từ layout mới
+  const prevLayoutRef = useRef(layout);
+  useEffect(() => {
+    if (layout && layout !== prevLayoutRef.current) {
+      prevLayoutRef.current = layout;
+      setNodes([
+        ...toFlowNodes(applyDiagramLayout(topology.nodes, layout), layout.notes),
+        ...customNodesFromLayout(layout),
+      ]);
+      setEdges(savedEdgesToFlow(layout.edges, validIds, autoEdges));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout]);
 
   const currentLayout = useMemo<DiagramLayout>(
     () => ({
