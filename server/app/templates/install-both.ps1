@@ -244,6 +244,22 @@ function Download-File([string]$Url, [string]$OutPath, [string]$Label) {
     Write-Ok "$Label da tai ($size MB)"
 }
 
+function Save-OiClientConfig([string]$BaseUrl) {
+    # MSI có thể tải từ GitHub Releases, nhưng cấu hình agent LUÔN do backend sinh
+    # (giống client.config.yaml của Velociraptor) → %ProgramData%\OrgInventory\agent.config.yaml.
+    $resp = Invoke-WebRequest -Uri "$BaseUrl/download/agent.config.yaml" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+    $bytes = $resp.RawContentStream.ToArray()
+    $actual = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLower()
+    $expected = @($resp.Headers['X-Content-SHA256'])[0]
+    if ($expected -and $expected.ToLower() -ne $actual) { throw "SHA256 cau hinh khong khop (server: $expected, file: $actual)" }
+    if (-not [Text.Encoding]::UTF8.GetString($bytes).Contains('server_urls:')) { throw "File cau hinh khong hop le (thieu server_urls)" }
+    $dir = Join-Path $env:ProgramData 'OrgInventory'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $path = Join-Path $dir 'agent.config.yaml'
+    [IO.File]::WriteAllBytes($path, $bytes)
+    return $path
+}
+
 # ── 4. OrgInventory Agent ──────────────────────────────────────────────
 if (-not $SkipOrgInventory) {
     Write-Step "[2/5] Cai dat / cap nhat OrgInventory Agent..."
@@ -305,6 +321,10 @@ if (-not $SkipOrgInventory) {
         }
         if ($sig.Status -eq 'Valid') { Write-Ok "Chu ky hop le: $($sig.SignerCertificate.Subject)" }
         else { Write-Warn "MSI khong ky Authenticode - bo qua vi ORGINV_ALLOW_UNSIGNED=1 (TEST mode)" }
+
+        try { $oiClientCfg = Save-OiClientConfig $PortalUrl; Write-Ok "Cau hinh agent tu backend: $oiClientCfg" } catch {
+            Write-Fail "Khong tai duoc cau hinh agent tu backend: $($_.Exception.Message)"; exit 1
+        }
 
         # msiexec
         Write-Info "Chay msiexec /qn (silent install, ENROLL_TOKEN + ENDPOINTS)..."
@@ -400,6 +420,10 @@ if (-not $SkipOrgInventory) {
         Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "EnrollToken" -Value $Token
         Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "Endpoints" -Value $Endpoint
         Write-Ok "Config da update: endpoints=$Endpoint (identity: $(if ($wasEnrolled -and -not $Reenroll) { 'giu nguyen' } elseif ($Reenroll) { 'da rotate (-Reenroll)' } else { 'cho enroll moi' }))."
+
+        try { $oiClientCfg = Save-OiClientConfig $PortalUrl; Write-Ok "Cau hinh agent tu backend: $oiClientCfg" } catch {
+            Write-Fail "Khong tai duoc cau hinh agent tu backend: $($_.Exception.Message)"; exit 1
+        }
 
         # Restart service de agent doc config moi
         if (-not $oiSvc) {

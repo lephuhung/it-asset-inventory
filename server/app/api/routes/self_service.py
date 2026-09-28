@@ -70,6 +70,10 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'  $m=Join-Path $env:TEMP ("agent-" + $t + ".msi");'
         f'  [IO.File]::WriteAllBytes($m, $msiBytes);'
         f'  Write-Host "MSI verified (sha256 ok), cai bang msiexec...";'
+        f'  $d="$env:ProgramData\\OrgInventory";New-Item -ItemType Directory -Force -Path $d|Out-Null;'
+        f'  $c=(Invoke-WebRequest "{portal_url}/download/agent.config.yaml" -UseBasicParsing -ErrorAction Stop).RawContentStream.ToArray();'
+        f'  if(-not [Text.Encoding]::UTF8.GetString($c).Contains("server_urls:")){{Write-Host "LOI: cau hinh agent tu backend khong hop le";exit 1}};'
+        f'  [IO.File]::WriteAllBytes("$d\\agent.config.yaml",$c);'
         f'  msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
         f'}} catch {{ Write-Host ("ERR: " + $_.Exception.Message); exit 1 }}'
     )

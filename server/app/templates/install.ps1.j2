@@ -147,6 +147,31 @@ if ($sig.Status -eq 'Valid') {
     Write-Host "      ⚠ MSI KHÔNG ký Authenticode (Status: $($sig.Status)) — bỏ qua vì ORGINV_ALLOW_UNSIGNED=1 (CHỈ DÙNG TEST)" -ForegroundColor Yellow
 }
 
+function Save-OiClientConfig([string]$BaseUrl) {
+    # MSI có thể tải từ GitHub Releases, nhưng cấu hình agent LUÔN do backend sinh
+    # (giống client.config.yaml của Velociraptor) → %ProgramData%\OrgInventory\agent.config.yaml.
+    $resp = Invoke-WebRequest -Uri "$BaseUrl/download/agent.config.yaml" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+    $bytes = $resp.RawContentStream.ToArray()
+    $actual = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLower()
+    $expected = @($resp.Headers['X-Content-SHA256'])[0]
+    if ($expected -and $expected.ToLower() -ne $actual) { throw "SHA256 cau hinh khong khop (server: $expected, file: $actual)" }
+    if (-not [Text.Encoding]::UTF8.GetString($bytes).Contains('server_urls:')) { throw "File cau hinh khong hop le (thieu server_urls)" }
+    $dir = Join-Path $env:ProgramData 'OrgInventory'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $path = Join-Path $dir 'agent.config.yaml'
+    [IO.File]::WriteAllBytes($path, $bytes)
+    return $path
+}
+
+Write-Host '[3/4] Tải cấu hình agent từ backend ...' -ForegroundColor Cyan
+try {
+    $clientCfg = Save-OiClientConfig $baseUrl
+    Write-Host "      ✓ $clientCfg" -ForegroundColor Green
+} catch {
+    Write-Host "[LỖI] Không tải được cấu hình agent từ backend: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
 # 6. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
 Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
 $install = Start-Process msiexec.exe -ArgumentList @(
