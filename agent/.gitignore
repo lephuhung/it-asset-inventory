@@ -24,3 +24,4 @@ logs/
 installer/OrgInventoryAgent.msi
 installer/OrgInventoryAgent.msi.sha256
 installer/publish/
+installer/*.wixpdb
