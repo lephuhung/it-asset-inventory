@@ -27,6 +27,8 @@ $PublishDir = Join-Path $Root "publish\$Runtime"
 $Wxs = Join-Path $PSScriptRoot "Product.wxs"
 $Msi = Join-Path $PSScriptRoot "OrgInventoryAgent.msi"
 $Sha = "$Msi.sha256"
+# WiX >= 6.0 doi phai accept OSMF EULA moi build duoc -> pin ve 5.x da verify
+$WixVersion = "5.0.2"
 
 Write-Host "== OrgInventory Agent MSI build ==" -ForegroundColor Cyan
 
@@ -43,14 +45,21 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw "Thieu dotnet SDK 8 - cai tu https://dotnet.microsoft.com/download"
 }
 
-# 2. WiX v4+ (dotnet global tool `wix`)
+# 2. WiX (dotnet global tool `wix`), pin $WixVersion
 if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
-    Write-Host "Chua co WiX -> cai: dotnet tool install --global wix" -ForegroundColor Yellow
-    dotnet tool install --global wix
+    Write-Host "Chua co WiX -> cai: dotnet tool install --global wix --version $WixVersion" -ForegroundColor Yellow
+    dotnet tool install --global wix --version $WixVersion
     if ($LASTEXITCODE -ne 0) { throw "Cai WiX that bai" }
     $env:Path = "$env:USERPROFILE\.dotnet\tools;" + $env:Path
 }
 $wixVersion = & wix --version
+$wixMajor = [int](($wixVersion -split '\.')[0])
+if ($wixMajor -ge 6) {
+    Write-Host "WiX $wixVersion can OSMF EULA -> downgrade ve $WixVersion" -ForegroundColor Yellow
+    dotnet tool update --global wix --version $WixVersion
+    if ($LASTEXITCODE -ne 0) { throw "Downgrade WiX that bai" }
+    $wixVersion = & wix --version
+}
 Write-Host "WiX: $wixVersion"
 
 # 3. Publish agent (self-contained single-file, co icon/metadata)

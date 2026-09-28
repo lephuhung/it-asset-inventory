@@ -1,4 +1,6 @@
 %global debug_package %{nil}
+# Fallback khi host build thieu systemd-rpm-macros (vd Ubuntu + rpmbuild)
+%{!?_unitdir:%global _unitdir /usr/lib/systemd/system}
 
 Name:           orginventory-agent
 Version:        1.1.0
@@ -30,10 +32,10 @@ systemctl daemon-reload || true
 # KHÔNG auto-enable/start — service cần enroll token trước (khớp debian/postinst)
 
 %preun
-%systemd_preun orginventory-agent.service
+%{?systemd_preun:%systemd_preun orginventory-agent.service}
 
 %postun
-%systemd_postun orginventory-agent.service
+%{?systemd_postun:%systemd_postun orginventory-agent.service}
 
 %files
 /opt/orginventory
@@ -41,5 +43,5 @@ systemctl daemon-reload || true
 %{_unitdir}/orginventory-agent.service
 
 %changelog
-* Mon Aug 30 2026 OrgInventory Team <team@example.gov.vn> - 1.1.0-1
+* Sun Aug 30 2026 OrgInventory Team <team@example.gov.vn> - 1.1.0-1
 - Initial Linux agent release

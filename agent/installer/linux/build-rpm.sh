@@ -4,7 +4,8 @@
 #     RID: linux-x64 (mặc định) | linux-arm64
 #
 # RPM target arch PHẢI theo RID (linux-x64→x86_64, linux-arm64→aarch64) —
-# không dùng arch build host. Cần rpmbuild + systemd-rpm-macros trên host.
+# không dùng arch build host. Cần rpmbuild; spec tự fallback khi thiếu
+# systemd-rpm-macros (%_unitdir, %systemd_* scriptlets).
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RID="${1:-linux-x64}"
@@ -20,6 +21,8 @@ VERSION="$(sed -n 's/^Version: *//p' "$HERE/rpm/orginventory.spec" | head -n1)"
 [[ -n "$VERSION" ]] || { echo "Không đọc được Version từ rpm/orginventory.spec" >&2; exit 1; }
 
 mkdir -p "$OUT"
+# rpmbuild dung %{_builddir} (absolute) -> OUT phai la absolute
+OUT="$(cd "$OUT" && pwd)"
 BUILDDIR="$OUT/build-$RID"
 rm -rf "$BUILDDIR"
 mkdir -p "$BUILDDIR/orginventory/opt" "$BUILDDIR/orginventory/systemd"

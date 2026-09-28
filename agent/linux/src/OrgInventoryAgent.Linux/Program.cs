@@ -180,6 +180,13 @@ public class Program
 
         var ok = await enroll.EnsureEnrolledAsync(CancellationToken.None);
         if (!ok && !AgentIdentity.IsEnrolled(config)) { logger.LogWarning("Chưa enroll được — exit 0 (service sẽ retry)."); return 0; }
+
+        var configSync = new ConfigSyncService(config, api, enroll, state,
+            loggerFactory.CreateLogger<ConfigSyncService>());
+        var heartbeat = new HeartbeatService(config, api, endpoints, enroll, cache, inventory,
+            keyStore, configSync, state, loggerFactory.CreateLogger<HeartbeatService>());
+        var hbOk = await heartbeat.SendOnceAsync(CancellationToken.None);
+        logger.LogInformation("--once heartbeat: {Ok}", hbOk ? "OK" : "FAIL");
         await inventory.SendOnceAsync(CancellationToken.None);
         return 0;
     }
