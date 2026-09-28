@@ -11,7 +11,8 @@
   Dùng thủ công:
     wix build installer\Product.wxs -d AgentExe=path\OrgInventoryAgent.exe -o OrgInventoryAgent.msi
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <?ifndef AgentExe ?>
     <?define AgentExe = "OrgInventoryAgent.exe" ?>
@@ -22,17 +23,17 @@
   <?define UpgradeCode = "A3E2F1B0-9C8D-4E5F-8A7B-6C5D4E3F2A1B" ?>
 
   <Package Name="OrgInventory Agent"
-           Manufacturer="Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh"
+           Manufacturer="Phong ANM &amp; PCTP su dung CNC, Cong an tinh Ha Tinh"
            Version="1.1.0"
            UpgradeCode="$(var.UpgradeCode)"
            Language="1033"
            Scope="perMachine"
            Compressed="yes">
 
-    <SummaryInformation Description="Hệ thống Quản lý Tài sản CNTT &amp; Đánh giá An toàn Thông tin - Phát triển bởi Phòng ANM &amp; PCTP sử dụng CNC, Công an tỉnh Hà Tĩnh. Chế độ chỉ đọc (Read-only), bảo mật mTLS." />
+    <SummaryInformation Description="He thong Quan ly Tai san CNTT &amp; Danh gia An toan Thong tin - Phat trien boi Phong ANM &amp; PCTP su dung CNC, Cong an tinh Ha Tinh. Che do chi doc (Read-only), bao mat mTLS." />
 
     <!-- Upgrade sạch bản cũ -->
-    <MajorUpgrade DowngradeErrorMessage="Phiên bản mới hơn của OrgInventory Agent đã được cài đặt." />
+    <MajorUpgrade DowngradeErrorMessage="Phien ban moi hon cua OrgInventory Agent da duoc cai dat." />
 
     <MediaTemplate EmbedCab="yes" />
 
@@ -64,23 +65,27 @@
         <!-- Đăng ký Windows Service qua SCM chuẩn (LocalSystem → đọc được WMI + cert store LocalMachine) -->
         <ServiceInstall Id="ServiceInstall"
                         Name="OrgInventoryAgent"
-                        DisplayName="OrgInventory Agent - Công an tỉnh Hà Tĩnh"
-                        Description="Dịch vụ kiểm kê tài sản CNTT và giám sát trạng thái an toàn thông tin máy tính. Phát triển bởi Phòng An ninh mạng và phòng, chống tội phạm sử dụng công nghệ cao, Công an tỉnh Hà Tĩnh. Chế độ chỉ đọc (Read-only), bảo mật mTLS."
+                        DisplayName="OrgInventory Agent - Cong an tinh Ha Tinh"
+                        Description="Dich vu kiem ke tai san CNTT va giam sat trang thai an toan thong tin may tinh. Phat trien boi Phong ANM &amp; PCTP su dung CNC, Cong an tinh Ha Tinh. Che do chi doc (Read-only), bao mat mTLS."
                         Type="ownProcess"
                         Start="auto"
                         ErrorControl="normal"
                         Account="LocalSystem"
-                        Interactive="no" />
+                        Interactive="no">
+          <!-- Restart-on-failure: MSI mac dinh KHONG set failure actions —
+               agent crash thi SCM khong tu start lai (mat telemetry) -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              ResetPeriodInDays="1"
+                              RestartServiceDelayInSeconds="60" />
+        </ServiceInstall>
         <ServiceControl Id="ServiceControl"
                         Name="OrgInventoryAgent"
                         Start="install"
                         Stop="both"
                         Remove="uninstall"
                         Wait="yes" />
-        <!-- Restart-on-failure: MSI mặc định KHÔNG set failure actions —
-             agent crash thì SCM không tự start lại (mất telemetry) -->
-        <ServiceConfig First="restart" Second="restart" Third="restart"
-                       ResetPeriodInSeconds="86400" RestartServiceDelayInSeconds="60" />
       </Component>
     </ComponentGroup>
 
