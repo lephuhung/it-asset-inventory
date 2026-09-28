@@ -22,7 +22,6 @@ Build (chỉ trên Windows, cần WiX):
 from __future__ import annotations
 
 import hashlib
-
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -391,7 +390,9 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
     import io
     import json
     import zipfile
+
     from fastapi.responses import Response
+
     from app.services.server_crypto import get_server_public_key_pem
 
     agent_cfg = await effective_agent_config(db)
@@ -416,6 +417,7 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
 
         sample_cfg = {
             "token": "",
+            "org_id": "",
             "endpoints": agent_cfg["agent_server_url"],
             "note": "Cấu hình offline tạo bởi IT Asset Inventory Portal",
         }
