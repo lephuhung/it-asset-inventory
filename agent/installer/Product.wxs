@@ -16,6 +16,9 @@
   <?ifndef AgentExe ?>
     <?define AgentExe = "OrgInventoryAgent.exe" ?>
   <?endif?>
+  <?ifndef AgentSqliteDll ?>
+    <?define AgentSqliteDll = "e_sqlite3.dll" ?>
+  <?endif?>
   <?define UpgradeCode = "A3E2F1B0-9C8D-4E5F-8A7B-6C5D4E3F2A1B" ?>
 
   <Package Name="OrgInventory Agent"
@@ -54,6 +57,9 @@
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="AgentExeComponent" Guid="7C4F2A91-3B5E-4D8A-9C1F-0A2B3C4D5E6F">
         <File Id="AgentExeFile" Source="$(var.AgentExe)" KeyPath="yes" />
+        <!-- e_sqlite3.dll native bắt buộc nằm cạnh exe (publish tắt self-extract
+             để tránh AV false-positive) — thiếu thì OfflineCache SQLite fail -->
+        <File Id="SqliteNativeFile" Source="$(var.AgentSqliteDll)" />
 
         <!-- Đăng ký Windows Service qua SCM chuẩn (LocalSystem → đọc được WMI + cert store LocalMachine) -->
         <ServiceInstall Id="ServiceInstall"

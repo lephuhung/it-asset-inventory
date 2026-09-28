@@ -39,13 +39,15 @@
   <!-- Publish profile cho Linux self-contained single-file.
        Cấu hình chống Antivirus / Defender False Positive (tương thích cơ chế Windows):
        - TẮT nén (EnableCompressionInSingleFile=false): tránh bị nhận nhầm là packer/crypter.
-       - TẮT tự giải nén ra $TMPDIR (IncludeNativeLibrariesForSelfExtract=false).
+       - BẬT self-extract native libs (IncludeNativeLibrariesForSelfExtract=true):
+         install.sh chỉ ship 1 file binary — nếu tắt, libe_sqlite3.so tách ra ngoài
+         và OfflineCache (Microsoft.Data.Sqlite) fail khi chạy.
        - DebugType=none: làm sạch ELF section. -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64' Or '$(RuntimeIdentifier)' == 'linux-musl-x64' Or '$(RuntimeIdentifier)' == 'linux-arm64'">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
-    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>none</DebugType>
   </PropertyGroup>
 

@@ -68,10 +68,13 @@ dotnet publish $Project -c $Configuration -r $Runtime --self-contained true -o $
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish that bai" }
 $AgentExe = Join-Path $PublishDir "OrgInventoryAgent.exe"
 if (-not (Test-Path $AgentExe)) { throw "Khong thay $AgentExe sau khi publish" }
+# e_sqlite3.dll native phai nam canh exe (publish tat self-extract de tranh AV FP)
+$SqliteDll = Join-Path $PublishDir "e_sqlite3.dll"
+if (-not (Test-Path $SqliteDll)) { throw "Khong thay $SqliteDll sau khi publish — OfflineCache can SQLite native lib" }
 
 # 4. Build MSI
 Write-Host "Build MSI..."
-& wix build $Wxs -d AgentExe=$AgentExe -o $Msi -arch x64
+& wix build $Wxs -d AgentExe=$AgentExe -d AgentSqliteDll=$SqliteDll -o $Msi -arch x64
 if ($LASTEXITCODE -ne 0) { throw "wix build that bai" }
 
 # 5. Ky Authenticode (neu co)
