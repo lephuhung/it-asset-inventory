@@ -77,6 +77,10 @@
                         Stop="both"
                         Remove="uninstall"
                         Wait="yes" />
+        <!-- Restart-on-failure: MSI mặc định KHÔNG set failure actions —
+             agent crash thì SCM không tự start lại (mất telemetry) -->
+        <ServiceConfig First="restart" Second="restart" Third="restart"
+                       ResetPeriodInSeconds="86400" RestartServiceDelayInSeconds="60" />
       </Component>
     </ComponentGroup>
 
