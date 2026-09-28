@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # Có thể trỏ tới `agent/publish/win-x64/` sau khi build MSI trên Windows.
     agent_msi_dir: str = "./agent_dist"
 
+    # GitHub Releases của repo agent (org-inventory-agent) — khi set, các route
+    # /download/agent* và script cài redirect sang `…/releases/latest/download/<asset>`
+    # thay vì đọc file local trong agent_msi_dir. Vd:
+    #   https://github.com/lephuhung/org-inventory-agent/releases
+    agent_releases_base: str = ""
+
     # Server RSA Keypair cho giải mã gói offline (mã hóa lai AES-256-GCM + RSA-OAEP)
     server_private_key_path: str = "./data/server_private_key.pem"
     server_public_key_path: str = "./data/server_public_key.pem"
