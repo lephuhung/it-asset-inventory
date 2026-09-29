@@ -487,19 +487,21 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
         }
         zf.writestr("offline_config.json", json.dumps(sample_cfg, indent=2, ensure_ascii=False))
 
-        # Đính kèm MSI + SHA256 — ưu tiên release asset, fallback file local
+        # Đính kèm MSI + SHA256 — lấy atomic từ 1 nguồn: cặp release asset khi
+        # fetch được CẢ 2, fallback cặp file local. Trộn nguồn (MSI release +
+        # checksum local cũ hoặc ngược lại) làm install-offline.ps1 reject
+        # SHA-256 mismatch trên máy air-gap.
         msi_bytes = await _fetch_release_asset(MSI_FILENAME)
-        if msi_bytes is not None:
-            zf.writestr(MSI_FILENAME, msi_bytes)
-        else:
-            msi_p = Path(settings.agent_msi_dir).resolve() / MSI_FILENAME
-            if msi_p.exists():
-                zf.write(msi_p, arcname=MSI_FILENAME)
         sha_bytes = await _fetch_release_asset(SHA256_FILENAME)
-        if sha_bytes is not None:
+        if msi_bytes is not None and sha_bytes is not None:
+            zf.writestr(MSI_FILENAME, msi_bytes)
             zf.writestr(SHA256_FILENAME, sha_bytes)
         else:
-            sha_p = Path(settings.agent_msi_dir).resolve() / SHA256_FILENAME
+            base = Path(settings.agent_msi_dir).resolve()
+            msi_p = base / MSI_FILENAME
+            if msi_p.exists():
+                zf.write(msi_p, arcname=MSI_FILENAME)
+            sha_p = base / SHA256_FILENAME
             if sha_p.exists():
                 zf.write(sha_p, arcname=SHA256_FILENAME)
 
