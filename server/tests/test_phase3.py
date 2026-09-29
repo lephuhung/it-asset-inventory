@@ -140,7 +140,7 @@ async def test_request_rescan(client, session_factory, seeded_env):
 
 def _sign_payload(payload: dict, private_key) -> str:
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    sig = private_key.sign(hashlib.sha256(canonical).digest(), ec.ECDSA(hashes.SHA256()))
+    sig = private_key.sign(canonical, ec.ECDSA(hashes.SHA256()))
     return base64.b64encode(sig).decode()
 
 

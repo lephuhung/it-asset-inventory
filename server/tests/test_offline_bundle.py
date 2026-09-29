@@ -31,7 +31,7 @@ def _create_mock_offline_bundle(
     """Tạo gói ZIP mã hóa theo đúng chuẩn C# OfflineBundleExporter."""
     # 1. Ký số ECDSA trên canonical JSON
     canonical_bytes = _canonical_json(payload)
-    sig = agent_private_key.sign(hashlib.sha256(canonical_bytes).digest(), ec.ECDSA(hashes.SHA256()))
+    sig = agent_private_key.sign(canonical_bytes, ec.ECDSA(hashes.SHA256()))
     sig_b64 = base64.b64encode(sig).decode("utf-8")
 
     agent_pub_pem = (
