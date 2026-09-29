@@ -128,7 +128,7 @@ try {
     }
     Write-Host '      ✓ SHA256 khớp' -ForegroundColor Green
 } catch {
-    Write-Host '      ⚠ Không verify được SHA256 (thiếu agent.msi.sha256 trên server) — tiếp tục.' -ForegroundColor Yellow
+    Write-Host '      ⚠ Không đọc được hash từ server (agent.msi.sha256) — bỏ qua verify SHA256, tiếp tục.' -ForegroundColor Yellow
 }
 
 # 5. Verify chữ ký Authenticode
