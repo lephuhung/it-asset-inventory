@@ -234,6 +234,11 @@ try {
 
 $TmpDir = Join-Path $env:TEMP "install-both"
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+# Cache MSI o cho on dinh (khong phai %TEMP%): giu file lai sau cai de Windows
+# Installer resolve duoc InstallSource cho repair/reenroll cung ProductCode —
+# cai tu %TEMP% roi xoa se lam moi repair/reinstall sau do fail msiexec 1603.
+$PkgCache = Join-Path $env:ProgramData 'OrgInventory\pkgcache'
+New-Item -ItemType Directory -Force -Path $PkgCache | Out-Null
 $InstallLog = Join-Path $env:TEMP "install-both.log"
 
 function Download-File([string]$Url, [string]$OutPath, [string]$Label) {
@@ -289,7 +294,7 @@ if (-not $SkipOrgInventory) {
             }
         }
 
-        $msiPath = Join-Path $TmpDir "OrgInventoryAgent.msi"
+        $msiPath = Join-Path $PkgCache "OrgInventoryAgent.msi"
         try { Download-File $OrgInventoryMsiUrl $msiPath "OrgInventoryAgent.msi" } catch {
             Write-Fail "Khong tai duoc MSI: $($_.Exception.Message)"; exit 1
         }
@@ -481,7 +486,7 @@ if (-not $SkipVelociraptor) {
             }
         }
 
-        $vrMsi = Join-Path $TmpDir "velociraptor-windows-amd64.msi"
+        $vrMsi = Join-Path $PkgCache "velociraptor-windows-amd64.msi"
         try { Download-File $VelociraptorMsiUrl $vrMsi "Velociraptor MSI" } catch {
             Write-Fail "Khong tai duoc MSI: $($_.Exception.Message)"; exit 1
         }

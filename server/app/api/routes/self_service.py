@@ -69,7 +69,7 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
         f'  $shaExpected = "$shaExpected".Trim().ToLower();'
         f'  $shaActual = (Get-FileHash -InputStream $msiBytes -Algorithm SHA256).Hash.ToLower();'
         f'  if($shaExpected -ne $shaActual){{Write-Host "LOI: SHA256 khong khop";exit 1}};'
-        f'  $m=Join-Path $env:TEMP ("agent-" + $t + ".msi");'
+        f'  $m="$env:ProgramData\\OrgInventory\\pkgcache\\OrgInventoryAgent.msi";New-Item -ItemType Directory -Force -Path (Split-Path $m)|Out-Null;'
         f'  [IO.File]::WriteAllBytes($m, $msiBytes);'
         f'  Write-Host "MSI verified (sha256 ok), cai bang msiexec...";'
         f'  $d="$env:ProgramData\\OrgInventory";New-Item -ItemType Directory -Force -Path $d|Out-Null;'

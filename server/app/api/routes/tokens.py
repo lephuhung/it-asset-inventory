@@ -113,7 +113,7 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
         bypass
         + f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
-        f'$m="$env:TEMP\\agent-$t.msi";'
+        f'$m="$env:ProgramData\\OrgInventory\\pkgcache\\OrgInventoryAgent.msi";New-Item -ItemType Directory -Force -Path (Split-Path $m)|Out-Null;'
         f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
         f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
         f'$b=(irm "{portal_url}/download/agent.msi.sha256");'
