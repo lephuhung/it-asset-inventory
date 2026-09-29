@@ -482,6 +482,7 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
 
         sample_cfg = {
             "token": "",
+            "org_id": "",
             "endpoints": agent_cfg["agent_server_url"],
             "note": "Cấu hình offline tạo bởi IT Asset Inventory Portal",
         }

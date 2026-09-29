@@ -450,7 +450,11 @@ if [[ $VR_OK -eq 0 ]]; then
     echo "Chạy lại: curl -fsSL $PORTAL_URL/i/$TOKEN | sudo bash"
     exit 1
 fi
-log_ok "Cài đặt thành công! (OrgInventory + Velociraptor)"
+if [[ "$SKIP_VELOCIRAPTOR" == "1" ]]; then
+    log_ok "Cài đặt thành công! (OrgInventory — bỏ qua Velociraptor)"
+else
+    log_ok "Cài đặt thành công! (OrgInventory + Velociraptor)"
+fi
 echo "============================================================"
 echo
 if [[ $OI_NEEDS_BINARY -eq 1 ]]; then
@@ -458,7 +462,9 @@ if [[ $OI_NEEDS_BINARY -eq 1 ]]; then
 else
     echo "  [CÀI LẠI] OrgInventory: merge config + restart — identity giữ nguyên."
 fi
-if [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
+if [[ "$SKIP_VELOCIRAPTOR" == "1" ]]; then
+    echo "  [BỎ QUA]  Velociraptor:  SKIP_VELOCIRAPTOR=1 — không cài."
+elif [[ $VR_INSTALLED -eq 1 && $FORCE_REINSTALL -eq 0 ]]; then
     echo "  [CÀI LẠI] Velociraptor:  chỉ update config + restart."
 else
     echo "  [CÀI MỚI] Velociraptor ($VR_ARCH):  package đã cài."

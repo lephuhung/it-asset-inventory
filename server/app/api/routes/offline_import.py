@@ -12,7 +12,6 @@ Hỗ trợ 2 định dạng:
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import uuid
@@ -26,8 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
-from app.core.client_ip import get_client_ip
 from app.core.audit import append_audit
+from app.core.client_ip import get_client_ip
 from app.db.models import Machine, MachineSpec, User
 from app.db.session import get_db
 from app.schemas import OfflineImportRequest, OfflineImportResponse
@@ -49,8 +48,11 @@ def _verify_signature(payload: dict, signature_b64: str, public_key_pem: str) ->
         pub = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
         if not isinstance(pub, ec.EllipticCurvePublicKey):
             return False
-        digest = hashlib.sha256(_canonical_json(payload)).digest()
-        pub.verify(base64.b64decode(signature_b64), digest, ec.ECDSA(hashes.SHA256()))
+        pub.verify(
+            base64.b64decode(signature_b64),
+            _canonical_json(payload),
+            ec.ECDSA(hashes.SHA256()),
+        )
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False

@@ -19,3 +19,9 @@ logs/
 # IDE
 .vs/
 .idea/
+
+# Build artifacts (MSI build tại chỗ — artifact chính thức lấy từ CI/release)
+installer/OrgInventoryAgent.msi
+installer/OrgInventoryAgent.msi.sha256
+installer/publish/
+installer/*.wixpdb
