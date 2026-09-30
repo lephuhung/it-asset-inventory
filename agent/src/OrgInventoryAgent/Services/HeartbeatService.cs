@@ -163,6 +163,17 @@ public sealed class HeartbeatService : BackgroundService
             if (!resp.Ok)
             {
                 _logger.LogWarning("Heartbeat thất bại HTTP {StatusCode}: {Detail}", (int)resp.Status, resp.Detail);
+                if ((int)resp.Status == 401 && IsIdentityRejected(resp.Detail))
+                {
+                    // Server từ chối identity (máy bị xóa/DB reset/đổi server) — tiếp tục
+                    // heartbeat chỉ lặp 401 vô hạn. Xoá enrollment để EnrollCoordinator
+                    // re-enroll bằng token trong bootstrap; không có token → chờ admin cấp.
+                    _logger.LogWarning("Server không nhận identity máy này — xoá enrollment để re-enroll.");
+                    _config.Enrolled = false;
+                    _config.ClientCertThumbprint = null;
+                    _config.ReenrollRequired = true;
+                    _config.Save();
+                }
                 return false;
             }
 
@@ -230,6 +241,17 @@ public sealed class HeartbeatService : BackgroundService
             return false;
         }
     }
+
+    /// <summary>
+    /// 401 do server TỪ CHỐI identity máy (đã qua cổng mTLS/proxy nhưng không còn
+    /// hợp lệ): "Máy không tồn tại" (xóa/DB reset) hoặc "CN không hợp lệ" (cert sai).
+    /// Không gồm 401 vận chuyển ("Thiếu chứng thực mTLS"/"Thiếu client cert CN") —
+    /// đó là lỗi proxy/nginx, unenroll không giúp và sẽ gây enroll spam.
+    /// </summary>
+    private static bool IsIdentityRejected(string? detail)
+        => detail is not null
+           && (detail.Contains("không tồn tại", StringComparison.OrdinalIgnoreCase)
+               || detail.Contains("CN không hợp lệ", StringComparison.OrdinalIgnoreCase));
 
     private static int? TryGetInt(System.Text.Json.Nodes.JsonNode? node)
     {

@@ -62,4 +62,23 @@ public class LinuxConfigTests
         Assert.Equal("https://agent.local", cfg.PrimaryEndpoint); // từ bootstrap
         Directory.Delete(dir, recursive: true);
     }
+
+    [Fact]
+    public void Load_EnrollTokenBeatsStaleAgentSerializedToken()
+    {
+        // Regression: reinstall trên máy đã cài agent — bootstrap còn sót field
+        // "token" do agent tự serialize (giá trị cũ). enroll_token do install
+        // script ghi (token mới) phải THẮNG — nếu không agent enroll bằng token
+        // cũ → server 401 lặp vô hạn.
+        var dir = Path.Combine(Path.GetTempPath(), "LinuxCfgStale_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        AppPaths.Initialize(dir);
+        var cfgPath = Path.Combine(dir, "config.json");
+        File.WriteAllText(cfgPath, """{"endpoints":["https://agent.local"],"token":"t_old","enroll_token":"t_new"}""");
+
+        var cfg = LinuxConfig.Load(cfgPath);
+
+        Assert.Equal("t_new", cfg.Token);
+        Directory.Delete(dir, recursive: true);
+    }
 }
