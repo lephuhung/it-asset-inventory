@@ -95,6 +95,21 @@ class Settings(BaseSettings):
     server_private_key_path: str = "./data/server_private_key.pem"
     server_public_key_path: str = "./data/server_public_key.pem"
 
+    # ── Dấu thời gian tin cậy cho báo cáo PDF (RFC 3161 / TSA) ──
+    # Nhúng Document Timestamp (DocTS) vào PDF khi export → chứng minh báo cáo
+    # tồn tại tại thời điểm TSA cấp dấu. Chỉ gửi SHA-256 của file lên TSA,
+    # không gửi nội dung báo cáo.
+    # - tsa_url: endpoint RFC 3161. Mặc định FreeTSA (dev).
+    #   Prod: trỏ về TSA của nhà cung cấp dịch vụ cấp dấu thời gian tin cậy
+    #   được cấp phép theo NĐ 23/2025/NĐ-CP (VNPT-CA, BKAV-CA, FPT-CA...)
+    #   hoặc TSA nội bộ nếu chỉ cần bằng chứng kỹ thuật.
+    # - tsa_username/password: để trống cho TSA public không xác thực.
+    report_timestamp_enabled: bool = True
+    tsa_url: str = "https://freetsa.org/tsr"
+    tsa_timeout_seconds: int = 20
+    tsa_username: str = ""
+    tsa_password: str = ""
+
     # Ký số: agent mode (chặn nếu không phải mTLS header hợp lệ)
     require_agent_mtls_header: bool = False  # True khi chạy sau nginx ở prod
 

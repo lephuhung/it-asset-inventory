@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir \
         "pyyaml>=6.0.0" \
         "docker>=7.0.0" \
         "python-multipart>=0.0.20" \
+        "pyhanko>=0.26" \
         # gRPC/VQL cho tích hợp Velociraptor DFIR (kết nối api_client.yaml / mTLS)
         "grpcio>=1.66.0" \
         "pyvelociraptor>=0.1.11" \

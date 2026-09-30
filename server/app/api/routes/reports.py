@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +20,16 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_current_user, visible_org_ids
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
+from app.core.config import settings
 from app.db.models import EnrollToken, Machine, MachineTag, User
 from app.db.session import get_db
 from app.services.report import build_machines_pdf, build_machines_workbook
+from app.services.timestamp import (
+    TimestampError,
+    read_pdf_timestamps,
+    sha256_hex,
+    timestamp_pdf,
+)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -142,8 +149,14 @@ async def export_machines_pdf(
     status_filter: str | None = Query(default=None, alias="status"),
     q: str | None = None,
     include_phone_full: bool = False,
+    timestamp: bool = Query(default=True),
 ):
-    """Báo cáo PDF theo biểu mẫu hành chính (WeasyPrint — Phase 4)."""
+    """Báo cáo PDF theo biểu mẫu hành chính (WeasyPrint — Phase 4).
+
+    `timestamp=true` (mặc định): nhúng dấu thời gian tin cậy RFC 3161 (DocTS)
+    từ TSA — chứng minh báo cáo tồn tại tại thời điểm cấp dấu. TSA lỗi → 502
+    (fail-closed: không xuất file thiếu dấu). `timestamp=false` để bỏ qua.
+    """
     if status_filter and status_filter not in _STATUS_FILTERS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Trạng thái không hợp lệ")
 
@@ -157,20 +170,69 @@ async def export_machines_pdf(
         generated_by=str(user.id),
     )
 
+    headers: dict[str, str] = {}
+    target = f"machines:{len(machines)}"
+    if timestamp and settings.report_timestamp_enabled:
+        try:
+            content = await asyncio.to_thread(timestamp_pdf, content)
+        except TimestampError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"Không cấp được dấu thời gian từ TSA — báo cáo không được xuất. {exc}",
+            ) from exc
+        doc_hash = sha256_hex(content)
+        gen_time = None
+        ts_infos = await read_pdf_timestamps(content)
+        if ts_infos:
+            gen_time = ts_infos[-1]["gen_time"]
+        headers["X-Report-SHA256"] = doc_hash
+        if gen_time:
+            headers["X-Report-Timestamp"] = gen_time
+        target = f"machines:{len(machines)};sha256:{doc_hash};ts:{gen_time or 'unknown'}"
+
     await append_audit(
         db,
         action="report.export_pdf",
         actor=str(user.id),
-        target=f"machines:{len(machines)}",
+        target=target,
         ip=get_client_ip(request),
     )
     await db.commit()
 
     filename = f"danh-sach-may-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}.pdf"
+    headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return StreamingResponse(
         io.BytesIO(content),
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
+        headers=headers,
     )
+
+
+@router.post("/verify")
+async def verify_report_pdf(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+):
+    """Kiểm tra dấu thời gian RFC 3161 nhúng trong PDF báo cáo.
+
+    Upload file PDF → trả về SHA-256, danh sách DocTS (gen_time, TSA, intact).
+    `intact=true` + gen_time = file tồn tại nguyên vẹn từ trước thời điểm đó.
+    """
+    data = await file.read()
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File không phải PDF")
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File quá lớn (>50MB)")
+
+    try:
+        ts_infos = await read_pdf_timestamps(data)
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail=f"Không đọc được chữ ký timestamp: {exc}"
+        ) from exc
+
+    return {
+        "sha256": sha256_hex(data),
+        "timestamped": len(ts_infos) > 0,
+        "timestamps": ts_infos,
+    }

@@ -200,6 +200,11 @@ export async function proxyRequest(
   if (respContentType) headers.set("content-type", respContentType);
   const disposition = res.headers.get("content-disposition");
   if (disposition) headers.set("content-disposition", disposition);
+  // Metadata dấu thời gian RFC 3161 của báo cáo PDF (server/app/services/timestamp.py)
+  for (const h of ["x-report-sha256", "x-report-timestamp"]) {
+    const v = res.headers.get(h);
+    if (v) headers.set(h, v);
+  }
   headers.set("cache-control", "no-store");
 
   const isBinary = (contentType ?? "").includes("octet-stream") || Boolean(disposition);

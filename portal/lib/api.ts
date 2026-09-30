@@ -82,18 +82,21 @@ export const api = {
   },
 };
 
-/** Tải file nhị phân (báo cáo Excel) qua proxy và bấm download. */
 export async function downloadFromApi(
   path: string,
   params?: Record<string, string | number | boolean | null | undefined>,
   method: "GET" | "POST" = "GET",
-): Promise<void> {
+): Promise<{ sha256?: string; timestamp?: string }> {
   const res = await fetch(`/api/proxy${path}${buildQuery(params)}`, {
     method,
     credentials: "same-origin",
     cache: "no-store",
   });
   if (!res.ok) throw await parseError(res);
+  const meta = {
+    sha256: res.headers.get("x-report-sha256") ?? undefined,
+    timestamp: res.headers.get("x-report-timestamp") ?? undefined,
+  };
   const blob = await res.blob();
   const disposition = res.headers.get("content-disposition");
   const match = disposition?.match(/filename="?([^";]+)"?/);
@@ -106,4 +109,5 @@ export async function downloadFromApi(
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return meta;
 }
