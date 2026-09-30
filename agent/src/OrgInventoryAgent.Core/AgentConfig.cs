@@ -61,6 +61,7 @@ public sealed class AgentConfig
                 var cfg = JsonSerializer.Deserialize<AgentConfig>(json, Json.Options)
                           ?? new AgentConfig();
                 cfg.Normalize();
+                OverlayRegistryBootstrap(cfg);
                 return cfg;
             }
         }
@@ -69,15 +70,24 @@ public sealed class AgentConfig
             Console.Error.WriteLine($"[config] Không đọc được {path}: {ex.Message} — dùng config mặc định.");
         }
         var fresh = new AgentConfig();
-        TryBootstrapFromRegistry(fresh);
+        OverlayRegistryBootstrap(fresh);
         return fresh;
     }
 
     /// <summary>
-    /// Bootstrap khi chưa có config.json (cài mới qua MSI): MSI ghi registry
-    /// HKLM\SOFTWARE\OrgInventory (Endpoints, EnrollToken, HttpProxy) → đọc vào config.
+    /// Overlay bootstrap do installer ghi vào HKLM\SOFTWARE\OrgInventory
+    /// (Endpoints, EnrollToken, HttpProxy) lên config — áp dụng MỌI lần load,
+    /// không chỉ khi chưa có config.json.
+    ///
+    /// Registry = intent MỚI NHẤT của lệnh cài (MSI/install script ghi lại mỗi
+    /// lần chạy). Nếu chỉ đọc khi config.json chưa tồn tại, giá trị stale trong
+    /// config.json (token cũ do agent tự serialize, endpoint cũ) sẽ THẮNG token/
+    /// endpoint mới → enroll 401 lặp khi cài lại — đúng bug "token" vs
+    /// "enroll_token" trên Linux. Override khi giá trị registry non-empty;
+    /// EnrollToken được xóa khỏi registry sau enroll thành công (AG-P2-01) nên
+    /// máy enrolled-healthy không bị ảnh hưởng.
     /// </summary>
-    private static void TryBootstrapFromRegistry(AgentConfig cfg)
+    private static void OverlayRegistryBootstrap(AgentConfig cfg)
     {
         if (!OperatingSystem.IsWindows()) return;
         try
@@ -87,11 +97,16 @@ public sealed class AgentConfig
             var endpoints = key.GetValue("Endpoints")?.ToString();
             if (!string.IsNullOrWhiteSpace(endpoints))
             {
+                cfg.Endpoints = Array.Empty<string>();
                 foreach (var e in endpoints.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries))
                     cfg.AddBackupEndpoint(e.Trim());
             }
-            cfg.Token ??= key.GetValue("EnrollToken")?.ToString();
-            cfg.HttpProxy ??= key.GetValue("HttpProxy")?.ToString();
+            var token = key.GetValue("EnrollToken")?.ToString();
+            if (!string.IsNullOrWhiteSpace(token))
+                cfg.Token = token;
+            var proxy = key.GetValue("HttpProxy")?.ToString();
+            if (!string.IsNullOrWhiteSpace(proxy))
+                cfg.HttpProxy = proxy;
             cfg.Normalize();
         }
         catch { }

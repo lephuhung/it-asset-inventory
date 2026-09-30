@@ -24,11 +24,12 @@
 
   CONTRACT CHUNG (Windows + Linux, giong install.sh):
     Update endpoint/config KHONG DUOC lam mat identity. Khi agent da cai:
-      - endpoints LUON duoc update.
-      - enrolled / machineId / clientCertThumbprint GIU NGUYEN (khong re-enroll,
-        khong dot token da dung -> tranh 401 loop).
-      - token chi duoc nap khi may CHUA enroll (hoac config dang ReenrollRequired
-        cho token moi). Chi -Reenroll moi rotate identity.
+      - endpoints LUON duoc update (xu ly ca truong hop doi IP/URL backend).
+      - enrolled / machineId / clientCertThumbprint GIU NGUYEN (khong re-enroll).
+      - token MOI LUON duoc nap vao config.json + registry bootstrap (ke ca khi
+        da enroll — intent moi nhat cua admin; chi bi tieu thu khi agent thuc su
+        enroll/re-enroll, phong truong hop heartbeat 401 -> re-enroll).
+      Chi -Reenroll moi rotate identity.
 
   Luong xu ly:
     [1] Kiem tra quyen Administrator
@@ -325,10 +326,10 @@ if (-not $SkipOrgInventory) {
 
     # === Case 2: Da cai (khong co ban moi hon) -> UPDATE endpoint/config, GIU identity ===
     # Contract chung (Windows + Linux): update endpoint KHONG duoc lam mat identity.
-    #   - endpoints: LUON update.
+    #   - endpoints: LUON update (config.json + registry bootstrap).
     #   - enrolled/machineId/clientCertThumbprint: GIU NGUYEN (khong re-enroll ngam dinh).
-    #   - token: chi nap khi may CHUA enroll hoac dang ReenrollRequired cho token moi.
-    #     Chi -Reenroll (explicit) moi rotate identity.
+    #   - token: LUON nap token moi (intent moi nhat cua admin; chi bi tieu thu khi
+    #     agent thuc su enroll/re-enroll). Chi -Reenroll (explicit) moi rotate identity.
     else {
         Write-Info "OrgInventory Agent da cai -> UPDATE config.json (GIU identity, KHONG go MSI)"
         $cfgPath = "$env:ProgramData\OrgInventory\config.json"
@@ -371,22 +372,29 @@ if (-not $SkipOrgInventory) {
             $cfgDict["clientCertThumbprint"] = $null
             $cfgDict["certStoreLocation"] = $null
             $cfgDict["reenrollRequired"] = $false
-        } elseif ($wasEnrolled) {
-            # Da enroll: giu identity, KHONG nap token (token cu da bi agent xoa sau
-            # enroll — AG-P2-01; nap token DA DUNG vao config se gay 401 loop im lặng).
-            if ($null -ne $cfgDict["token"]) { $cfgDict.Remove("token") }
-            Write-Ok "Da enroll — giu nguyen identity, chi update endpoints=$Endpoint (khong re-enroll)."
         } else {
-            # Chua enroll (cai lan truoc fail enroll, hoac ReenrollRequired cho token moi)
-            # → nap token de agent tu enroll; server fuzzy-match se ghép lai may cu.
+            # Token trong lenh cai nay luon la intent MOI NHAT cua admin → LUON nap
+            # (ke ca khi da enroll): token chi bi tieu thu khi agent thuc su enroll
+            # lai (heartbeat 401 mat identity / -Reenroll); da enroll thi no nam
+            # san trong config, khong gay 401. KHAC voi token CU da dung (da bi
+            # agent xoa sau enroll — AG-P2-01) la gia tri moi chua dung.
             $cfgDict["token"] = $Token
             if ($wasReenrollRequired) {
                 Write-Info "Config dang ReenrollRequired — da nap token moi de agent enroll lai."
+            } elseif ($wasEnrolled) {
+                Write-Ok "Da enroll — giu nguyen identity, update endpoints + nap token moi (khong re-enroll)."
             }
         }
 
         $cfgJson = $cfgDict | ConvertTo-Json -Depth 5
         $cfgJson | Set-Content -Path $cfgPath -Encoding UTF8 -Force
+
+        # Dong bo registry bootstrap (agent overlay len config moi lan load) —
+        # registry phai luon phan anh intent moi nhat cua lenh cai nay, neu khong
+        # gia tri MSI cu se ghi de token/endpoints vua ghi vao config.json.
+        New-Item -Path "HKLM:\SOFTWARE\OrgInventory" -Force | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "EnrollToken" -Value $Token
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "Endpoints" -Value $Endpoint
         Write-Ok "Config da update: endpoints=$Endpoint (identity: $(if ($wasEnrolled -and -not $Reenroll) { 'giu nguyen' } elseif ($Reenroll) { 'da rotate (-Reenroll)' } else { 'cho enroll moi' }))."
 
         # Restart service de agent doc config moi

@@ -42,8 +42,10 @@ Write-Host ''
 Write-Host 'Nếu bạn không đồng ý với việc thu thập dữ liệu, hãy đóng cửa sổ này.' -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 
-# 2b. Máy đã cài agent? → chỉ tiếp tục khi server có phiên bản mới hơn (nâng cấp
-#     qua MajorUpgrade giữ nguyên enrollment); ngược lại thoát 0, không đốt token.
+# 2b. Máy đã cài agent? → chỉ chạy MSI khi server có phiên bản mới hơn (nâng cấp
+#     qua MajorUpgrade giữ nguyên enrollment). Cùng phiên bản → MERGE config mới
+#     (token + endpoints = intent mới nhất của lệnh cài này) + restart service —
+#     KHÔNG thoát sớm: config LUÔN được nạp lại mỗi lần chạy lệnh cài.
 $productCode = $null
 $installedVersion = $null
 foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -68,8 +70,33 @@ if ($productCode) {
         try { $needsUpgrade = ([version]$serverVersion -gt [version]$installedVersion) } catch { $needsUpgrade = $false }
     }
     if (-not $needsUpgrade) {
-        Write-Host "Agent đã cài$(if ($installedVersion) { " (v$installedVersion)" }) và không có phiên bản mới hơn — không cần cài lại." -ForegroundColor Green
-        Write-Host '  Update endpoint/config: dùng lệnh cài chính (install-both). Re-enroll: -Reenroll.' -ForegroundColor Gray
+        Write-Host "Agent đã cài$(if ($installedVersion) { " (v$installedVersion)" }) và không có phiên bản mới hơn — MERGE config mới (giữ identity)." -ForegroundColor Green
+
+        # Contract chung (giống install.sh Linux / install-both.ps1):
+        #   - token mới LUÔN nạp (config.json + registry) — intent mới nhất của
+        #     admin; chỉ bị tiêu thụ khi agent thực sự enroll/re-enroll.
+        #   - endpoints LUÔN update (xử lý cả trường hợp đổi IP/URL backend).
+        #   - identity (enrolled/machineId/clientCertThumbprint) GIỮ NGUYÊN.
+        $cfgPath = "$env:ProgramData\OrgInventory\config.json"
+        $cfgObj = $null
+        if (Test-Path $cfgPath) { try { $cfgObj = Get-Content $cfgPath -Raw | ConvertFrom-Json } catch { } }
+        $cfgDict = [ordered]@{}
+        if ($cfgObj) { foreach ($p in $cfgObj.PSObject.Properties) { $cfgDict[$p.Name] = $p.Value } }
+        $cfgDict["endpoints"] = @($agentServerUrl)
+        $cfgDict["token"] = $token
+        $cfgDir = Split-Path $cfgPath
+        if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null }
+        $cfgDict | ConvertTo-Json -Depth 5 | Set-Content -Path $cfgPath -Encoding UTF8 -Force
+
+        # Registry bootstrap — agent overlay giá trị này lên config mỗi lần load,
+        # nên phải luôn phản ánh intent mới nhất của lệnh cài.
+        New-Item -Path "HKLM:\SOFTWARE\OrgInventory" -Force | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "EnrollToken" -Value $token
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "Endpoints" -Value $agentServerUrl
+        Write-Host "  Đã nạp token + endpoints mới (identity giữ nguyên — không re-enroll)." -ForegroundColor Gray
+
+        Restart-Service -Name "OrgInventoryAgent" -Force -ErrorAction SilentlyContinue
+        Write-Host "  Re-enroll (rotate identity): chạy install-both.ps1 với -Reenroll." -ForegroundColor Gray
         exit 0
     }
     Write-Host "Đang nâng cấp: v$installedVersion -> v$serverVersion (giữ nguyên enrollment) ..." -ForegroundColor Cyan
