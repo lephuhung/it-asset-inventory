@@ -367,37 +367,39 @@ export function DfirLlmTab() {
                 </Field>
               </div>
 
-              {/* Model chính — nút Tải model đặt DƯỚI input (icon + label nowrap) */}
+              {/* Model chính — nút Tải model đặt CÙNG HÀNG với input */}
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <Field label="Model chính">
-                  <Input
-                    list="llm-models"
-                    value={model}
-                    onChange={(e) => {
-                      setModel(e.target.value);
-                      setModelTouched(true);
-                    }}
-                    placeholder="qwen2.5:14b-instruct-q4_K_M"
-                  />
+                  <div className="flex items-center gap-2">
+                    <Input
+                      list="llm-models"
+                      value={model}
+                      onChange={(e) => {
+                        setModel(e.target.value);
+                        setModelTouched(true);
+                      }}
+                      placeholder="qwen2.5:14b-instruct-q4_K_M"
+                    />
+                    <button
+                      type="button"
+                      onClick={loadModels}
+                      disabled={loadingModels}
+                      title="Nạp model từ cấu hình LLM đã lưu"
+                      className="inline-flex h-9.5 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 transition-all duration-150 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loadingModels ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="size-3.5" />
+                      )}
+                      Tải model từ backend
+                    </button>
+                  </div>
                   <datalist id="llm-models">
                     {availableModels.map((m) => (
                       <option key={m} value={m} />
                     ))}
                   </datalist>
-                  <button
-                    type="button"
-                    onClick={loadModels}
-                    disabled={loadingModels}
-                    title="Nạp model từ cấu hình LLM đã lưu"
-                    className="mt-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-white px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-300 transition-all duration-150 hover:bg-slate-50 active:bg-slate-100 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {loadingModels ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="size-3.5" />
-                    )}
-                    Tải model từ backend
-                  </button>
                 </Field>
                 <Field label="Model dự phòng" hint="Tùy chọn. Dùng khi model chính lỗi.">
                   <Input

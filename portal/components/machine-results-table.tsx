@@ -37,7 +37,7 @@ export interface MachineResultsTableProps {
 
 const OSLogo = ({
   platform,
-  className = "size-3.5",
+  className = "size-4.5",
 }: {
   platform: string | null | undefined;
   className?: string;

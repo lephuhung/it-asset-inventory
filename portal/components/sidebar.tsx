@@ -217,6 +217,12 @@ const NAV_BADGES: Record<string, (s: MachineStats) => number> = {
   "/ghost-machines": (s) => s.by_status.lost ?? 0,
 };
 
+/** pathname trùng href hoặc nằm dưới nhánh href (match theo ranh giới segment,
+    tránh /machines khớp nhầm /machines-xyz). */
+function matchesPath(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(href + "/");
+}
+
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   const { user } = useAuth();
@@ -300,6 +306,25 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
       }),
   })).filter((g) => g.items.length > 0);
 
+  /* Menu active: prefix dài nhất thắng — khi 2 menu chồng path (VD /system-profiles
+     và /system-profiles/config) thì chỉ menu cụ thể hơn được sáng, không sáng cả hai. */
+  const bestHref = useMemo(() => {
+    let best: string | null = null;
+    for (const g of visibleGroups) {
+      for (const it of g.items) {
+        if (matchesPath(pathname, it.href) && (best === null || it.href.length > best.length)) {
+          best = it.href;
+        }
+        for (const c of it.children ?? []) {
+          if (matchesPath(pathname, c.href) && (best === null || c.href.length > best.length)) {
+            best = c.href;
+          }
+        }
+      }
+    }
+    return best;
+  }, [visibleGroups, pathname]);
+
   const containerClass = open
     ? "fixed inset-y-0 left-0 z-40 flex w-[260px] -translate-x-0"
     : "hidden lg:flex lg:w-[260px] lg:shrink-0";
@@ -331,9 +356,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
               </p>
               <ul className="space-y-0.5">
                 {group.items.map((item) => {
-                  const active = item.exact
-                    ? pathname === item.href
-                    : pathname.startsWith(item.href);
+                  const active =
+                    matchesPath(pathname, item.href) && item.href === bestHref;
                   const Icon = item.icon;
                   const count = stats ? NAV_BADGES[item.href]?.(stats) : undefined;
                   const hasChildren = !!item.children?.length;
@@ -394,9 +418,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
                       {hasChildren && isOpen && (
                         <ul className="mt-0.5 space-y-0.5 border-l-2 border-slate-200 pl-3 ml-3">
                           {item.children!.map((child) => {
-                            const childActive = child.exact
-                              ? pathname === child.href
-                              : pathname.startsWith(child.href);
+                            const childActive =
+                              matchesPath(pathname, child.href) && child.href === bestHref;
                             const ChildIcon = child.icon;
                             return (
                               <li key={child.href}>

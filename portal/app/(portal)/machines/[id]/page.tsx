@@ -161,10 +161,16 @@ function CompactPortList({ ports }: { ports: Array<Record<string, unknown>> }) {
   );
 }
 
-/** Khởi động cùng Windows — 1 dòng/item (name · location · command-truncated),
- *  gom theo location để dễ quét (HKLM\Run, HKCU\Run, Startup folder…).
+/** Khởi động cùng hệ điều hành — 1 dòng/item (name · location · command-truncated),
+ *  gom theo location để dễ quét (HKLM\Run, Startup folder, systemd units…).
  *  Bung/thu khi > 5 chương trình. */
-function CompactStartupList({ programs }: { programs: Array<Record<string, unknown>> }) {
+function CompactStartupList({
+  programs,
+  platform,
+}: {
+  programs: Array<Record<string, unknown>>;
+  platform?: string | null;
+}) {
   const [expanded, setExpanded] = useState(false);
   const PREVIEW = 5;
   const sorted = useMemo(
@@ -177,13 +183,27 @@ function CompactStartupList({ programs }: { programs: Array<Record<string, unkno
       }),
     [programs],
   );
+  // Linux: unit systemd (.service) — không phải "chương trình Windows"
+  const looksSystemd = sorted.some(
+    (p) =>
+      /systemd/i.test(String(p.location ?? "")) ||
+      /\.service$/.test(String(p.name ?? "").trim()),
+  );
+  const isWindows =
+    (platform ?? "").toLowerCase().startsWith("win") ||
+    (!platform && !looksSystemd);
+  const startupLabel = isWindows
+    ? "Khởi động cùng Windows"
+    : looksSystemd
+      ? "Dịch vụ khởi động cùng hệ thống (systemd)"
+      : "Khởi động cùng hệ điều hành";
   const visible = expanded ? sorted : sorted.slice(0, PREVIEW);
   const remaining = sorted.length - PREVIEW;
 
   return (
     <div className="py-2 text-sm">
       <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-slate-500">Khởi động cùng Windows ({sorted.length})</span>
+        <span className="text-slate-500">{startupLabel} ({sorted.length})</span>
         {remaining > 0 && (
           <button
             type="button"
@@ -967,6 +987,7 @@ export default function MachineDetailPage() {
               {(security?.startup_programs ?? []).length > 0 && (
                 <CompactStartupList
                   programs={(security?.startup_programs ?? []) as Array<Record<string, unknown>>}
+                  platform={machine.platform}
                 />
               )}
               {(security?.smarts ?? []).length > 0 && (
