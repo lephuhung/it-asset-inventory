@@ -506,22 +506,16 @@ if (-not $SkipVelociraptor) {
             $vrZip = $null
         }
         if ($vrZip -and (Test-Path $vrZip)) {
-            # Extract client.config.yaml từ ZIP
-            $shell = New-Object -ComObject Shell.Application
-            $zipNs = $shell.NameSpace((Resolve-Path $vrZip).Path)
-            $cfgItem = $zipNs.Items() | Where-Object { $_.Name -eq "client.config.yaml" }
-            if ($cfgItem) {
-                $extractDir = Join-Path $TmpDir "extracted"
-                New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
-                $zipNs.CopyHere($cfgItem, 0x14)  # 0x14 = silent + overwrite
-                $extractedCfg = Join-Path $extractDir "client.config.yaml"
-                if (Test-Path $extractedCfg) {
-                    Copy-Item -Path $extractedCfg -Destination $cfgDst -Force
-                    Write-Ok "Config (tu ZIP) da ghi de: $cfgDst"
-                } else {
-                    Write-Fail "Khong extract duoc client.config.yaml tu ZIP"
-                    exit 1
-                }
+            # Extract client.config.yaml từ ZIP — tìm đệ quy vì ZIP có thể
+            # chứa file ở root hoặc trong thư mục con (tùy cách build).
+            $extractDir = Join-Path $TmpDir "extracted"
+            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+            Expand-Archive -Path $vrZip -DestinationPath $extractDir -Force
+            $extractedCfg = Get-ChildItem -Path $extractDir -Recurse -Filter "client.config.yaml" |
+                Select-Object -First 1 -ExpandProperty FullName
+            if ($extractedCfg) {
+                Copy-Item -Path $extractedCfg -Destination $cfgDst -Force
+                Write-Ok "Config (tu ZIP) da ghi de: $cfgDst"
             } else {
                 Write-Fail "ZIP khong chua client.config.yaml"
                 exit 1
