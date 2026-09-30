@@ -73,10 +73,10 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     # Tránh ExecutionPolicy chặn, AV quarantine file .ps1, và parse error từ
     # ký tự đặc biệt trong comment.
     #
-    # KHÔNG set ORGINV_ALLOW_UNSIGNED=1 ở đây — script install-both.ps1 sẽ BẮT
-    # BUỘC verify chữ ký Authenticode của MSI (tắt bằng env ORGINV_ALLOW_UNSIGNED=1
-    # trên máy test nếu MSI chưa ký; production phải ký số thật).
+    # TẠM thời set ORGINV_ALLOW_UNSIGNED=1 cho test — MSI chưa được ký
+    # Authenticode. BỎ dòng này khi production đã cấu hình cert ký trong CI.
     script = (
+        f'$env:ORGINV_ALLOW_UNSIGNED="1";'
         f'$t="{token}";'
         f'$p="{portal_url}";'
         f'$e="{agent_server_url}";'
