@@ -10,13 +10,18 @@
 #   Update endpoint/config KHÔNG BAO GIỜ làm mất identity (enrolled/machineId/
 #   clientCertThumbprint — nguồn chân lý là state config /var/lib/orginventory/
 #   config.json mà agent tự ghi sau khi enroll). Chỉ REENROLL explicit mới xoá
-#   identity + nạp token để agent enroll lại (rotate identity).
+#   identity để agent enroll lại (rotate identity).
+#   Token MỚI (enroll_token) và endpoints LUÔN được nạp lại vào bootstrap mỗi
+#   lần cài — kể cả khi máy đã enrolled — vì đây là intent mới nhất của admin
+#   (token dùng 1 lần; enroll_token thắng field "token" stale do agent tự
+#   serialize; cũng xử lý trường hợp đổi IP/URL backend).
 #
 # 3 TÌNH HUỐNG:
 #   [CÀI MỚI]   Máy chưa cài agent → tải binary/package + user + systemd +
 #               config + start. Nếu 1 trong 2 agent fail → KHÔNG được tính là xong.
-#   [CÀI LẠI]   Máy đã cài → CHỈ merge config (giữ identity — tránh re-enroll
-#               401) + restart. Binary KHÔNG đổi, TRỪ khi manifest của server
+#   [CÀI LẠI]   Máy đã cài → merge config (giữ identity — tránh re-enroll
+#               401) + nạp enroll_token/endpoints mới vào bootstrap + restart.
+#               Binary KHÔNG đổi, TRỪ khi manifest của server
 #               (/download/agent-version) có phiên bản mới hơn → tự nâng cấp
 #               binary, identity vẫn giữ nguyên.
 #   [REENROLL]  REENROLL=1 / --reenroll → xoá identity trong state config +
@@ -142,12 +147,16 @@ log_step "Phát hiện: ${ID:-?} ${VERSION_ID:-?} ($ARCH, VR=$VR_ARCH) — OrgIn
 
 # ── Merge config: giữ identity (enrolled/machineId/thumbprint) ────────────
 # Contract:
-#   - endpoints: LUÔN update.
-#   - REENROLL=1: xoá identity trong STATE config + nạp token (agent enroll lại).
-#   - đã enroll (state.enrolled=true): KHÔNG nạp token vào bootstrap — token
-#     cũ/thừa trong config sẽ gây 401 loop nếu agent rơi vào re-enroll (AG-P2-01:
-#     agent xoá token khỏi config ngay sau enroll thành công, bootstrap phải sạch).
-#   - chưa enroll: nạp token để agent enroll.
+#   - endpoints: LUÔN update (xử lý cả trường hợp đổi IP/URL backend).
+#   - token mới: LUÔN nạp vào bootstrap enroll_token (kể cả khi state
+#     .enrolled=true) — đây là intent mới nhất của admin; agent ưu tiên nó hơn
+#     field "token" stale. Nếu agent mất cert hoặc server quên máy (heartbeat
+#     401), re-enroll dùng đúng token vừa được cấp. Token chỉ được tiêu thụ
+#     khi agent thực sự enroll lại.
+#   - đồng thời dọn các key do agent tự serialize ("token"/"enrollToken") —
+#     giá trị cũ còn sót sẽ THẮNG enroll_token mới → agent enroll bằng token
+#     cũ → server 401.
+#   - REENROLL=1: xoá identity trong STATE config → agent enroll lại.
 merge_oi_config() {
     local cfg="$BOOT_CFG"
     mkdir -p /etc/orginventory
@@ -170,7 +179,6 @@ def read_json(path):
 
 data = read_json(cfg_path)
 state = read_json(state_path)
-enrolled = bool(state.get("enrolled"))
 
 data["endpoints"] = [endpoint] if endpoint else data.get("endpoints", [])
 
@@ -182,32 +190,32 @@ if reenroll:
         state.pop(k, None)
     with open(state_path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
-    if token:
-        data["enroll_token"] = token
-elif enrolled:
-    # Đã enroll: GIỮ identity, KHÔNG nạp token.
-    data.pop("enroll_token", None)
-else:
-    if token:
-        data["enroll_token"] = token
+
+# Token do script mang theo luôn là intent MỚI NHẤT của admin:
+#   - máy chưa enroll → agent enroll bằng token này;
+#   - máy đã enroll → identity vẫn giữ, nhưng token sẵn sàng nếu agent phải
+#     re-enroll (mất cert, server quên máy → heartbeat 401).
+# Đồng thời xoá các key agent-serialized cũ ("token"/"enrollToken") — nếu để
+# lại, giá trị cũ thắng "enroll_token" mới khi agent load config → 401 lặp.
+if token:
+    data["enroll_token"] = token
+    for stale in ("token", "enrollToken"):
+        data.pop(stale, None)
 
 with open(cfg_path, "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)
 PYEOF
     elif [[ -f "$cfg" ]] && command -v jq >/dev/null 2>&1; then
         # Fallback jq — cùng contract, khi máy không có python3
-        if [[ "$REENROLL" == "1" ]]; then
-            if [[ -f "$STATE_CFG" ]]; then
-                jq 'del(.enrolled, .machineId, .clientCertThumbprint, .certStoreLocation, .reenrollRequired, .renewAfter, .lastEnrolledAt)' \
-                    "$STATE_CFG" > "$STATE_CFG.tmp" && mv "$STATE_CFG.tmp" "$STATE_CFG"
-            fi
-            [[ -n "$TOKEN" ]] && jq --arg t "$TOKEN" '.enroll_token = $t' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
-        elif grep -Eq '"enrolled"[[:space:]]*:[[:space:]]*true' "$STATE_CFG" 2>/dev/null; then
-            jq 'del(.enroll_token)' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
-        elif [[ -n "$TOKEN" ]]; then
-            jq --arg t "$TOKEN" '.enroll_token = $t' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+        if [[ "$REENROLL" == "1" ]] && [[ -f "$STATE_CFG" ]]; then
+            jq 'del(.enrolled, .machineId, .clientCertThumbprint, .certStoreLocation, .reenrollRequired, .renewAfter, .lastEnrolledAt)' \
+                "$STATE_CFG" > "$STATE_CFG.tmp" && mv "$STATE_CFG.tmp" "$STATE_CFG"
         fi
-        jq --arg e "$AGENT_SERVER_URL" '.endpoints = [$e]' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+        # Token mới luôn được nạp + dọn key agent-serialized cũ (xem python branch).
+        if [[ -n "$TOKEN" ]]; then
+            jq --arg t "$TOKEN" 'del(.token, .enrollToken) | .enroll_token = $t' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+        fi
+        [[ -n "$AGENT_SERVER_URL" ]] && jq --arg e "$AGENT_SERVER_URL" '.endpoints = [$e]' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
     elif [[ -f "$cfg" && "$REENROLL" == "1" ]]; then
         log_fail "REENROLL cần python3 hoặc jq để sửa state config an toàn. Cài python3/jq rồi chạy lại."
         exit 1

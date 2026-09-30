@@ -38,14 +38,21 @@ public static class LinuxConfig
             catch { /* bootstrap-only nếu state hỏng */ }
         }
 
-        // Compat: install script ghi key cũ "enroll_token" (snake_case).
-        if (string.IsNullOrEmpty(cfg.Token) && File.Exists(resolved))
+        // Install script ghi "enroll_token" (snake_case) — đây là intent MỚI NHẤT
+        // của admin (token vừa sinh), nên nó THẮNG cả field "token" do agent tự
+        // serialize trước đây (có thể là giá trị cũ/stale → gây enroll 401 lặp).
+        // Chỉ bỏ qua khi enroll_token trống.
+        if (File.Exists(resolved))
         {
             try
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(resolved));
                 if (doc.RootElement.TryGetProperty("enroll_token", out var t) && t.ValueKind == JsonValueKind.String)
-                    cfg.Token = t.GetString();
+                {
+                    var scriptToken = t.GetString();
+                    if (!string.IsNullOrEmpty(scriptToken))
+                        cfg.Token = scriptToken;
+                }
             }
             catch { }
         }
