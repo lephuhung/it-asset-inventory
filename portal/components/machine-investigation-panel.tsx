@@ -5,24 +5,26 @@ import { useRouter } from "next/navigation";
 import {
   AlertOctagon,
   Brain,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   ExternalLink,
   Filter,
   History,
-  Info,
-  Loader2,
-  RefreshCcw,
   RefreshCw,
-  Search,
   ShieldAlert,
   Sparkles,
   X,
   XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { timeAgo } from "@/lib/format";
+import {
+  INVESTIGATION_SEVERITY_FALLBACK as SEVERITY_FALLBACK,
+  INVESTIGATION_SEVERITY_META as SEVERITY_STYLES,
+  INVESTIGATION_STATUS_FALLBACK as STATUS_FALLBACK,
+  INVESTIGATION_STATUS_META as STATUS_STYLES,
+} from "@/lib/investigation-meta";
 import {
   Badge,
   Button,
@@ -39,95 +41,9 @@ import type {
 } from "@/lib/types";
 import { InvestigationMarkdown } from "@/components/investigation-markdown";
 
-/* ── Pill tinted theo Design.md — màu đã remap trong globals.css
-   (đồng bộ với trang /admin/llm-dfir/investigations). Các style ở
-   đây được dùng cho cả badge trong panel + modal chi tiết. ──  */
-const STATUS_STYLES: Record<
-  InvestigationStatus,
-  { label: string; badge: string; icon: any; ring: string; tint: string }
-> = {
-  pending: {
-    label: "Chờ FIFO",
-    badge: "bg-slate-100 text-slate-700 ring-slate-600/20",
-    icon: Clock,
-    ring: "ring-slate-300",
-    tint: "bg-slate-50",
-  },
-  running: {
-    label: "Khởi động",
-    badge: "bg-blue-100 text-blue-700 ring-blue-600/20",
-    icon: Loader2,
-    ring: "ring-blue-300",
-    tint: "bg-blue-50",
-  },
-  collecting: {
-    label: "Thu thập",
-    badge: "bg-sky-50 text-sky-700 ring-sky-600/20",
-    icon: RefreshCcw,
-    ring: "ring-sky-300",
-    tint: "bg-sky-50",
-  },
-  analyzing: {
-    label: "Phân tích",
-    badge: "bg-violet-100 text-violet-700 ring-violet-600/20",
-    icon: Brain,
-    ring: "ring-violet-300",
-    tint: "bg-violet-50",
-  },
-  completed: {
-    label: "Hoàn thành",
-    badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20",
-    icon: CheckCircle2,
-    ring: "ring-emerald-300",
-    tint: "bg-emerald-50",
-  },
-  failed: {
-    label: "Lỗi",
-    badge: "bg-rose-100 text-rose-700 ring-rose-600/20",
-    icon: XCircle,
-    ring: "ring-rose-300",
-    tint: "bg-rose-50",
-  },
-};
-
-const SEVERITY_STYLES: Record<
-  InvestigationSeverity,
-  { label: string; badge: string; icon: any; /** Vạch trái row + glow ring khi selected */ accent: string }
-> = {
-  critical: {
-    label: "Critical",
-    badge: "bg-rose-100 text-rose-700 ring-rose-600/20",
-    icon: AlertOctagon,
-    accent: "bg-rose-500",
-  },
-  high: {
-    label: "High",
-    badge: "bg-amber-100 text-amber-700 ring-amber-600/20",
-    icon: ShieldAlert,
-    accent: "bg-amber-500",
-  },
-  medium: {
-    label: "Medium",
-    badge: "bg-amber-50 text-amber-800 ring-amber-600/20",
-    icon: ShieldAlert,
-    accent: "bg-amber-400",
-  },
-  low: {
-    label: "Low",
-    badge: "bg-blue-100 text-blue-700 ring-blue-600/20",
-    icon: Search,
-    accent: "bg-blue-500",
-  },
-  info: {
-    label: "Info",
-    badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20",
-    icon: CheckCircle2,
-    accent: "bg-emerald-500",
-  },
-};
-
-const STATUS_FALLBACK = STATUS_STYLES.pending;
-const SEVERITY_FALLBACK = SEVERITY_STYLES.info;
+/* ── Pill tinted theo Design.md — màu đã remap trong globals.css.
+   STATUS_STYLES / SEVERITY_STYLES dùng bản chuẩn trong lib/investigation-meta
+   (đồng bộ panel + các trang /llm-dfir/*), import alias phía trên. ── */
 
 /** Các trạng thái "còn đang xử lý" — dùng để quyết định animation + ring glow. */
 const ACTIVE_STATUSES: InvestigationStatus[] = ["pending", "running", "collecting", "analyzing"];
@@ -238,9 +154,11 @@ export function MachineInvestigationPanel({ machineId, machineHostname, open, on
         aria-hidden={!open}
       />
 
-      {/* Panel trượt từ phải ra/vào — surface trắng + hairline + shadow Level-2 */}
+      {/* Panel trượt từ phải ra/vào — surface trắng + hairline + shadow Level-2.
+          inert khi đóng: nút/input trong panel không nhận tab-focus dù vẫn mount. */}
       <aside
         aria-hidden={!open}
+        inert={!open}
         aria-label="Lịch sử điều tra AI"
         className={`fixed inset-y-0 right-0 z-50 flex w-full max-w-lg transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
           open ? "translate-x-0" : "pointer-events-none translate-x-full"
@@ -703,20 +621,6 @@ function Pagination({
 }
 
 /* ── Helpers ──────────────────────────────────────────────── */
-
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s trước`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}ph trước`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}giờ trước`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}ngày trước`;
-  // Quá 1 tuần thì hiển thị ngày cụ thể
-  return new Date(iso).toLocaleDateString("vi-VN");
-}
 
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);

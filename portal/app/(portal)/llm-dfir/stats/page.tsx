@@ -9,9 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  ExternalLink,
   Filter,
-  ListTree,
   Loader2,
   RefreshCw,
   Search,
@@ -23,6 +21,10 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  INVESTIGATION_SEVERITY_META as SEVERITY_STYLES,
+  INVESTIGATION_STATUS_META as STATUS_STYLES,
+} from "@/lib/investigation-meta";
 import {
   Badge,
   Button,
@@ -43,25 +45,11 @@ import {
   InvestigationSeverity,
   InvestigationStatus,
 } from "@/lib/types";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, timeAgo } from "@/lib/format";
 
-/* Pill tinted + fill + màu biểu đồ theo Design.md — màu remap trong globals.css */
-const STATUS_STYLES: Record<InvestigationStatus, { label: string; chip: string; fill: string; icon: React.ElementType }> = {
-  pending:    { label: "Chờ",          chip: "bg-slate-100 text-slate-700 ring-slate-600/20", fill: "bg-slate-400",    icon: Clock },
-  running:    { label: "Khởi động",   chip: "bg-blue-100 text-blue-700 ring-blue-600/20",  fill: "bg-blue-500",    icon: Loader2 },
-  collecting: { label: "Thu thập",     chip: "bg-sky-50 text-sky-700 ring-sky-600/20",    fill: "bg-sky-600",     icon: RefreshCw },
-  analyzing:  { label: "Phân tích",    chip: "bg-violet-100 text-violet-700 ring-violet-600/20", fill: "bg-violet-600", icon: Brain },
-  completed:  { label: "Hoàn thành",  chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500", icon: Activity },
-  failed:     { label: "Lỗi",         chip: "bg-rose-100 text-rose-700 ring-rose-600/20", fill: "bg-rose-500",    icon: XCircle },
-};
-
-const SEVERITY_STYLES: Record<InvestigationSeverity, { label: string; chip: string; fill: string; icon: React.ElementType }> = {
-  critical: { label: "Critical", chip: "bg-rose-100 text-rose-700 ring-rose-600/20",    fill: "bg-rose-500",    icon: AlertOctagon },
-  high:     { label: "High",     chip: "bg-amber-100 text-amber-700 ring-amber-600/20", fill: "bg-amber-500",   icon: ShieldAlert },
-  medium:   { label: "Medium",   chip: "bg-amber-50 text-amber-800 ring-amber-600/20", fill: "bg-amber-400",   icon: ShieldAlert },
-  low:      { label: "Low",      chip: "bg-blue-100 text-blue-700 ring-blue-600/20",    fill: "bg-blue-500",    icon: Search },
-  info:     { label: "Info",     chip: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", fill: "bg-emerald-500", icon: Activity },
-};
+/* Pill tinted + fill + màu biểu đồ theo Design.md — màu remap trong globals.css.
+   STATUS_STYLES / SEVERITY_STYLES dùng bản chuẩn lib/investigation-meta
+   (field `chip` đã đổi tên thành `badge` — cập nhật chỗ dùng). */
 
 const STATUS_FALLBACK = STATUS_STYLES.pending;
 const SEVERITY_FALLBACK = SEVERITY_STYLES.info;
@@ -109,6 +97,8 @@ export default function StatsPage() {
   const [stopping, setStopping] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Lỗi action (dừng/xoá) hiển thị bằng banner thay vì alert() native
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const loadStats = useCallback(async () => {
     try {
@@ -174,13 +164,14 @@ export default function StatsPage() {
   const handleStop = async () => {
     if (!confirmStop) return;
     setStopping(true);
+    setActionError(null);
     try {
       await api.post(`/admin/llm-dfir/investigations/${confirmStop}/stop`);
       setConfirmStop(null);
       void loadList();
       void loadStats();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Dừng thất bại");
+      setActionError(e instanceof Error ? e.message : "Dừng thất bại");
     } finally {
       setStopping(false);
     }
@@ -189,13 +180,14 @@ export default function StatsPage() {
   const handleDelete = async () => {
     if (!confirmDelete) return;
     setDeleting(true);
+    setActionError(null);
     try {
       await api.delete(`/admin/llm-dfir/investigations/${confirmDelete}`);
       setConfirmDelete(null);
       void loadList();
       void loadStats();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Xoá thất bại");
+      setActionError(e instanceof Error ? e.message : "Xoá thất bại");
     } finally {
       setDeleting(false);
     }
@@ -566,6 +558,8 @@ export default function StatsPage() {
         )}
       </div>
 
+      {actionError && <ErrorBanner message={actionError} />}
+
       {/* Stop confirm */}
       <ConfirmDialog
         open={!!confirmStop}
@@ -653,12 +647,12 @@ function InvestigationCard({
 
         {/* Badges row */}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <Badge className={statusStyle.chip}>
+          <Badge className={statusStyle.badge}>
             <StatusIcon className={`size-3 ${isActive ? "animate-spin" : ""}`} />
             {statusStyle.label}
           </Badge>
           {sevStyle && SevIcon && (
-            <Badge className={sevStyle.chip}>
+            <Badge className={sevStyle.badge}>
               <SevIcon className="size-3" />
               {sevStyle.label}
             </Badge>
@@ -1000,15 +994,3 @@ function DailyLineChart({ points }: { points: { date: string; total: number; cri
   );
 }
 
-/* ── Utility ── */
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s trước`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}ph trước`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}giờ trước`;
-  const d = Math.floor(h / 24);
-  return `${d}ngày trước`;
-}

@@ -250,6 +250,7 @@ export function VeloLogDrawer({
       />
       <aside
         aria-hidden={!open}
+        inert={!open}
         aria-label="Log Velociraptor"
         className={`fixed inset-y-0 right-0 z-50 flex w-full transform flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform duration-300 ease-in-out motion-reduce:transition-none lg:w-1/2 ${open ? "translate-x-0" : "pointer-events-none translate-x-full"
           }`}

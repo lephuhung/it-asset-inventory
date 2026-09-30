@@ -23,14 +23,26 @@ interface RealtimeEventsValue {
   lastEvent: MachineEvent | null;
 }
 
+/** Listener emitter: nhận MỌI loại message WS (kể cả `notification:new`). */
+export type RealtimeListener = (data: unknown) => void;
+
+export interface RealtimeEmitterValue {
+  on: (type: string, fn: RealtimeListener) => void;
+  off: (type: string, fn: RealtimeListener) => void;
+}
+
 /**
- * Tách context thành status (connected) và events (events/lastEvent) để:
+ * Tách context thành status (connected) / events (machine_event) / emitter
+ * (mọi loại message) để:
  *   - Layout chỉ rerender khi `connected` đổi, không rerender theo từng event.
  *   - Pages chỉ subscribe channel mà chúng thực sự dùng.
+ *   - Components cần loại message khác (vd notification:new) đăng ký qua
+ *     emitter mà không thêm state vào provider này.
  * `useRealtime` (ghép hai hook) được giữ để không phá call site chưa migrate.
  */
 const RealtimeStatusContext = createContext<RealtimeStatusValue | null>(null);
 const RealtimeEventsContext = createContext<RealtimeEventsValue | null>(null);
+const RealtimeEmitterContext = createContext<RealtimeEmitterValue | null>(null);
 
 const MAX_EVENTS = 50;
 
@@ -93,16 +105,50 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const candidateIdxRef = useRef(0);
   /** URL đã kết nối thành công — khóa lại để reconnect dùng đúng URL đó. */
   const lockedUrlRef = useRef<string | null>(null);
+  /**
+   * Generation counter: cleanup (unmount/StrictMode remount) tăng lên 1 → mọi
+   * attempt + reconnect setTimeout của generation cũ tự vô hiệu. Trước đây
+   * reconnect đệ quy trong `ws.onclose` thoát khỏi canceller của effect → sau
+   * unmount vẫn mở WebSocket mới mãi mãi.
+   */
+  const generationRef = useRef(0);
+  /** Listener registry cho emitter — Set để một fn có thể đăng ký nhiều type. */
+  const listenersRef = useRef<Set<{ type: string; fn: RealtimeListener }>>(new Set());
+
+  const dispatch = useCallback((type: string, data: unknown) => {
+    for (const l of listenersRef.current) {
+      if (l.type !== type) continue;
+      try {
+        l.fn(data);
+      } catch {
+        // Listener lỗi không được làm sập vòng xử lý WS
+      }
+    }
+  }, []);
+
+  const emitter = useMemo<RealtimeEmitterValue>(
+    () => ({
+      on: (type, fn) => {
+        listenersRef.current.add({ type, fn });
+      },
+      off: (type, fn) => {
+        for (const l of listenersRef.current) {
+          if (l.type === type && l.fn === fn) listenersRef.current.delete(l);
+        }
+      },
+    }),
+    [],
+  );
 
   const connect = useCallback(() => {
-    let cancelled = false;
+    const gen = generationRef.current;
     (async () => {
       // Lấy token + danh sách WS base song song (cùng nguồn xác thực).
       const [tokenRes, candidates] = await Promise.all([
         fetch("/api/auth/ws-token", { cache: "no-store" }),
         fetchWsCandidates(),
       ]);
-      if (cancelled) return;
+      if (gen !== generationRef.current) return;
       if (!tokenRes.ok) {
         // Chưa đăng nhập — dừng, AuthProvider sẽ remount khi có phiên.
         return;
@@ -112,7 +158,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (candidates.length === 0) {
         // Phòng thủ: không có URL nào — thử lại sau (không để kẹt Offline).
         setTimeout(() => {
-          if (!cancelled) connect();
+          if (gen === generationRef.current) connect();
         }, 5000);
         return;
       }
@@ -141,16 +187,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       };
       ws.onmessage = (msg) => {
         try {
-          const data = JSON.parse(msg.data as string) as MachineEvent;
+          const data = JSON.parse(msg.data as string) as { type?: string };
+          if (!data || typeof data.type !== "string") return;
           if (data.type === "machine_event") {
-            setEvents((prev) => [data, ...prev].slice(0, MAX_EVENTS));
+            setEvents((prev) => [data as MachineEvent, ...prev].slice(0, MAX_EVENTS));
           }
+          // Phát MỌI loại message tới emitter (notification:new, ...).
+          dispatch(data.type, data);
         } catch {
           // bỏ qua message lạ
         }
       };
       ws.onclose = () => {
-        if (cancelled) return;
+        if (gen !== generationRef.current) return;
         setConnected(false);
         if (!opened) {
           // Chưa từng mở → URL này không phục vụ WS, thử ứng viên kế tiếp.
@@ -160,20 +209,17 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         const delay = Math.min(1000 * 2 ** retryRef.current, 30000);
         retryRef.current += 1;
         setTimeout(() => {
-          if (!cancelled) connect();
+          if (gen === generationRef.current) connect();
         }, delay);
       };
       ws.onerror = () => ws.close();
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [dispatch]);
 
   useEffect(() => {
-    const cleanup = connect();
+    connect();
     return () => {
-      cleanup();
+      generationRef.current += 1;
       socketRef.current?.close();
     };
   }, [connect]);
@@ -185,11 +231,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <RealtimeStatusContext.Provider value={statusValue}>
-      <RealtimeEventsContext.Provider value={eventsValue}>
-        {children}
-      </RealtimeEventsContext.Provider>
-    </RealtimeStatusContext.Provider>
+    <RealtimeEmitterContext.Provider value={emitter}>
+      <RealtimeStatusContext.Provider value={statusValue}>
+        <RealtimeEventsContext.Provider value={eventsValue}>
+          {children}
+        </RealtimeEventsContext.Provider>
+      </RealtimeStatusContext.Provider>
+    </RealtimeEmitterContext.Provider>
   );
 }
 
@@ -203,6 +251,14 @@ export function useRealtimeEvents(): RealtimeEventsValue {
   const ctx = useContext(RealtimeEventsContext);
   if (!ctx) throw new Error("useRealtimeEvents phải dùng trong <RealtimeProvider>");
   return ctx;
+}
+
+/**
+ * Emitter đăng ký message WS theo loại — trả null nếu component nằm ngoài
+ * <RealtimeProvider> (caller tự fallback polling, không crash SSR).
+ */
+export function useRealtimeEmitter(): RealtimeEmitterValue | null {
+  return useContext(RealtimeEmitterContext);
 }
 
 /**

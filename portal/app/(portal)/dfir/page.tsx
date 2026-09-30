@@ -128,6 +128,8 @@ export default function DfirPage() {
   const [editError, setEditError] = useState<string | null>(null);
   // Tên artifact đang xóa (disable nút để chặn double-click trong lúc DELETE đang bay)
   const [deletingArtifactName, setDeletingArtifactName] = useState<string | null>(null);
+  // Artifact chờ xác nhận xóa — ConfirmDialog thay window.confirm
+  const [confirmDeleteArtifact, setConfirmDeleteArtifact] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
       const [cfg, lk, hs, al, ar] = await Promise.all([
@@ -257,17 +259,18 @@ export default function DfirPage() {
     }
   };
 
-  // Xóa artifact — native confirm() (UX ngắn gọn) rồi DELETE.
+  // Xóa artifact — mở ConfirmDialog xác nhận rồi DELETE.
   // Backend (velociraptor_artifacts.py:delete_custom_artifact) sẽ gọi delete_artifact trên
   // Velociraptor server trước, sau đó xóa DB row. Nếu server lỗi sẽ trả 502 trừ khi
   // ?force=true (UI chưa dùng force để tránh xóa DB khi server chưa chắc).
-  const handleDeleteArtifact = async (name: string) => {
+  const handleDeleteArtifact = (name: string) => {
     if (deletingArtifactName) return;
-    const ok = window.confirm(
-      `Xóa artifact "${name}" trên Velociraptor server và trong DB?\n\n` +
-      "Hành động này không thể hoàn tác.",
-    );
-    if (!ok) return;
+    setHuntError(null);
+    setHuntSuccess(null);
+    setConfirmDeleteArtifact(name);
+  };
+
+  const doDeleteArtifact = async (name: string) => {
     setDeletingArtifactName(name);
     setHuntError(null);
     setHuntSuccess(null);
@@ -724,7 +727,7 @@ export default function DfirPage() {
               (vd <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Windows.Persistence.*</code>,
               {" "}
               <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Generic.Detection.FIM.High</code>).
-              Bấm "Scan alerts" ở trên để detect thủ công sau khi chạy hunt/collect.
+              Bấm &quot;Scan alerts&quot; ở trên để detect thủ công sau khi chạy hunt/collect.
             </p>
           </div>
         ) : (
@@ -1154,6 +1157,21 @@ export default function DfirPage() {
         confirmLabel="Đồng bộ ngay"
         onClose={() => setConfirmSync(false)}
         onConfirm={() => void handleSync()}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteArtifact !== null}
+        onClose={() => setConfirmDeleteArtifact(null)}
+        onConfirm={() => {
+          const name = confirmDeleteArtifact;
+          setConfirmDeleteArtifact(null);
+          if (name) void doDeleteArtifact(name);
+        }}
+        title="Xóa artifact"
+        message={`Xóa artifact "${confirmDeleteArtifact ?? ""}" trên Velociraptor server và trong DB? Hành động này không thể hoàn tác.`}
+        confirmLabel="Xóa"
+        danger
+        loading={deletingArtifactName !== null}
       />
         </>
       )}

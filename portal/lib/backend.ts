@@ -109,8 +109,45 @@ export async function fetchUpstream(
   });
 }
 
-/** Refresh token; trả cặp JWT mới hoặc null nếu thất bại. */
-export async function refreshTokens(refresh: string): Promise<{ access: string; refresh: string } | null> {
+/**
+ * Refresh token; trả cặp JWT mới hoặc null nếu thất bại.
+ *
+ * Single-flight theo refresh token: các trang bắn Promise.all 2–5 request,
+ * khi access token hết hạn cả loạt cùng nhận 401 và cùng gọi refresh. Backend
+ * XOAY VÒNG refresh token → chỉ lời gọi đầu thắng, các lời gọi sau dùng token
+ * đã bị thu hồi → trả null → xóa cookie của phiên vừa được gia hạn → user bị
+ * đá về login giữa phiên. Nên mọi lời gọi trùng (cùng refresh token) dùng chung
+ * MỘT promise đang bay; kèm cache ngắn (old→new pair) cho request đã gửi đi
+ * trước khi Set-Cookie kịp tới trình duyệt nhưng tới server sau khi refresh xong.
+ */
+const REFRESH_CACHE_TTL_MS = 60_000;
+type TokenPair = { access: string; refresh: string };
+const refreshInFlight = new Map<string, Promise<TokenPair | null>>();
+const refreshCache = new Map<string, { pair: TokenPair; expiresAt: number }>();
+
+export async function refreshTokens(refresh: string): Promise<TokenPair | null> {
+  const cached = refreshCache.get(refresh);
+  if (cached && cached.expiresAt > Date.now()) return cached.pair;
+  const inFlight = refreshInFlight.get(refresh);
+  if (inFlight) return inFlight;
+  const promise = refreshTokensUpstream(refresh)
+    .then((pair) => {
+      if (pair) {
+        refreshCache.set(refresh, { pair, expiresAt: Date.now() + REFRESH_CACHE_TTL_MS });
+        const now = Date.now();
+        for (const [k, v] of refreshCache) {
+          if (v.expiresAt <= now) refreshCache.delete(k);
+        }
+      }
+      return pair;
+    })
+    .finally(() => refreshInFlight.delete(refresh));
+  refreshInFlight.set(refresh, promise);
+  return promise;
+}
+
+/** Gọi upstream /api/auth/refresh; không chia sẻ, không cache. */
+async function refreshTokensUpstream(refresh: string): Promise<TokenPair | null> {
   try {
     const res = await fetch(`${API_BASE}/api/auth/refresh`, {
       method: "POST",
@@ -165,7 +202,6 @@ export async function proxyRequest(
   if (disposition) headers.set("content-disposition", disposition);
   headers.set("cache-control", "no-store");
 
-  const isJson = (contentType ?? "").includes("application/json");
   const isBinary = (contentType ?? "").includes("octet-stream") || Boolean(disposition);
 
   const payload = isBinary ? await res.arrayBuffer() : await res.text();
@@ -184,17 +220,19 @@ export async function proxyRequest(
   if (res.status === 401 && !newPair) {
     clearSessionTokens(response);
   }
-  void isJson;
   return response;
 }
 
 /** Gọi 1 API có auth (dùng trong route handler), trả JSON đã parse. */
-export async function fetchJsonWithAuth<T>(path: string): Promise<{ status: number; data: T | null; detail?: string }> {
+async function fetchJsonUpstream<T>(
+  path: string,
+  extraHeaders?: Record<string, string>,
+): Promise<{ status: number; data: T | null; detail?: string }> {
   const { access, refresh } = await getSessionTokens();
-  let res = await fetchUpstream(path, "GET", access);
+  let res = await fetchUpstream(path, "GET", access, undefined, undefined, extraHeaders);
   if (res.status === 401 && refresh) {
     const newPair = await refreshTokens(refresh);
-    if (newPair) res = await fetchUpstream(path, "GET", newPair.access);
+    if (newPair) res = await fetchUpstream(path, "GET", newPair.access, undefined, undefined, extraHeaders);
   }
   const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
   if (!isJson) return { status: res.status, data: null };
@@ -204,29 +242,17 @@ export async function fetchJsonWithAuth<T>(path: string): Promise<{ status: numb
     ? ((data as { detail: string }).detail)
     : undefined;
   return { status: res.status, data: null, detail };
+}
+
+/** Gọi 1 API có auth (dùng trong route handler), trả JSON đã parse. */
+export function fetchJsonWithAuth<T>(path: string) {
+  return fetchJsonUpstream<T>(path);
 }
 
 /**
  * Variant của `fetchJsonWithAuth` có kèm forwarded IP headers — dùng cho các route
  * handler có `request` để truyền IP user xuống backend (ghi audit log).
  */
-export async function fetchJsonWithAuthAndIp<T>(
-  path: string,
-  request: Request,
-): Promise<{ status: number; data: T | null; detail?: string }> {
-  const { access, refresh } = await getSessionTokens();
-  const extra = forwardedIpHeaders(request);
-  let res = await fetchUpstream(path, "GET", access, undefined, undefined, extra);
-  if (res.status === 401 && refresh) {
-    const newPair = await refreshTokens(refresh);
-    if (newPair) res = await fetchUpstream(path, "GET", newPair.access, undefined, undefined, extra);
-  }
-  const isJson = (res.headers.get("content-type") ?? "").includes("application/json");
-  if (!isJson) return { status: res.status, data: null };
-  const data = (await res.json()) as T;
-  if (res.ok) return { status: res.status, data };
-  const detail = typeof (data as { detail?: unknown }).detail === "string"
-    ? ((data as { detail: string }).detail)
-    : undefined;
-  return { status: res.status, data: null, detail };
+export function fetchJsonWithAuthAndIp<T>(path: string, request: Request) {
+  return fetchJsonUpstream<T>(path, forwardedIpHeaders(request));
 }

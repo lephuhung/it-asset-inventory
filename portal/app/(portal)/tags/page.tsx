@@ -147,7 +147,7 @@ export default function TagsPage() {
             {kind === "classification" && (
               <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-200">
                 Không tạo được loại máy mới — chỉ có 3 loại hệ thống (cá nhân / công vụ / BMNN). Chọn
-                "Mục đích sử dụng" để tạo mục đích gán cho máy.
+                &quot;Mục đích sử dụng&quot; để tạo mục đích gán cho máy.
               </p>
             )}
             <Field label="Màu badge">

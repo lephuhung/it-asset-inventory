@@ -254,9 +254,10 @@ describe('MachineInvestigationPanel Rendering', () => {
     expect(html).toContain('Phát hiện');     // Findings
   });
 
-  it('MachineInvestigationPanel closed state returns null', async () => {
-    // B-3 fix: verify panel doesn't render when closed
-
+  it('MachineInvestigationPanel closed state is hidden and non-interactive', async () => {
+    // Drawer luôn mount (tránh remount/tuột scroll mỗi lần mở) nhưng khi đóng
+    // phải: ẩn với screen reader (aria-hidden) + inert (không nhận tab-focus)
+    // + không nhận click (pointer-events-none).
     const element = React.createElement(MachineInvestigationPanel, {
       machineId: 'test-client-001',
       machineHostname: 'TEST-HOSTNAME',
@@ -266,7 +267,8 @@ describe('MachineInvestigationPanel Rendering', () => {
 
     const html = renderToString(element);
 
-    // When open=false, the component returns null
-    expect(html).toBe('');
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('inert=""');
+    expect(html).toContain('pointer-events-none');
   });
 });

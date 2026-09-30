@@ -101,7 +101,7 @@ function AuditResultsTableInner({
       <p className="flex items-center gap-1.5 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5 text-xs text-slate-400">
         <CheckCircle2 className="size-3.5" />
         Append-only: chỉ INSERT qua service; hash chain nối qua <code>prev_hash</code> — mọi sửa
-        đổi/xóa giữa chuỗi đều bị phát hiện bởi mục "Kiểm tra" phía trên.
+        đổi/xóa giữa chuỗi đều bị phát hiện bởi mục &quot;Kiểm tra&quot; phía trên.
       </p>
     </Card>
   );

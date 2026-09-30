@@ -12,8 +12,19 @@ export const dynamic = "force-dynamic";
  * Lý do vẫn proxy: tránh CORS khi dev portal (3003) gọi server (8000); giữ 1 host
  * duy nhất phía trình duyệt.
  */
+/**
+ * Ghép path an toàn từ catch-all segments — chặn path traversal tương tự
+ * proxy chính (segment ".." cho phép thoát khỏi prefix `/download/` trên
+ * upstream). Route này KHÔNG cần auth cookie nên phải siết chặt hơn nữa.
+ */
+function upstreamPath(segments: string[]): string | null {
+  if (segments.some((s) => s === "" || s === "." || s === "..")) return null;
+  return `/download/${segments.map(encodeURIComponent).join("/")}`;
+}
+
 async function handle(request: Request, segments: string[]): Promise<Response> {
-  const path = `/download/${segments.join("/")}`;
+  const path = upstreamPath(segments);
+  if (!path) return new NextResponse("Bad Request", { status: 400 });
   const upstream = await fetch(`${API_BASE}${path}`, {
     method: "GET",
     cache: "no-store",

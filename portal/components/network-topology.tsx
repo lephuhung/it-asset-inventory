@@ -267,7 +267,7 @@ function TopologyCanvasInner({
       // Chưa lưu bố cục → hiển thị sơ đồ mẫu theo cấp độ
       return toFlowNodes(levelSample.nodes);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
     [layout, topology, levelSample],
   );
   const validIds = useMemo(() => new Set(topology.nodes.map((n) => n.id)), [topology.nodes]);
@@ -411,7 +411,12 @@ function TopologyCanvasInner({
     }),
     [nodes, edges],
   );
-  const dirty = stableStringify(currentLayout) !== stableStringify(savedLayout);
+  // stringify toàn bộ node/edge tree 2 lần mỗi render — phải nằm sau useMemo,
+  // nếu không mỗi frame kéo node (position đổi liên tục) đều stringify lại.
+  const dirty = useMemo(
+    () => stableStringify(currentLayout) !== stableStringify(savedLayout),
+    [currentLayout, savedLayout],
+  );
 
   /* ── Undo / Redo ── (định nghĩa trước các mutation để deps không TDZ) */
   const snapshot = useCallback(
@@ -642,7 +647,7 @@ function TopologyCanvasInner({
         : edges,
     );
     setAiOpen(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [aiPaste, levelSample.nodes, nodes, edges, setNodes, setEdges, pushHistory]);
 
   /* ── Gọi AI phía server (dùng chung cấu hình LLM-DFIR) ── */
@@ -702,7 +707,7 @@ function TopologyCanvasInner({
     const allIds = new Set(topology.nodes.map((n) => n.id));
     setNodes(toFlowNodes(applyDiagramLayout(topology.nodes, tpl), savedLayout?.notes));
     setEdges(savedEdgesToFlow(tpl.edges, allIds, []));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [profileLevel, devices, meta, topology.nodes, savedLayout?.notes, setNodes, setEdges, pushHistory]);
 
   /* ── Xuất PNG ── */
@@ -761,7 +766,7 @@ function TopologyCanvasInner({
       {devices.length === 0 && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
           Hồ sơ chưa khai thiết bị — đang hiển thị <b>sơ đồ mẫu cấp độ {profileLevel ?? 2}</b> với các node
-          "(mẫu)". Thêm thiết bị ở tab <b>Thiết bị</b> để thay các node mẫu bằng thiết bị thật.
+          &quot;(mẫu)&quot;. Thêm thiết bị ở tab <b>Thiết bị</b> để thay các node mẫu bằng thiết bị thật.
         </p>
       )}
       <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
@@ -772,7 +777,7 @@ function TopologyCanvasInner({
           <li>Sơ đồ load <b>toàn bộ thiết bị</b> đã khai (chưa có đường sẵn) — <b>nối đường</b>: kéo từ chấm tròn dưới node này lên đỉnh node khác.</li>
           <li><b>Nhãn đường nối</b> (vlan, link…): double-click vào đường; <b>ghi chú node</b> (IP…): chuột phải vào node.</li>
           <li><b>Gỡ đường / xóa node tự do</b>: chọn rồi nhấn <kbd className="rounded border bg-white px-1 font-mono text-[10px]">Delete</kbd>; <b>đổi tên node tự do</b>: double-click.</li>
-          <li><b>Vẽ bằng AI</b>: copy prompt (đã có sẵn thông tin hệ thống) gửi cho ChatGPT/Gemini… hoặc bấm "Gọi AI vẽ ngay"; dán JSON trả về để render. <b>AI rà soát</b>: nhờ AI kiểm tra an toàn + ghi chú.</li>
+          <li><b>Vẽ bằng AI</b>: copy prompt (đã có sẵn thông tin hệ thống) gửi cho ChatGPT/Gemini… hoặc bấm &quot;Gọi AI vẽ ngay&quot;; dán JSON trả về để render. <b>AI rà soát</b>: nhờ AI kiểm tra an toàn + ghi chú.</li>
           <li><b>Hoàn tác/làm lại</b>: Ctrl+Z / Ctrl+Shift+Z. Lăn chuột thu phóng, chuột phải di chuyển. Nhớ bấm <b>Lưu bố cục</b>.</li>
         </ul>
       </details>

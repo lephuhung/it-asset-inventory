@@ -75,3 +75,15 @@ export function validateEmail(
   if (trimmed.length > 254) return "Email quá dài (tối đa 254 ký tự)";
   return "";
 }
+
+/**
+ * Đường dẫn redirect nội bộ an toàn (chống open-redirect khi dùng tham số
+ * `?next=` sau đăng nhập). Chỉ nhận path bắt đầu bằng "/" — loại trừ:
+ * - "//host" (protocol-relative → site ngoài), "/\host" (browser normalize
+ *   "/\" thành "//"), và mọi URL tuyệt đối khác ("https://...", "javascript:").
+ * Không hợp lệ → trả `fallback`.
+ */
+export function safeInternalPath(raw: string | null | undefined, fallback: string | null): string | null {
+  if (raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\")) return raw;
+  return fallback;
+}

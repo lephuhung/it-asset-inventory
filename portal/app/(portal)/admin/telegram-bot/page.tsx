@@ -26,6 +26,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   CopyButton,
   ErrorBanner,
   Field,
@@ -54,6 +55,12 @@ import { useDebouncedValue } from "@/lib/use-debounced-value";
  *     chưa vào portal set.
  *   - None: chưa có gì → báo "Bot chưa được cấu hình".
  */
+/** Hành động chờ xác nhận qua ConfirmDialog (thay confirm() native). */
+type TelegramConfirmAction =
+  | { type: "unlink"; user: TelegramLinkedUser }
+  | { type: "clearToken" }
+  | { type: "clearWebhookSecret" };
+
 export default function TelegramBotConfigPage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin_global";
@@ -83,6 +90,7 @@ export default function TelegramBotConfigPage() {
   const [linkedOffset, setLinkedOffset] = useState(0);
   const [linkedLimit] = useState(20);
   const [unlinking, setUnlinking] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<TelegramConfirmAction | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -151,14 +159,11 @@ export default function TelegramBotConfigPage() {
     };
   }, [isSuperAdmin, debouncedLinkedQ, linkedOffset, loadLinked]);
 
-  const forceUnlink = async (u: TelegramLinkedUser) => {
-    if (
-      !confirm(
-        `Bỏ liên kết Telegram của ${u.email}?\nUser sẽ không nhận notification qua Telegram nữa.`,
-      )
-    ) {
-      return;
-    }
+  const forceUnlink = (u: TelegramLinkedUser) => {
+    setConfirmAction({ type: "unlink", user: u });
+  };
+
+  const doForceUnlink = async (u: TelegramLinkedUser) => {
     setUnlinking(u.id);
     try {
       await api.delete(`/admin/telegram-bot/linked-users/${u.id}`);
@@ -188,7 +193,7 @@ export default function TelegramBotConfigPage() {
             <p className="text-sm text-slate-600">
               Trang này chỉ dành cho Super Admin. Bạn có thể liên kết tài khoản
               Telegram cá nhân trong mục <strong>Tài khoản</strong> ở góc trên
-              phải → tab "Telegram".
+              phải → tab &quot;Telegram&quot;.
             </p>
           </div>
         </Card>
@@ -257,10 +262,11 @@ export default function TelegramBotConfigPage() {
     }
   };
 
-  const clearToken = async () => {
-    if (!confirm("Xoá token bot hiện tại? Sau khi xoá, bot sẽ ngừng gửi notification.")) {
-      return;
-    }
+  const clearToken = () => {
+    setConfirmAction({ type: "clearToken" });
+  };
+
+  const doClearToken = async () => {
     setSaving(true);
     setError(null);
     try {
@@ -279,14 +285,11 @@ export default function TelegramBotConfigPage() {
     }
   };
 
-  const clearWebhookSecret = async () => {
-    if (
-      !confirm(
-        "Xoá webhook secret? Telegram sẽ không verify được webhook → bot sẽ bỏ qua callback /start.",
-      )
-    ) {
-      return;
-    }
+  const clearWebhookSecret = () => {
+    setConfirmAction({ type: "clearWebhookSecret" });
+  };
+
+  const doClearWebhookSecret = async () => {
     setSaving(true);
     setError(null);
     try {
@@ -767,7 +770,7 @@ export default function TelegramBotConfigPage() {
               </div>
               <p className="mt-1 text-xs leading-snug text-slate-500">
                 Chạy lệnh này trên <strong>server có HTTPS public</strong>{" "}
-                (vd VPS, máy có domain + Let's Encrypt) — Telegram chỉ chấp
+                (vd VPS, máy có domain + Let&#39;s Encrypt) — Telegram chỉ chấp
                 nhận webhook qua HTTPS. Lệnh sẽ tự động kèm{" "}
                 <code>secret_token</code> nếu đã set trong form.
               </p>
@@ -823,7 +826,7 @@ export default function TelegramBotConfigPage() {
                 <strong>webhook secret</strong> đã set ở form.
               </li>
               <li>
-                Hoặc chạy lệnh <code>curl</code> ở mục "Set webhook" (chỉ chạy
+                Hoặc chạy lệnh <code>curl</code> ở mục &quot;Set webhook&quot; (chỉ chạy
                 được từ server có HTTPS public).
               </li>
             </ul>
@@ -867,6 +870,36 @@ export default function TelegramBotConfigPage() {
           lưu — nếu mất, tạo token mới qua @BotFather.
         </p>
       </div>
+
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onClose={() => setConfirmAction(null)}
+        title={
+          confirmAction?.type === "unlink"
+            ? "Bỏ liên kết Telegram?"
+            : confirmAction?.type === "clearToken"
+              ? "Xoá token bot?"
+              : "Xoá webhook secret?"
+        }
+        message={
+          confirmAction?.type === "unlink"
+            ? `Bỏ liên kết Telegram của ${confirmAction.user.email}? User sẽ không nhận notification qua Telegram nữa.`
+            : confirmAction?.type === "clearToken"
+              ? "Sau khi xoá, bot sẽ ngừng gửi notification."
+              : "Telegram sẽ không verify được webhook → bot sẽ bỏ qua callback /start."
+        }
+        confirmLabel="Xoá"
+        danger
+        loading={unlinking !== null || saving}
+        onConfirm={() => {
+          const action = confirmAction;
+          setConfirmAction(null);
+          if (!action) return;
+          if (action.type === "unlink") void doForceUnlink(action.user);
+          else if (action.type === "clearToken") void doClearToken();
+          else void doClearWebhookSecret();
+        }}
+      />
     </div>
   );
 }

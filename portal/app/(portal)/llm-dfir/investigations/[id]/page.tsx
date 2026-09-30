@@ -3,19 +3,16 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertOctagon,
   ArrowLeft,
-  Brain,
-  CheckCircle2,
-  Clock,
-  Info,
   Loader2,
-  RefreshCcw,
-  ShieldAlert,
   Trash2,
-  XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  INVESTIGATION_SEVERITY_META as SEVERITY_META,
+  INVESTIGATION_STATUS_META as STATUS_META,
+  statusLabel,
+} from "@/lib/investigation-meta";
 import {
   Badge,
   Button,
@@ -30,26 +27,12 @@ import type {
   InvestigationStatus,
 } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
+import { safeInternalPath } from "@/lib/validators";
 import { InvestigationMarkdown } from "@/components/investigation-markdown";
 import { InvestigationFindings } from "@/components/investigation-findings";
 
-/* Badge pill tinted theo Design.md — màu đã remap trong globals.css */
-const STATUS_META: Record<InvestigationStatus, { label: string; badge: string; icon: any }> = {
-  pending: { label: "Chờ FIFO", badge: "bg-slate-100 text-slate-700 ring-slate-600/20", icon: Clock },
-  running: { label: "Đang khởi động", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Loader2 },
-  collecting: { label: "Đang thu thập dữ liệu", badge: "bg-sky-50 text-sky-700 ring-sky-600/20", icon: RefreshCcw },
-  analyzing: { label: "AI đang phân tích", badge: "bg-violet-100 text-violet-700 ring-violet-600/20", icon: Brain },
-  completed: { label: "Hoàn thành", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-  failed: { label: "Lỗi", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: XCircle },
-};
-
-const SEVERITY_META: Record<InvestigationSeverity, { label: string; badge: string; icon: any }> = {
-  critical: { label: "Critical", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: AlertOctagon },
-  high: { label: "High", badge: "bg-amber-100 text-amber-700 ring-amber-600/20", icon: ShieldAlert },
-  medium: { label: "Medium", badge: "bg-amber-50 text-amber-800 ring-amber-600/20", icon: ShieldAlert },
-  low: { label: "Low", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Info },
-  info: { label: "Info", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-};
+/* Badge pill tinted theo Design.md — màu đã remap trong globals.css.
+   STATUS_META / SEVERITY_META dùng bản chuẩn lib/investigation-meta. */
 
 export default function InvestigationDetailPage({
   params,
@@ -59,8 +42,9 @@ export default function InvestigationDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Lưu URL trang trước (từ máy hoặc từ stats/list) để "Quay lại" thông minh
-  const fromPath = searchParams.get("from");
+  // Lưu URL trang trước (từ máy hoặc từ stats/list) để "Quay lại" thông minh.
+  // Chỉ nhận path nội bộ — chặn open-redirect qua `?from=//evil.com`
+  const fromPath = safeInternalPath(searchParams.get("from"), null);
   const [inv, setInv] = useState<DfirInvestigation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -109,7 +93,7 @@ export default function InvestigationDetailPage({
 
   /** Nút "Quay lại" — ưu tiên URL `?from=` nếu có, fallback về list. */
   const goBack = () => {
-    if (fromPath && fromPath.startsWith("/")) {
+    if (fromPath) {
       router.push(fromPath);
     } else {
       // Fallback: dùng browser back nếu history tồn tại, ngược lại về list
@@ -196,7 +180,7 @@ export default function InvestigationDetailPage({
             </h2>
             <Badge className={statusInfo.badge}>
               <StatusIcon className={`size-3.5 ${isActive ? "animate-spin" : ""}`} />
-              {statusInfo.label}
+              {statusLabel(inv.status, true)}
             </Badge>
             {sevInfo && SevIcon && (
               <Badge className={sevInfo.badge}>

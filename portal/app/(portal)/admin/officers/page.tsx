@@ -174,7 +174,7 @@ export default function AdminOfficersPage() {
                 <th className={TH}>Họ tên</th>
                 <th className={TH}>Tổ chức / Chức vụ</th>
                 <th className={TH}>Điện thoại</th>
-                <th className={TH}>Email</th>
+                <th className={`${TH} hidden md:table-cell`}>Email</th>
                 <th className={TH}>Hồ sơ phụ trách</th>
                 <th className={TH}></th>
               </tr>
@@ -198,7 +198,7 @@ export default function AdminOfficersPage() {
                     )}
                   </td>
                   <td className={`${TD} text-sm`}>{o.phone || "—"}</td>
-                  <td className={`${TD} text-sm`}>{o.email || "—"}</td>
+                  <td className={`${TD} hidden text-sm md:table-cell`}>{o.email || "—"}</td>
                   <td className={TD}>
                     {o.profile_count > 0 ? (
                       <Badge className="bg-brand-50 text-brand-700 ring-brand-600/20">
@@ -234,7 +234,7 @@ export default function AdminOfficersPage() {
       )}
 
       <p className="mt-4 text-xs text-slate-400">
-        Sau khi thêm, chỉ định cán bộ cho hồ sơ cấp độ ở trang chi tiết hồ sơ (tab "Tổng quan" → mục "Cán bộ phụ trách").{" "}
+        Sau khi thêm, chỉ định cán bộ cho hồ sơ cấp độ ở trang chi tiết hồ sơ (tab &quot;Tổng quan&quot; → mục &quot;Cán bộ phụ trách&quot;).{" "}
         <Link href="/system-profiles" className="text-brand-600 hover:underline">
           Xem danh sách hồ sơ →
         </Link>

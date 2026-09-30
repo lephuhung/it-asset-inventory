@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Plus, Trash2, Building2 } from "lucide-react";
@@ -48,7 +49,19 @@ import {
   Textarea,
 } from "@/components/ui";
 import { useAuth } from "@/components/auth-context";
-import { NetworkTopologyCanvas } from "@/components/network-topology";
+// React Flow (+ html-to-image) nặng — chỉ tab "diagram" dùng. Dynamic import
+// để không nằm trong bundle mặc định của trang chi tiết hồ sơ.
+const NetworkTopologyCanvas = dynamic(
+  () => import("@/components/network-topology").then((m) => m.NetworkTopologyCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-[420px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500">
+        Đang tải bộ vẽ sơ đồ…
+      </div>
+    ),
+  },
+);
 import { labelFor } from "@/lib/system-profile-diagram";
 import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
 
@@ -314,7 +327,7 @@ function OfficerRow({
             <span aria-hidden>🧑‍💼</span>
             <span>Cán bộ phụ trách</span>
             <span className="ml-1 rounded-full bg-amber-600 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-sm">
-              Đầu mối SuperAdmin
+              Đầu mối liên hệ của Công an tỉnh
             </span>
           </p>
 
@@ -1190,7 +1203,7 @@ export default function SystemProfileDetailPage() {
             ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 {profile.parties.map((x) => (
-                  <Card key={x.id} className="p-4">
+                  <Card key={x.id} padded={false} bodyClass="p-3">
                     <div className="mb-2 flex items-center justify-between">
                       <Badge className={x.role === "owner" ? "bg-indigo-50 text-indigo-700 ring-indigo-600/20" : "bg-sky-50 text-sky-700 ring-sky-600/20"}>
                         {x.role === "owner" ? "Chủ quản" : "Đơn vị vận hành"}
