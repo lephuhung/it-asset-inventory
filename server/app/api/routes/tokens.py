@@ -114,7 +114,10 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
         f'$m="$env:TEMP\\agent-$t.msi";'
         f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
         f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
-        f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
+        f'$b=(irm "{portal_url}/download/agent.msi.sha256");'
+        # GitHub Releases trả octet-stream → irm trả Byte[] → decode UTF8 trước khi Trim.
+        f'if($b -is [byte[]]){{$b=[Text.Encoding]::UTF8.GetString($b)}};'
+        f'$b="$b".Trim().ToLower();'
         f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
         f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
     )

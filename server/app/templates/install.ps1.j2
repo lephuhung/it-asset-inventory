@@ -115,7 +115,11 @@ try {
 # 4. Verify SHA256 (file .sha256 do server cung cấp cạnh MSI)
 Write-Host '[2/4] Xác thực file (SHA256 + chữ ký số) ...' -ForegroundColor Cyan
 try {
-    $expectedHash = (Invoke-WebRequest -Uri "$baseUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
+    # .Content có thể là Byte[] (GitHub Releases trả application/octet-stream)
+    # → decode UTF8 trước khi Trim — tránh "Byte does not contain a method Trim".
+    $expectedHash = (Invoke-WebRequest -Uri "$baseUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content
+    if ($expectedHash -is [byte[]]) { $expectedHash = [Text.Encoding]::UTF8.GetString($expectedHash) }
+    $expectedHash = "$expectedHash".Trim().Split()[0]
     $actualHash = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
     if ($expectedHash.ToLower() -ne $actualHash) {
         Write-Host "[LỖI] SHA256 không khớp (server: $expectedHash, file: $actualHash). Đã dừng cài đặt." -ForegroundColor Red

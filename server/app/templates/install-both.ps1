@@ -280,7 +280,11 @@ if (-not $SkipOrgInventory) {
 
         # Verify SHA256
         try {
-            $expected = (Invoke-WebRequest -Uri "$PortalUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content.Trim().Split()[0]
+            # .Content co the la Byte[] (GitHub Releases tra application/octet-stream)
+            # → decode UTF8 truoc khi Trim — tranh "Byte does not contain a method Trim".
+            $expected = (Invoke-WebRequest -Uri "$PortalUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content
+            if ($expected -is [byte[]]) { $expected = [Text.Encoding]::UTF8.GetString($expected) }
+            $expected = "$expected".Trim().Split()[0]
             $actual = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
             if ($expected.ToLower() -ne $actual) {
                 Write-Fail "SHA256 khong khop (server: $expected, file: $actual) - dung cai dat."
