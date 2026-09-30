@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     #   https://github.com/lephuhung/org-inventory-agent/releases
     agent_releases_base: str = ""
 
+    # MSI OrgInventory Agent đã được ký Authenticode chưa. False (mặc định) →
+    # install command tự nướng `$env:ORGINV_ALLOW_UNSIGNED="1"` để script cài
+    # bỏ qua check chữ ký (giai đoạn test). True → command KHÔNG bypass,
+    # install script sẽ bắt buộc verify chữ ký Authenticode hợp lệ.
+    # Set true sau khi CI release đã cấu hình cert ký MSI.
+    agent_msi_signed: bool = False
+
     # Server RSA Keypair cho giải mã gói offline (mã hóa lai AES-256-GCM + RSA-OAEP)
     server_private_key_path: str = "./data/server_private_key.pem"
     server_public_key_path: str = "./data/server_public_key.pem"

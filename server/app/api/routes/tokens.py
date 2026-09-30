@@ -73,11 +73,12 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     # Tránh ExecutionPolicy chặn, AV quarantine file .ps1, và parse error từ
     # ký tự đặc biệt trong comment.
     #
-    # TẠM thời set ORGINV_ALLOW_UNSIGNED=1 cho test — MSI chưa được ký
-    # Authenticode. BỎ dòng này khi production đã cấu hình cert ký trong CI.
+    # ORGINV_ALLOW_UNSIGNED: bypass check chữ ký Authenticode chỉ khi MSI
+    # chưa được ký (settings.agent_msi_signed=False — giai đoạn test).
+    bypass = '' if settings.agent_msi_signed else '$env:ORGINV_ALLOW_UNSIGNED="1";'
     script = (
-        f'$env:ORGINV_ALLOW_UNSIGNED="1";'
-        f'$t="{token}";'
+        bypass
+        + f'$t="{token}";'
         f'$p="{portal_url}";'
         f'$e="{agent_server_url}";'
         f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1 (in-memory)...";'
@@ -107,9 +108,10 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
     """
     import base64
 
+    bypass = '' if settings.agent_msi_signed else '$env:ORGINV_ALLOW_UNSIGNED="1";'
     script = (
-        f'$env:ORGINV_ALLOW_UNSIGNED="1";'
-        f'$t="{token}";'
+        bypass
+        + f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
         f'$m="$env:TEMP\\agent-$t.msi";'
         f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
