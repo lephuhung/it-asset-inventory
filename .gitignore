@@ -24,6 +24,9 @@ out/
 .dotnet-cli-home/
 .dotnet/
 
+# ── Agent (tách repo riêng — không track source/binary/log ở repo này) ──
+/agent/
+
 # ── Env / secrets ──
 .env
 .env.local
