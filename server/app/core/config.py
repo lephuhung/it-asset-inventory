@@ -75,7 +75,8 @@ class Settings(BaseSettings):
 
     # Agent installer artifacts (phục vụ /download/agent.msi + /download/agent.msi.sha256).
     # Đặt OrgInventoryAgent.msi + OrgInventoryAgent.msi.sha256 vào thư mục này (cùng cấp).
-    # Có thể trỏ tới `agent/publish/win-x64/` sau khi build MSI trên Windows.
+    # Source agent đã tách repo riêng — build MSI ở repo đó rồi copy vào đây,
+    # hoặc set AGENT_RELEASES_BASE để redirect sang GitHub Releases.
     agent_msi_dir: str = "./agent_dist"
 
     # GitHub Releases của repo agent (org-inventory-agent) — khi set, các route

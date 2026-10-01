@@ -1,5 +1,5 @@
 # CI — kiểm chứng tự động mỗi push/PR lên GitHub
-# Jobs: server (pytest + ruff), agent (dotnet build Linux + Windows), portal (typecheck + build),
+# Jobs: server (pytest + ruff), portal (typecheck + build),
 #       deepagent (pytest + ruff)
 
 name: CI
@@ -50,28 +50,6 @@ jobs:
           POSTGRES_TEST_PASSWORD: inventory
           POSTGRES_TEST_DB: inventory_test
 
-  agent:
-    name: Agent C# (dotnet build)
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    defaults:
-      run:
-        working-directory: agent
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Build Release
-        run: dotnet build -c Release --nologo
-      - name: Smoke — in fingerprint (chỉ Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          dotnet run --project src/OrgInventoryAgent -c Release --no-build -- --print-fingerprint
-
   portal:
     name: Portal Next.js (typecheck + build)
     runs-on: ubuntu-latest
@@ -83,13 +61,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
+          cache: pnpm
+      - name: Bật pnpm
+        run: corepack enable && corepack prepare pnpm@9.15.0 --activate
       - name: Cài dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
       - name: Build
-        run: npm run build
+        run: pnpm build
 
   deepagent:
     name: DeepAgent LangGraph (pytest + ruff)

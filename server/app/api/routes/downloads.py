@@ -14,10 +14,8 @@ File MSI + SHA256 đặt trong thư mục `settings.agent_msi_dir`. Cấu trúc:
   <agent_msi_dir>/OrgInventoryAgent.msi
   <agent_msi_dir>/OrgInventoryAgent.msi.sha256
 
-Build (chỉ trên Windows, cần WiX):
-  cd agent && dotnet publish -c Release -r win-x64
-  powershell installer/build-msi.ps1 -CertificateThumbprint \"<EV code signing thumbprint>\"
-  → copy OrgInventoryAgent.msi + .sha256 vào server.
+Build MSI trong repo agent riêng (Windows, cần WiX), rồi copy vào `agent_msi_dir`
+(hoặc set AGENT_RELEASES_BASE để redirect sang GitHub Releases — không cần copy local).
 """
 from __future__ import annotations
 
