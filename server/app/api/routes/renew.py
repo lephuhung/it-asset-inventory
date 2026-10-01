@@ -2,7 +2,7 @@
 
 Agent chủ động gọi khi cert còn < ~70% vòng đời (server trả renew_after).
 mTLS bắt buộc: identity từ X-SSL-Client-CN (nginx); cert cũ được thu hồi
-qua serial từ X-SSL-Client-Serial trước khi ký cert mới.
+qua serial từ X-SSL-Client-Serial sau khi cert mới đã ký thành công.
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ async def renew_certificate(
     machine_cn: str = Depends(get_client_machine_id),
     x_ssl_client_serial: str | None = Header(default=None, alias="X-SSL-Client-Serial"),
 ):
-    """Gia hạn cert: thu hồi cert cũ → ký CSR mới (cùng CN = machine_id)."""
+    """Gia hạn cert: ký CSR mới → thu hồi cert cũ (cùng CN = machine_id)."""
     try:
         machine_id = uuid.UUID(machine_cn)
     except ValueError:
@@ -58,18 +58,19 @@ async def renew_certificate(
 
     ca = get_ca_service()
 
+    # Ký CSR mới TRƯỚC — nếu revoke trước mà ký thất bại thì agent mất luôn
+    # cert đang dùng (không heartbeat/renew được nữa → phải enroll lại).
+    try:
+        cert_pem = await ca.renew_cert(body.csr_pem, machine_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"CA ký cert thất bại: {exc}")
+
     # Thu hồi cert cũ (serial từ nginx mTLS) — không chặn nếu CA local không hỗ trợ CRL
     if x_ssl_client_serial:
         try:
             await ca.revoke(x_ssl_client_serial)
         except Exception:  # noqa: BLE001
             pass
-
-    # Ký CSR mới
-    try:
-        cert_pem = await ca.renew_cert(body.csr_pem, machine_id)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=f"CA ký cert thất bại: {exc}")
 
     await append_audit(
         db,

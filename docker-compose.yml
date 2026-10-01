@@ -47,6 +47,7 @@ services:
       dockerfile: Dockerfile.dev
     env_file: .env
     environment:
+      DEEPAGENT_MAX_CONCURRENT_JOBS: ${DEEPAGENT_MAX_CONCURRENT_JOBS:-12}
       # override để dùng docker DNS thay vì localhost
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inventory}:${POSTGRES_PASSWORD:-inventory}@postgres:5432/${POSTGRES_DB:-inventory}
       REDIS_URL: redis://redis:6379/0
@@ -76,7 +77,7 @@ services:
       DEEPAGENT_SERVICE_TOKEN: ${DEEPAGENT_API_KEY:?DEEPAGENT_API_KEY must be set}
       DEEPAGENT_BACKEND_URL: http://api:8000
       DEEPAGENT_BACKEND_API_KEY: ${DEEPAGENT_BACKEND_API_KEY:?DEEPAGENT_BACKEND_API_KEY must be set}
-      DEEPAGENT_MAX_CONCURRENT_JOBS: ${DEEPAGENT_MAX_CONCURRENT_JOBS:-2}
+      DEEPAGENT_MAX_CONCURRENT_JOBS: ${DEEPAGENT_MAX_CONCURRENT_JOBS:-12}
       DEEPAGENT_MCP_COMMAND: /opt/mcp-venv/bin/python
       DEEPAGENT_MCP_ARGS_JSON: '["/opt/mcp-velociraptor/mcp_velociraptor_bridge.py"]'
       DEEPAGENT_MCP_ENV_JSON: '{"ENABLE_DANGEROUS_TOOLS":"false","VELOCIRAPTOR_DEFAULT_LIMIT":"100","VELOCIRAPTOR_MAX_LIMIT":"1000"}'
@@ -102,16 +103,16 @@ services:
     ports:
       - "${PORTAL_PORT:-3003}:3003"
     volumes:
-      - ./portal:/app:ro
+      - ./portal:/app
       - portal_node_modules:/app/node_modules
       - portal_next:/app/.next
     working_dir: /app
-    # Production standalone server (Next.js 16 + output:"standalone" trong next.config.ts).
-    # Build tạo `.next/standalone/` chứa server.js + node_modules đã trace sẵn (44M thay vì 134M
-    # của `.next/` đầy đủ). Restart sau dùng cache build đã có.
-    # Dockerfile.dev set NODE_ENV=development; phải override =production để Next.js dùng
-    # production-mode prerendering (dev-mode sẽ fail ở /_global-error do useContext null).
-    command: sh -c "if [ ! -f .next/standalone/.next/BUILD_ID ]; then NODE_ENV=production pnpm build; fi && cd .next/standalone && NODE_ENV=production node server.js"
+    # Dev server — HMR tự reload khi sửa code, không cần rebuild.
+    # Trước đây dùng production standalone (build trước → chạy server.js),
+    # nhưng mỗi lần sửa code phải xóa BUILD_ID + restart container mới thấy.
+    # app/global-error.tsx đã có sẵn (không dùng AuthContext) nên dev mode
+    # không còn fail ở /_global-error như comment cũ.
+    command: pnpm dev
     depends_on:
       - api
     networks: [inventory-net]

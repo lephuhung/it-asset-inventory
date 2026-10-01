@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -31,6 +32,7 @@ OFFLINE_SCAN_SECONDS = 30
 PARTITION_SCAN_SECONDS = 3600  # mỗi giờ rà partition
 ALERT_SCAN_SECONDS = 60        # mỗi phút quét alert rules
 LOST_SCAN_SECONDS = 3600       # mỗi giờ quét máy mất kết nối lâu ngày
+TOKEN_CLEANUP_SECONDS = 3600   # mỗi giờ dọn token hết hạn/revoked
 MACHINE_NEW_WINDOW_MINUTES = 30
 VELOCIRAPTOR_SYNC_SECONDS = settings.velociraptor_sync_interval_seconds  # 5 phút — sync hostname ↔ client_id
 LLM_DFIR_WORKER_SECONDS = settings.llm_investigation_interval_seconds  # 30 giây — poll LLM-DFIR job
@@ -147,6 +149,31 @@ async def _ensure_partitions() -> None:
         logger.debug("Heartbeat partition setup skipped (không phải PG partition table)")
 
 
+async def _cleanup_tokens() -> None:
+    """Xóa enroll token đã hết hạn/revoked khỏi DB (trước đây GET /api/tokens
+    tự delete — side-effect trong read endpoint, đã chuyển vào đây)."""
+    from sqlalchemy import delete, or_
+
+    from app.db.models import EnrollToken, TokenStatus
+
+    now = datetime.now(UTC)
+    try:
+        async with db_session.AsyncSessionLocal() as db:
+            await db.execute(
+                delete(EnrollToken).where(
+                    or_(
+                        EnrollToken.expires_at < now,
+                        EnrollToken.status.in_(
+                            [TokenStatus.EXPIRED.value, TokenStatus.REVOKED.value]
+                        ),
+                    )
+                )
+            )
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 — không làm vỡ monitor loop
+        logger.warning("Token cleanup lỗi: %s", exc)
+
+
 async def _scan_alerts() -> None:
     """Quét rule → tìm máy khớp → gọi alert_engine.trigger_alert.
 
@@ -239,6 +266,7 @@ async def monitor_loop() -> None:
     last_alert_check = -ALERT_CHECK_SECONDS
     last_schedule_check = -DFIR_SCHEDULE_SCAN_SECONDS
     last_lost_check = -LOST_SCAN_SECONDS
+    last_token_cleanup = -TOKEN_CLEANUP_SECONDS
     last_velociraptor_check = -VELOCIRAPTOR_SYNC_SECONDS
     last_llm_dfir_check = -LLM_DFIR_WORKER_SECONDS
     while True:
@@ -254,6 +282,9 @@ async def monitor_loop() -> None:
             if now - last_lost_check >= LOST_SCAN_SECONDS:
                 await _sweep_lost()
                 last_lost_check = now
+            if now - last_token_cleanup >= TOKEN_CLEANUP_SECONDS:
+                await _cleanup_tokens()
+                last_token_cleanup = now
             if now - last_velociraptor_check >= VELOCIRAPTOR_SYNC_SECONDS:
                 # Đọc trạng thái enabled t� DB (admin toggle qua portal), không dùng
                 # settings.velociraptor_enabled (env — chỉ default ban đầu).
@@ -326,10 +357,7 @@ async def _scan_dfir_schedules() -> None:
         if not due:
             return
 
-        # Build VelociraptorClient 1 lần (dùng chung cho nhiều schedule)
-        cfg = (
-            await db.execute(sa_select(type(db)._mapper_registry_ if False else object))  # noop
-        ) if False else None
+        # Build VelociraptorClient cho từng schedule
         from app.api.routes.velociraptor import _build_velociraptor_client
 
         for sch in due:
@@ -379,6 +407,15 @@ async def _scan_dfir_schedules() -> None:
                         client_ids = [c.get("client_id") for c in clients if c.get("client_id")]
                         client_count = len(client_ids)
                         if client_count == 0:
+                            # Không `continue` trần — phải đánh dấu lỗi + dời
+                            # next_run_at, nếu không schedule lặp retry mỗi phút
+                            # và để lại DfirHunt treo ở "pending".
+                            dfir.status = "error"
+                            dfir.error = "Không có Velociraptor client nào"
+                            sch.last_status = "error"
+                            sch.last_error = "Không có Velociraptor client nào"
+                            sch.last_run_at = now
+                            sch.next_run_at = now + timedelta(seconds=sch.interval_seconds)
                             continue
                         # Run collect_artifact per client (parallel) — không dùng create_hunt
                         # vì Velociraptor cần artifact definition + org config setup phức tạp
@@ -411,6 +448,10 @@ async def _scan_dfir_schedules() -> None:
                 dfir.error = str(e)
                 sch.last_status = "error"
                 sch.last_error = str(e)
+                # PHẢI cập nhật next_run_at — nếu không schedule vẫn "đến hạn"
+                # → retry mỗi phút + tạo DfirHunt lỗi vô hạn.
+                sch.last_run_at = now
+                sch.next_run_at = now + timedelta(seconds=sch.interval_seconds)
                 logger.exception("Schedule %s ngoại lệ", sch.id)
         await db.commit()
 

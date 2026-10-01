@@ -92,7 +92,7 @@ async def test_tier2_planner_returns_two_structured_triggered_steps() -> None:
             }
 
     class FakeChatModel:
-        def with_structured_output(self, _schema):
+        def with_structured_output(self, _schema, **_kwargs):
             return StructuredInvoker()
 
     now = datetime.now(UTC)

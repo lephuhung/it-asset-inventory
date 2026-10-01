@@ -6,16 +6,18 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Date,
     Float,
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     Numeric,
     String,
     Text,
@@ -188,6 +190,9 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # True = đang dùng mật khẩu mặc định/được cấp → phải đổi mật khẩu ngay sau đăng nhập
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Time-step TOTP cuối cùng được chấp nhận — chống replay mã 2FA
+    # (mã đúng nhưng thuộc counter ≤ giá trị này bị từ chối).
+    totp_last_counter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Telegram bot linking (mỗi user link 1 chat_id với account)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
     telegram_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -399,7 +404,6 @@ class EnrollToken(Base):
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    max_uses: Mapped[int] = mapped_column(Integer, default=1)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=TokenStatus.PENDING.value)
@@ -597,6 +601,41 @@ class FingerprintDrift(Base):
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
 
+class EnrollAttempt(Base):
+    """Yêu cầu enroll bị TỪ CHỐI ở server (token used/expired/revoked/không tồn tại).
+
+    Trước đây enroll fail vì token cũ → 401 im lặng, admin không bao giờ thấy máy
+    "xin vào" và agent retry vô hạn. Server giờ lưu attempt để portal hiển thị
+    hàng đợi duyệt:
+      - Approve → sinh token thay thế cho cùng org (reissue) + trả lại install command.
+      - Reject  → đánh dấu chặn, không sinh token.
+    `machine_uuid` (weighted id) dùng để DEDUPE retry từ cùng 1 máy; nếu trùng
+    fingerprint của 1 máy đã có trong org thì ghi `matched_machine_id` làm gợi ý
+    "đây có thể là máy X đã tồn tại" cho admin.
+    """
+
+    __tablename__ = "enroll_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)  # null khi token lạ
+    token_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("enroll_tokens.id"), nullable=True)
+    token_status: Mapped[str] = mapped_column(String(16), nullable=False)  # unknown | used | expired | revoked
+    token_prefix: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    machine_uuid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)  # weighted id — dedupe retry
+    hostname: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    fingerprint: Mapped[dict] = mapped_column(JSONB, default=dict)
+    matched_machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | approved | rejected
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    org: Mapped["Organization"] = relationship()
+    matched_machine: Mapped["Machine"] = relationship()
+
+
 class ApiKey(Base):
     """API mở cho hệ thống khác (#22, Phase 4) — key theo scope, chỉ lưu hash.
 
@@ -695,6 +734,13 @@ class VelociraptorArtifact(Base):
         JSONB, nullable=False, default=lambda: ["windows"]
     )
     selection_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    # Tier classification for DeepAgent:
+    #   tier=1 — artifact eligible for initial collection (chạy ngay đầu investigation)
+    #   tier=2 — artifact eligible for Tier 2 expansion (chỉ chạy khi có evidence trigger)
+    # Default = 2 để Tier 1 là opt-in rõ ràng (chống promote nhầm).
+    tier: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=2
+    )
     last_push_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # pushed | failed
     last_push_error: Mapped[str | None] = mapped_column(Text, nullable=True)  # safe message only
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -1057,3 +1103,455 @@ class TelegramBotConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.now(UTC), nullable=False
     )
+
+
+class SystemProfileStatus(str, enum.Enum):
+    """Trạng thái hồ sơ cấp độ hệ thống thông tin.
+
+    - `drafted`        — đang soạn thảo (Admin/Super Admin tạo).
+    - `pending_review` — đã trình, chờ Super Admin duyệt.
+    - `approved`       — đã có quyết định phê duyệt.
+    - `implemented`    — đơn vị khai báo đã triển khai hệ thống theo hồ sơ, chờ Super Admin xác nhận.
+    - `fulfilled`      — Super Admin xác nhận đơn vị đã đáp ứng hồ sơ.
+    - `rejected`       — bị từ chối (kèm review_note).
+    """
+
+    DRAFTED = "drafted"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    IMPLEMENTED = "implemented"
+    FULFILLED = "fulfilled"
+    REJECTED = "rejected"
+
+
+class ProfileRequirementStatus(str, enum.Enum):
+    """Trạng thái đáp ứng 1 yêu cầu an toàn trong hồ sơ.
+
+    - `pending`   — chưa làm / chưa trình.
+    - `requested` — đơn vị khai báo hoàn thành, chờ Super Admin thẩm định.
+    - `verified`  — đã thẩm định đạt.
+    - `rejected`  — thẩm định không đạt (kèm review_note).
+    """
+
+    PENDING = "pending"
+    REQUESTED = "requested"
+    VERIFIED = "verified"
+    REJECTED = "rejected"
+
+
+class DeviceKind(str, enum.Enum):
+    """Loại thiết bị trong hồ sơ (nhập tay — agent chỉ thu thập được máy tính)."""
+
+    FIREWALL = "firewall"
+    ROUTER = "router"
+    SWITCH = "switch"
+    SERVER = "server"
+    WORKSTATION = "workstation"
+    STORAGE = "storage"
+    UPS = "ups"
+    OTHER = "other"
+
+
+class ServiceAudience(str, enum.Enum):
+    """Đối tượng sử dụng dịch vụ của hệ thống thông tin."""
+
+    INTERNAL = "internal"      # Nội bộ
+    CITIZENS = "citizens"      # Người dân
+    BUSINESSES = "businesses"  # Doanh nghiệp
+    MIXED = "mixed"            # Kết hợp
+
+
+class SystemProfile(Base):
+    """Hồ sơ cấp độ hệ thống thông tin (cấp 1–3).
+
+    Đơn vị tự xây dựng hồ sơ, trình cơ quan có thẩm quyền ra quyết định xác nhận
+    cấp độ; sau khi approved, đơn vị mua sắm trang thiết bị theo đúng hồ sơ.
+    """
+
+    __tablename__ = "system_profiles"
+    __table_args__ = (
+        UniqueConstraint("org_id", "code", name="uq_system_profiles_org_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Cấp độ hệ thống thông tin theo quy định: 1, 2 hoặc 3
+    level: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default=SystemProfileStatus.DRAFTED.value, nullable=False, index=True
+    )
+    # Thông tin quyết định phê duyệt (điền khi Super Admin approve / Super Admin tạo trực tiếp)
+    decision_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decision_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_agency: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Số văn bản đề nghị thẩm định (đơn vị gửi kèm hồ sơ) + ngày ban hành — tùy chọn
+    document_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    document_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    managed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cán bộ phụ trách (đầu mối SuperAdmin) — FK sang bảng `officers` (toàn cục,
+    # 1 cán bộ có thể phụ trách nhiều hồ sơ). Mỗi hồ sơ tối đa 1 cán bộ; chỉ
+    # Super Admin có quyền tạo/sửa/gỡ officer + gán cho hồ sơ.
+    officer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("officers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    officer: Mapped["Officer | None"] = relationship()
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Code Mermaid của sơ đồ logic — người dùng vẽ ở ngoài (mermaid.live), dán vào để view
+    diagram_mermaid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sơ đồ mô hình vật lý (kết nối thiết bị thực tế)
+    physical_diagram_mermaid: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bố cục sơ đồ React Flow — vị trí node {x, y} do người dùng kéo thả +
+    # danh sách cạnh nối người dùng tự vẽ, dạng {"version": 1, "nodes": {...},
+    # "edges": [{"source": .., "target": ..}]}. edges vắng mặt = dùng chain tự
+    # sinh. Đơn thuần trình bày: không tham gia business rule, không ghi timeline.
+    diagram_layout: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    physical_diagram_layout: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Phạm vi & quy mô hệ thống
+    physical_location: Mapped[str | None] = mapped_column(Text, nullable=True)  # địa điểm lắp đặt thiết bị
+    user_accounts: Mapped[int | None] = mapped_column(Integer, nullable=True)  # số lượng tài khoản
+    data_volume: Mapped[str | None] = mapped_column(Text, nullable=True)  # lượng dữ liệu xử lý (mô tả)
+    service_audience: Mapped[str | None] = mapped_column(
+        String(32), default=ServiceAudience.INTERNAL.value
+    )  # đối tượng sử dụng dịch vụ
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.now(UTC), onupdate=datetime.now(UTC)
+    )
+
+    org: Mapped[Organization] = relationship()
+    devices: Mapped[list[SystemDevice]] = relationship(
+        cascade="all, delete-orphan", order_by="SystemDevice.sort_order",
+        passive_deletes=True, lazy="selectin",
+    )
+    machines: Mapped[list[SystemProfileMachine]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+    requirements: Mapped[list[SystemProfileRequirement]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+    parties: Mapped[list[SystemProfileParty]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+    applications: Mapped[list[SystemProfileApplication]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+    ip_ranges: Mapped[list[SystemProfileIpRange]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+    events: Mapped[list[SystemProfileEvent]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+        order_by="SystemProfileEvent.created_at.desc()",
+    )
+    contacts: Mapped[list[SystemProfileContact]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, lazy="selectin",
+    )
+
+
+class SystemDevice(Base):
+    """Thiết bị khai báo trong hồ sơ (firewall, switch, máy chủ…) — nhập tay.
+
+    Đối tượng phục vụ thống kê và tham chiếu khi vẽ sơ đồ logic; trường `tag`
+    và `device_code` do đơn vị tự đặt. Có thể gắn kèm 1 Machine đã enroll qua
+    `machine_id` (tùy chọn, ví dụ máy chủ thật đang chạy agent).
+    """
+
+    __tablename__ = "system_devices"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    device_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    tag: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    device_type: Mapped[str] = mapped_column(String(32), default=DeviceKind.OTHER.value)
+    ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)  # hãng sản xuất / chủng loại
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)  # vị trí triển khai thực tế
+    purpose: Mapped[str | None] = mapped_column(Text, nullable=True)  # mục đích sử dụng trong hệ thống
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    machine: Mapped[Machine | None] = relationship()
+
+
+class SystemProfileMachine(Base):
+    """Máy tính (Machine đã enroll) thuộc hệ thống — dùng cho sơ đồ + thống kê."""
+
+    __tablename__ = "system_profile_machines"
+
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), primary_key=True
+    )
+    machine_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("machines.id"), primary_key=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+    machine: Mapped[Machine] = relationship()
+
+
+class LevelRequirement(Base):
+    """Yêu cầu đảm bảo an toàn theo cấp độ hệ thống thông tin (catalog).
+
+    Mỗi cấp độ (1–3) có n yêu cầu; đơn vị phải đáp ứng ĐỦ n yêu cầu của cấp độ
+    hồ sơ đã chọn mới được coi là đảm bảo an toàn theo cấp độ đó.
+    Super Admin quản trị catalog (thêm/sửa/tắt bật); seed sẵn trong migration.
+    """
+
+    __tablename__ = "level_requirements"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    level: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class SystemProfileRequirement(Base):
+    """Trạng thái đáp ứng từng yêu cầu trong 1 hồ sơ — kèm quy trình thẩm định.
+
+    Đơn vị khai báo hoàn thành (evidence) → `requested`; Super Admin thẩm định
+    → `verified` / `rejected`. Hồ sơ chỉ đáp ứng cấp độ khi ĐỦ n yêu cầu `verified`.
+    Tự sinh khi tạo hồ sơ hoặc khi đổi cấp độ (theo catalog của cấp độ mới).
+    """
+
+    __tablename__ = "system_profile_requirements"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "requirement_id", name="uq_profile_requirement"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    requirement_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("level_requirements.id"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), default=ProfileRequirementStatus.PENDING.value)
+    # Mô tả cách đơn vị đáp ứng yêu cầu (bằng chứng, tài liệu…)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    requirement: Mapped[LevelRequirement] = relationship(lazy="selectin")
+
+
+class SystemProfileParty(Base):
+    """Chủ quản / Đơn vị vận hành của hồ sơ (role: owner | operator).
+
+    Ghi nhận thông tin pháp lý: văn bản quy định chức năng nhiệm vụ, người đại
+    diện pháp luật, địa chỉ và thông tin liên hệ.
+    """
+
+    __tablename__ = "system_profile_parties"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "role", name="uq_system_profile_party_role"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(32), default="owner")  # owner | operator
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mandate_document: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legal_representative: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    representative_title: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class SystemProfileApplication(Base):
+    """Ứng dụng / dịch vụ do hệ thống cung cấp.
+
+    `machine_id` liên kết máy chủ đã enroll (lấy hostname/OS tự động); nếu máy
+    chưa được agent quản lý thì dùng `server_name` + `os_name` nhập tay.
+    """
+
+    __tablename__ = "system_profile_applications"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    server_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    os_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str | None] = mapped_column(Text, nullable=True)  # vai trò / nhiệm vụ dịch vụ
+    url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    machine: Mapped[Machine | None] = relationship()
+
+
+class SystemProfileIpRange(Base):
+    """Quy hoạch vùng mạng và dải IP (nội bộ / biên / DMZ, private / public)."""
+
+    __tablename__ = "system_profile_ip_ranges"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    zone: Mapped[str] = mapped_column(String(128), nullable=False)  # tên vùng: nội bộ, DMZ, biên mạng…
+    zone_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cidr: Mapped[str] = mapped_column(String(64), nullable=False)
+    ip_kind: Mapped[str] = mapped_column(String(16), default="private")  # private | public
+    gateway: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SystemProfileEvent(Base):
+    """Sự kiện timeline của hồ sơ (append-only).
+
+    Ghi tại mọi mutation của hồ sơ để quản trị theo dõi quá trình hoàn thiện:
+    tạo, trình duyệt, phê duyệt, thiết bị, máy tính, thẩm định yêu cầu ATTT,
+    khai báo triển khai, xác nhận đáp ứng… `message` là mô tả tiếng Việt đã
+    render sẵn để hiển thị trực tiếp trên timeline.
+    """
+
+    __tablename__ = "system_profile_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), nullable=False, index=True
+    )
+    event: Mapped[str] = mapped_column(String(64), nullable=False)  # mã sự kiện, vd "approved"
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # chụp lại full_name lúc ghi
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class ItContact(Base):
+    """Danh bạ chuyên trách CNTT / tổ chức vận hành theo đơn vị.
+
+    `kind=person` — cá nhân chuyên trách CNTT (họ tên, chức vụ, liên hệ);
+    `kind=org` — tổ chức được giao vận hành (tên tổ chức, đầu mối liên hệ).
+    Được gắn vào hồ sơ cấp độ qua `system_profile_contacts` (1 hồ sơ gắn được
+    nhiều contact, 1 contact dùng cho nhiều hồ sơ).
+    """
+
+    __tablename__ = "it_contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="person")  # person | org
+    name: Mapped[str] = mapped_column(String(255), nullable=False)  # họ tên cá nhân / tên tổ chức
+    position: Mapped[str | None] = mapped_column(String(255), nullable=True)  # chức vụ / vai trò vận hành
+    contact_person: Mapped[str | None] = mapped_column(String(255), nullable=True)  # đầu mối liên hệ (khi kind=org)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+    org: Mapped[Organization] = relationship()
+
+
+class Officer(Base):
+    """Cán bộ phụ trách (đầu mối SuperAdmin) — toàn cục, không gắn org.
+
+    1 cán bộ có thể được chỉ định cho nhiều hồ sơ cấp độ (qua FK
+    `system_profiles.officer_id`). Mỗi hồ sơ tối đa 1 cán bộ. Chỉ Super Admin
+    CRUD — đại diện tổ chức bên ngoài hệ thống (Sở TT&TT, đơn vị tư vấn...).
+    """
+
+    __tablename__ = "officers"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+    )
+
+
+class SystemProfileContact(Base):
+    """Liên kết hồ sơ cấp độ ↔ chuyên trách CNTT / tổ chức vận hành.
+
+    Ví dụ: hồ sơ "Mạng LAN" gắn chuyên trách A; hồ sơ "Website B" gắn tổ
+    chức vận hành B. Contact phải cùng đơn vị với hồ sơ.
+    """
+
+    __tablename__ = "system_profile_contacts"
+
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("system_profiles.id"), primary_key=True
+    )
+    contact_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("it_contacts.id"), primary_key=True
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)  # vai trò trong hồ sơ
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+    contact: Mapped[ItContact] = relationship()
+
+
+class DeviceType(Base):
+    """Catalog loại thiết bị — Super Admin quản trị động (thêm/sửa/tắt bật).
+
+    `icon` là emoji hiển thị kèm node trên sơ đồ Mermaid (vd 🛡️ cho firewall).
+    Seed 8 loại chuẩn trong migration; `system_devices.device_type` tham chiếu
+    `DeviceType.code` (String, không FK — giữ linh hoạt với dữ liệu cũ).
+    """
+
+    __tablename__ = "device_types"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    icon: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+class RefreshToken(Base):
+    """Refresh token đã phát hành — chỉ lưu SHA-256 hash của token.
+
+    Rotation + reuse detection theo "family": mọi token sinh ra từ cùng 1
+    lần login chia sẻ `family_id`. Khi /refresh được gọi, token cũ bị
+    `revoked_at` và token mới kế thừa family. Nếu 1 token đã revoke lại được
+    trình lên → có replay → thu hồi toàn bộ family (force re-login).
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    family_id: Mapped[uuid.UUID] = mapped_column(nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)  # id token mới sau rotate
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))

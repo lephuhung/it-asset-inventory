@@ -477,7 +477,7 @@ export function VelociraptorTop10Section({
                       className="font-medium text-brand-600 hover:underline"
                       onClick={() => void startCollect()}
                     >
-                      Bấm "Thu thập dữ liệu còn thiếu"
+                      Bấm &quot;Thu thập dữ liệu còn thiếu&quot;
                     </button>
                   ) : (
                     "Cấu hình Velociraptor ở /dfir/settings để thu thập."

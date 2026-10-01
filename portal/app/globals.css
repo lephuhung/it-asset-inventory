@@ -337,3 +337,9 @@ body {
   padding: 0.3em 0.6em;
   text-align: left;
 }
+
+/* Sơ đồ mạng (React Flow): nâng node đang hover lên trên để tooltip không bị
+   node lân cận che */
+.react-flow__node:hover {
+  z-index: 50 !important;
+}

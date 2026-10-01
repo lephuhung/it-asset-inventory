@@ -285,7 +285,7 @@ export default function MachinesPage() {
         </div>
         {user?.role === "super_admin" && (orgs?.length ?? 0) === 0 && (
           <p className="border-t border-slate-100 px-4 py-2 text-xs text-slate-400">
-            Chưa có tổ chức nào — thêm UBND cấp xã / Sở ban ngành tại mục "Cây tổ chức".
+            Chưa có tổ chức nào — thêm UBND cấp xã / Sở ban ngành tại mục &quot;Cây tổ chức&quot;.
           </p>
         )}
       </Card>

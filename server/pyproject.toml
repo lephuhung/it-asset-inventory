@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml>=6.0.0",  # parse Velociraptor api_client.yaml
     "grpcio>=1.66.0",
     "pyvelociraptor>=0.1.11",
+    "pyhanko>=0.26",
 ]
 
 [project.optional-dependencies]

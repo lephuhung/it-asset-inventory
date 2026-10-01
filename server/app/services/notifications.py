@@ -28,13 +28,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.db.models import (
     ApiKey,
     Notification,
     NotificationDelivery,
     User,
 )
-from app.services.realtime import _redis
 from app.services.telegram_runtime import get_bot_config
 
 logger = logging.getLogger("notifications")
@@ -178,7 +178,7 @@ async def _publish_realtime(notifications: list[Notification]) -> None:
     if not notifications:
         return
     try:
-        r = _redis()
+        r = get_redis()
         # Group theo recipient_id để gộp message
         by_user: dict[str, list[dict]] = {}
         for n in notifications:
@@ -201,7 +201,6 @@ async def _publish_realtime(notifications: list[Notification]) -> None:
                 ensure_ascii=False,
             )
             await r.publish(_channel(uid), payload)
-        await r.aclose()
     except Exception as e:  # noqa: BLE001
         logger.debug("Realtime push failed (Redis?): %s", e)
 

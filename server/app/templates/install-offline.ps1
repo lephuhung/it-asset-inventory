@@ -13,6 +13,7 @@
 param(
     [Parameter(Mandatory=$false)] [string]$Token,
     [Parameter(Mandatory=$false)] [string]$Endpoints,
+    [Parameter(Mandatory=$false)] [string]$OrgId,
     [Parameter(Mandatory=$false)] [string]$MsiDir = (Split-Path -Parent $MyInvocation.MyCommand.Definition),
     [switch]$SkipConfirm
 )
@@ -51,6 +52,7 @@ if (Test-Path -LiteralPath $cfgPath) {
         $cfgJson = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
         if (-not $Token -and $cfgJson.token) { $Token = $cfgJson.token }
         if (-not $Endpoints -and $cfgJson.endpoints) { $Endpoints = $cfgJson.endpoints }
+        if (-not $OrgId -and $cfgJson.org_id) { $OrgId = $cfgJson.org_id }
         Write-Host "[1/5] ✓ Đã nạp cấu hình tự động từ $cfgName" -ForegroundColor Green
     } catch {
         Write-Host "[!] Không đọc được file $cfgName — sử dụng chế độ mặc định." -ForegroundColor Yellow
@@ -111,8 +113,8 @@ $exportArgs = @("--export-bundle", "`"$zipOut`"")
 if (Test-Path -LiteralPath $pubKeyPath) {
     $exportArgs += @("--server-key", "`"$pubKeyPath`"")
 }
-if ($Token) {
-    $exportArgs += @("--org-id", "`"$Token`"")
+if ($OrgId) {
+    $exportArgs += @("--org-id", "`"$OrgId`"")
 }
 
 $exportProc = Start-Process -FilePath $agentInstalledPath -ArgumentList $exportArgs -Wait -PassThru -NoNewWindow

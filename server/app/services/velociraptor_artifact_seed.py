@@ -28,6 +28,7 @@ class SeedArtifact:
     supported_platforms: list[str]
     selection_priority: int
     enabled: bool
+    tier: int = 2  # 1 = Tier 1 (initial collection), 2 = Tier 2 (post-Tier-1 expansion)
 
 
 def load_bundled_artifacts(bundle_dir: Path = _BUNDLE_DIR) -> list[SeedArtifact]:
@@ -68,6 +69,11 @@ def load_bundled_artifacts(bundle_dir: Path = _BUNDLE_DIR) -> list[SeedArtifact]
         enabled = entry.get("enabled")
         if not isinstance(enabled, bool):
             raise TypeError(f"Invalid enabled flag for {spec.name}")
+        tier = entry.get("tier", 2)
+        if tier not in (1, 2):
+            raise ValueError(
+                f"Invalid tier for {spec.name}: must be 1 or 2, got {tier!r}"
+            )
         artifacts.append(
             SeedArtifact(
                 spec=spec,
@@ -75,6 +81,7 @@ def load_bundled_artifacts(bundle_dir: Path = _BUNDLE_DIR) -> list[SeedArtifact]
                 supported_platforms=list(dict.fromkeys(platforms)),
                 selection_priority=priority,
                 enabled=enabled,
+                tier=tier,
             )
         )
     return sorted(artifacts, key=lambda item: item.spec.name)
@@ -100,6 +107,7 @@ async def seed_velociraptor_artifacts(
                 enabled=item.enabled,
                 supported_platforms=item.supported_platforms,
                 selection_priority=item.selection_priority,
+                tier=item.tier,
             )
             db.add(row)
         else:
@@ -109,6 +117,7 @@ async def seed_velociraptor_artifacts(
             row.enabled = item.enabled
             row.supported_platforms = item.supported_platforms
             row.selection_priority = item.selection_priority
+            row.tier = item.tier
 
         # Nếu artifact đã nạp thành công với cùng sha256 và đang có trên server -> bỏ qua re-push
         if row.last_push_status == "pushed" and row.sha256 == item.spec.sha256:

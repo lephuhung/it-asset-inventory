@@ -17,6 +17,7 @@ import {
   Input,
   PageHeader,
   Spinner,
+  Textarea,
 } from "@/components/ui";
 import type { VelociraptorConfig, VelociraptorTestResult } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/format";
@@ -290,22 +291,17 @@ export default function VelociraptorSettingsPage() {
               </p>
             </div>
 
-            {/* Allowlist — dùng div thay Field để label có số count động */}
-            <div className="block">
-              <div className="mb-1.5 flex items-center gap-2 text-[13px] font-medium text-slate-700">
-                <span>Allowlist artifact</span>
-                <span className="text-xs font-normal text-slate-500">({allowlistCount} artifact)</span>
-              </div>
-              <textarea
+            <Field
+              label="Allowlist artifact"
+              hint={`${allowlistCount} artifact — chỉ những artifact trong danh sách này admin mới được phép chạy. Mỗi dòng 1 artifact (Velociraptor artifact name).`}
+            >
+              <Textarea
                 value={allowlistText}
                 onChange={(e) => setAllowlistText(e.target.value)}
                 rows={10}
-                className="w-full rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs leading-relaxed focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                className="bg-slate-50 font-mono text-xs leading-relaxed"
                 placeholder={"Generic.Client.Info\nWindows.System.Services\nWindows.Network.Netstat"}
               />
-              <p className="mt-1 text-xs leading-snug text-slate-400">
-                Chỉ những artifact trong danh sách này admin mới được phép chạy. Mỗi dòng 1 artifact (Velociraptor artifact name).
-              </p>
               <button
                 type="button"
                 onClick={() => setAllowlistText(data?.defaults_allowlist.join("\n") ?? "")}
@@ -313,7 +309,7 @@ export default function VelociraptorSettingsPage() {
               >
                 Khôi phục danh sách mặc định (env)
               </button>
-            </div>
+            </Field>
 
             <div className="flex flex-col gap-2 pt-1">
               <p className="text-[11px] text-slate-500">

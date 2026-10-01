@@ -290,17 +290,28 @@ async def external_send_notification(
     source = request.headers.get("X-Source", "external")
     idem = request.headers.get("X-Idempotency-Key") or f"{source}-{body.entity_id or ''}-{secrets.token_hex(4)}"
 
+    # Key có org_id → recipients bị giới hạn trong org đó (kể cả broadcast);
+    # key org_id=None (global) mới được gửi toàn hệ thống.
+    key_org = key.org_id
+
     # Resolve recipients
     rp = body.recipients or {}
     rp_type = rp.get("type", "role")
     recipient_ids: list[uuid.UUID]
     if rp_type == "user":
-        uids = rp.get("user_ids") or []
-        recipient_ids = [uuid.UUID(u) for u in uids]
+        uids = [uuid.UUID(u) for u in (rp.get("user_ids") or [])]
+        if key_org is not None:
+            recipient_ids = list(
+                (await db.execute(
+                    select(User.id).where(User.id.in_(uids), User.org_id == key_org)
+                )).scalars().all()
+            )
+        else:
+            recipient_ids = uids
     elif rp_type == "role":
-        recipient_ids = await notif_svc.resolve_recipients(db, role=rp.get("role"))
+        recipient_ids = await notif_svc.resolve_recipients(db, role=rp.get("role"), org_id=key_org)
     elif rp_type == "broadcast":
-        recipient_ids = await notif_svc.resolve_recipients(db, broadcast=True)
+        recipient_ids = await notif_svc.resolve_recipients(db, broadcast=True, org_id=key_org)
     else:
         raise HTTPException(422, f"recipients.type không hợp lệ: {rp_type}")
 

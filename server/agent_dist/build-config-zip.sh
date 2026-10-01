@@ -53,9 +53,10 @@ if ! grep -q 'server_urls:' "$WORK_DIR/client.config.yaml"; then
 fi
 echo "[OK] client.config.yaml co server_urls"
 
-# Tạo ZIP (deflate)
+# Tạo ZIP (deflate) — phẳng, KHÔNG bọc trong thư mục cha, để script cài
+# tìm client.config.yaml ở root (tương thích cả quét top-level lẫn đệ quy).
 rm -f "$OUT_ZIP"
-zip -r "$OUT_ZIP" "$(basename "$WORK_DIR")" >/dev/null
+(cd "$WORK_DIR" && zip -r "$OUT_ZIP" .) >/dev/null
 
 size=$(du -h "$OUT_ZIP" | cut -f1)
 echo ""

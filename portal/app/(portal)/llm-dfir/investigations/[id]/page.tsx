@@ -3,19 +3,16 @@
 import { use, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertOctagon,
   ArrowLeft,
-  Brain,
-  CheckCircle2,
-  Clock,
-  Info,
   Loader2,
-  RefreshCcw,
-  ShieldAlert,
   Trash2,
-  XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import {
+  INVESTIGATION_SEVERITY_META as SEVERITY_META,
+  INVESTIGATION_STATUS_META as STATUS_META,
+  statusLabel,
+} from "@/lib/investigation-meta";
 import {
   Badge,
   Button,
@@ -26,31 +23,16 @@ import {
 } from "@/components/ui";
 import type {
   DfirInvestigation,
-  DfirInvestigationMessage,
   InvestigationSeverity,
   InvestigationStatus,
 } from "@/lib/types";
 import { formatDateTime } from "@/lib/format";
+import { safeInternalPath } from "@/lib/validators";
 import { InvestigationMarkdown } from "@/components/investigation-markdown";
-import { InvestigationChatPanel } from "@/components/investigation-chat-panel";
+import { InvestigationFindings } from "@/components/investigation-findings";
 
-/* Badge pill tinted theo Design.md — màu đã remap trong globals.css */
-const STATUS_META: Record<InvestigationStatus, { label: string; badge: string; icon: any }> = {
-  pending: { label: "Chờ FIFO", badge: "bg-slate-100 text-slate-700 ring-slate-600/20", icon: Clock },
-  running: { label: "Đang khởi động", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Loader2 },
-  collecting: { label: "Đang thu thập dữ liệu", badge: "bg-sky-50 text-sky-700 ring-sky-600/20", icon: RefreshCcw },
-  analyzing: { label: "AI đang phân tích", badge: "bg-violet-100 text-violet-700 ring-violet-600/20", icon: Brain },
-  completed: { label: "Hoàn thành", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-  failed: { label: "Lỗi", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: XCircle },
-};
-
-const SEVERITY_META: Record<InvestigationSeverity, { label: string; badge: string; icon: any }> = {
-  critical: { label: "Critical", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: AlertOctagon },
-  high: { label: "High", badge: "bg-amber-100 text-amber-700 ring-amber-600/20", icon: ShieldAlert },
-  medium: { label: "Medium", badge: "bg-amber-50 text-amber-800 ring-amber-600/20", icon: ShieldAlert },
-  low: { label: "Low", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Info },
-  info: { label: "Info", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-};
+/* Badge pill tinted theo Design.md — màu đã remap trong globals.css.
+   STATUS_META / SEVERITY_META dùng bản chuẩn lib/investigation-meta. */
 
 export default function InvestigationDetailPage({
   params,
@@ -60,10 +42,10 @@ export default function InvestigationDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Lưu URL trang trước (từ máy hoặc từ stats/list) để "Quay lại" thông minh
-  const fromPath = searchParams.get("from");
+  // Lưu URL trang trước (từ máy hoặc từ stats/list) để "Quay lại" thông minh.
+  // Chỉ nhận path nội bộ — chặn open-redirect qua `?from=//evil.com`
+  const fromPath = safeInternalPath(searchParams.get("from"), null);
   const [inv, setInv] = useState<DfirInvestigation | null>(null);
-  const [messages, setMessages] = useState<DfirInvestigationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -74,12 +56,6 @@ export default function InvestigationDetailPage({
       const data = await api.get<DfirInvestigation>(`/admin/llm-dfir/investigations/${id}`);
       setInv(data);
       setNotFound(false);
-      if (data.status === "completed" || data.status === "failed") {
-        const msgs = await api.get<DfirInvestigationMessage[]>(
-          `/admin/llm-dfir/investigations/${id}/messages`,
-        );
-        setMessages(msgs);
-      }
       setError(null);
     } catch (e: any) {
       // 404: investigation không tồn tại — hiển thị trang not-found thay vì error
@@ -105,42 +81,6 @@ export default function InvestigationDetailPage({
     return () => clearInterval(t);
   }, [inv, load]);
 
-  /** Gửi chat qua panel — parent chịu trách nhiệm optimistic add + endpoint.
-   *  Panel giữ `chatInput`/`chatting` local; panel đã clear input trước khi gọi
-   *  callback nên ta chỉ push 2 message tạm vào state messages. */
-  const sendChat = async (msg: string) => {
-    if (!msg || !inv) return;
-    // Optimistic add user message
-    setMessages((m) => [
-      ...m,
-      {
-        id: `tmp-${Date.now()}`,
-        role: "user",
-        content: msg,
-        tokens: null,
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    try {
-      const res = await api.post<{ response: string; model: string }>(
-        `/admin/llm-dfir/investigations/${id}/chat`,
-        { message: msg },
-      );
-      setMessages((m) => [
-        ...m,
-        {
-          id: `tmp-${Date.now()}-r`,
-          role: "assistant",
-          content: res.response,
-          tokens: null,
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Chat lỗi");
-    }
-  };
-
   const onDelete = async () => {
     setDeleting(true);
     try {
@@ -153,7 +93,7 @@ export default function InvestigationDetailPage({
 
   /** Nút "Quay lại" — ưu tiên URL `?from=` nếu có, fallback về list. */
   const goBack = () => {
-    if (fromPath && fromPath.startsWith("/")) {
+    if (fromPath) {
       router.push(fromPath);
     } else {
       // Fallback: dùng browser back nếu history tồn tại, ngược lại về list
@@ -240,7 +180,7 @@ export default function InvestigationDetailPage({
             </h2>
             <Badge className={statusInfo.badge}>
               <StatusIcon className={`size-3.5 ${isActive ? "animate-spin" : ""}`} />
-              {statusInfo.label}
+              {statusLabel(inv.status, true)}
             </Badge>
             {sevInfo && SevIcon && (
               <Badge className={sevInfo.badge}>
@@ -300,8 +240,55 @@ export default function InvestigationDetailPage({
           )}
         </div>
       </Card>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card title="Báo cáo" bodyClass="flex flex-col min-h-0" className="min-h-[400px] max-h-[600px] flex flex-col">
+      {inv.findings && inv.findings.length > 0 ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card
+            title="Báo cáo"
+            className="lg:col-span-2"
+            bodyClass="flex flex-col min-h-0"
+          >
+            <div className="lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:pr-2">
+              {inv.status === "pending" && (
+                <p className="text-sm text-slate-500">⏳ Đang chờ trong hàng đợi FIFO…</p>
+              )}
+              {inv.status === "running" && (
+                <p className="text-sm text-blue-700">🔄 Đang gọi Velociraptor thu thập dữ liệu…</p>
+              )}
+              {inv.status === "collecting" && (
+                <p className="text-sm text-sky-700">📥 Đang thu thập dữ liệu từ endpoint…</p>
+              )}
+              {inv.status === "analyzing" && (
+                <div className="flex items-center gap-2 text-sm text-violet-700">
+                  <Loader2 className="size-4 animate-spin" />
+                  AI đang phân tích log (có thể mất 30-60 giây)…
+                </div>
+              )}
+              {inv.status === "failed" && (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-rose-700">❌ Điều tra thất bại</div>
+                  {inv.error && (
+                    <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-rose-200 bg-rose-50 p-3 font-mono text-xs leading-relaxed text-rose-700">
+                      {inv.error}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {inv.status === "completed" && inv.report_markdown && (
+                <InvestigationMarkdown content={inv.report_markdown} />
+              )}
+            </div>
+          </Card>
+          <Card
+            title={`Phát hiện (${inv.findings.length})`}
+            subtitle="Đối chiếu chính sách doanh nghiệp trước khi hành động."
+            className="lg:sticky lg:top-6 lg:self-start"
+            bodyClass="lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:pr-2"
+          >
+            <InvestigationFindings findings={inv.findings as any} />
+          </Card>
+        </div>
+      ) : (
+        <Card title="Báo cáo">
           {inv.status === "pending" && (
             <p className="text-sm text-slate-500">⏳ Đang chờ trong hàng đợi FIFO…</p>
           )}
@@ -328,26 +315,16 @@ export default function InvestigationDetailPage({
             </div>
           )}
           {inv.status === "completed" && inv.report_markdown && (
-            <div className="flex-1 overflow-y-auto rounded-md border border-slate-200 p-3">
-              <InvestigationMarkdown content={inv.report_markdown} />
-            </div>
+            <InvestigationMarkdown content={inv.report_markdown} />
           )}
         </Card>
-
-        {/* Chat panel — input state local trong component con */}
-        <InvestigationChatPanel
-          investigationId={id}
-          status={inv.status}
-          messages={messages}
-          onSend={sendChat}
-        />
-      </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}
         onClose={() => setConfirmDelete(false)}
         title="Xoá cuộc điều tra?"
-        message="Báo cáo và toàn bộ lịch sử chat sẽ bị xoá vĩnh viễn. Không thể hoàn tác."
+        message="Báo cáo điều tra sẽ bị xoá vĩnh viễn. Không thể hoàn tác."
         confirmLabel="Xoá"
         danger
         loading={deleting}

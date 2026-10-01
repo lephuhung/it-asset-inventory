@@ -42,6 +42,66 @@ Write-Host ''
 Write-Host 'Nếu bạn không đồng ý với việc thu thập dữ liệu, hãy đóng cửa sổ này.' -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 
+# 2b. Máy đã cài agent? → chỉ chạy MSI khi server có phiên bản mới hơn (nâng cấp
+#     qua MajorUpgrade giữ nguyên enrollment). Cùng phiên bản → MERGE config mới
+#     (token + endpoints = intent mới nhất của lệnh cài này) + restart service —
+#     KHÔNG thoát sớm: config LUÔN được nạp lại mỗi lần chạy lệnh cài.
+$productCode = $null
+$installedVersion = $null
+foreach ($root in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*') {
+    $item = Get-ItemProperty $root -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like '*OrgInventory*' -and $_.PSChildName -match '^\{[0-9A-Fa-f\-]+\}$' } |
+        Select-Object -First 1
+    if ($item) {
+        $productCode = $item.PSChildName
+        $installedVersion = $item.DisplayVersion
+        break
+    }
+}
+if ($productCode) {
+    $serverVersion = $null
+    try {
+        $manifest = Invoke-RestMethod -Uri "$baseUrl/download/agent-version" -UseBasicParsing -TimeoutSec 30
+        $serverVersion = $manifest.msi_version
+    } catch { }
+    $needsUpgrade = $false
+    if ($serverVersion -and $installedVersion) {
+        try { $needsUpgrade = ([version]$serverVersion -gt [version]$installedVersion) } catch { $needsUpgrade = $false }
+    }
+    if (-not $needsUpgrade) {
+        Write-Host "Agent đã cài$(if ($installedVersion) { " (v$installedVersion)" }) và không có phiên bản mới hơn — MERGE config mới (giữ identity)." -ForegroundColor Green
+
+        # Contract chung (giống install.sh Linux / install-both.ps1):
+        #   - token mới LUÔN nạp (config.json + registry) — intent mới nhất của
+        #     admin; chỉ bị tiêu thụ khi agent thực sự enroll/re-enroll.
+        #   - endpoints LUÔN update (xử lý cả trường hợp đổi IP/URL backend).
+        #   - identity (enrolled/machineId/clientCertThumbprint) GIỮ NGUYÊN.
+        $cfgPath = "$env:ProgramData\OrgInventory\config.json"
+        $cfgObj = $null
+        if (Test-Path $cfgPath) { try { $cfgObj = Get-Content $cfgPath -Raw | ConvertFrom-Json } catch { } }
+        $cfgDict = [ordered]@{}
+        if ($cfgObj) { foreach ($p in $cfgObj.PSObject.Properties) { $cfgDict[$p.Name] = $p.Value } }
+        $cfgDict["endpoints"] = @($agentServerUrl)
+        $cfgDict["token"] = $token
+        $cfgDir = Split-Path $cfgPath
+        if (-not (Test-Path $cfgDir)) { New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null }
+        $cfgDict | ConvertTo-Json -Depth 5 | Set-Content -Path $cfgPath -Encoding UTF8 -Force
+
+        # Registry bootstrap — agent overlay giá trị này lên config mỗi lần load,
+        # nên phải luôn phản ánh intent mới nhất của lệnh cài.
+        New-Item -Path "HKLM:\SOFTWARE\OrgInventory" -Force | Out-Null
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "EnrollToken" -Value $token
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\OrgInventory" -Name "Endpoints" -Value $agentServerUrl
+        Write-Host "  Đã nạp token + endpoints mới (identity giữ nguyên — không re-enroll)." -ForegroundColor Gray
+
+        Restart-Service -Name "OrgInventoryAgent" -Force -ErrorAction SilentlyContinue
+        Write-Host "  Re-enroll (rotate identity): chạy install-both.ps1 với -Reenroll." -ForegroundColor Gray
+        exit 0
+    }
+    Write-Host "Đang nâng cấp: v$installedVersion -> v$serverVersion (giữ nguyên enrollment) ..." -ForegroundColor Cyan
+}
+
 # 3. Tải MSI
 Write-Host "[1/4] Đang tải agent từ $msiUrl ..." -ForegroundColor Cyan
 try {
@@ -52,8 +112,26 @@ try {
     exit 1
 }
 
-# 4. Verify SHA256 + chữ ký Authenticode
-Write-Host '[2/4] Xác thực chữ ký số ...' -ForegroundColor Cyan
+# 4. Verify SHA256 (file .sha256 do server cung cấp cạnh MSI)
+Write-Host '[2/4] Xác thực file (SHA256 + chữ ký số) ...' -ForegroundColor Cyan
+try {
+    # .Content có thể là Byte[] (GitHub Releases trả application/octet-stream)
+    # → decode UTF8 trước khi Trim — tránh "Byte does not contain a method Trim".
+    $expectedHash = (Invoke-WebRequest -Uri "$baseUrl/download/agent.msi.sha256" -UseBasicParsing -TimeoutSec 30).Content
+    if ($expectedHash -is [byte[]]) { $expectedHash = [Text.Encoding]::UTF8.GetString($expectedHash) }
+    $expectedHash = "$expectedHash".Trim().Split()[0]
+    $actualHash = (Get-FileHash -Path $msiPath -Algorithm SHA256).Hash.ToLower()
+    if ($expectedHash.ToLower() -ne $actualHash) {
+        Write-Host "[LỖI] SHA256 không khớp (server: $expectedHash, file: $actualHash). Đã dừng cài đặt." -ForegroundColor Red
+        Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Write-Host '      ✓ SHA256 khớp' -ForegroundColor Green
+} catch {
+    Write-Host '      ⚠ Không verify được SHA256 (thiếu agent.msi.sha256 trên server) — tiếp tục.' -ForegroundColor Yellow
+}
+
+# 5. Verify chữ ký Authenticode
 $sig = Get-AuthenticodeSignature -FilePath $msiPath
 # MSI chưa ký chỉ được phép cài khi admin chủ động set ORGINV_ALLOW_UNSIGNED=1 (test).
 # Mặc định (không set) vẫn BẮT BUỘC chữ ký Authenticode hợp lệ.
@@ -69,7 +147,7 @@ if ($sig.Status -eq 'Valid') {
     Write-Host "      ⚠ MSI KHÔNG ký Authenticode (Status: $($sig.Status)) — bỏ qua vì ORGINV_ALLOW_UNSIGNED=1 (CHỈ DÙNG TEST)" -ForegroundColor Yellow
 }
 
-# 5. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
+# 6. Cài đặt silent — MSI nhận TOKEN và ENDPOINTS qua property (agent tự enroll sau khi cài)
 Write-Host '[3/4] Cài đặt agent (silent) ...' -ForegroundColor Cyan
 $install = Start-Process msiexec.exe -ArgumentList @(
     '/i', "`"$msiPath`"", '/qn', '/norestart',
@@ -83,7 +161,7 @@ if ($install.ExitCode -ne 0) {
     exit 1
 }
 
-# 6. Hoàn tất
+# 7. Hoàn tất
 Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
 try { Remove-MpPreference -ExclusionPath $msiPath -ErrorAction SilentlyContinue } catch { }
 Write-Host '[4/4] Hoàn tất.' -ForegroundColor Cyan

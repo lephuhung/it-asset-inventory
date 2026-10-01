@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_client_machine_id
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
+from app.core.redis_client import get_redis
 from app.db.models import Heartbeat, Machine, MachineStatus
 from app.db.session import get_db
 from app.schemas import HeartbeatRequest, HeartbeatResponse
@@ -42,7 +43,13 @@ async def heartbeat(
     now = datetime.now(UTC)
     was_online = machine.status == MachineStatus.ONLINE.value
     machine.last_seen_at = now
-    machine.status = MachineStatus.ONLINE.value
+    if machine.status == MachineStatus.DECOMMISSIONED.value:
+        # Máy đã bị admin decline/thanh lý — ghi nhận last_seen (để admin thấy máy
+        # vẫn bật) nhưng KHÔNG tự bật lại online. Vẫn nhận heartbeat, không nhận
+        # inventory (xem /api/inventory).
+        pass
+    else:
+        machine.status = MachineStatus.ONLINE.value
 
     hb = Heartbeat(
         machine_id=machine.id,
@@ -58,9 +65,7 @@ async def heartbeat(
     logger = logging.getLogger("heartbeat")
     rescan_requested = False
     try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        r = get_redis()
         await r.set(
             f"machine:online:{machine.id}", "1", ex=settings.effective_online_ttl_seconds
         )
@@ -68,14 +73,13 @@ async def heartbeat(
         if await r.get(f"machine:rescan:{machine.id}"):
             rescan_requested = True
             await r.delete(f"machine:rescan:{machine.id}")
-        await r.aclose()
     except Exception:  # noqa: BLE001
         logger.debug("Redis chưa khả dụng — dựa vào DB cho online status")
 
     await db.commit()
 
     # Publish sự kiện realtime khi máy từ trạng thái khác sang ONLINE (tránh spam)
-    if not was_online:
+    if not was_online and machine.status == MachineStatus.ONLINE.value:
         from app.services.realtime import publish_machine_event
 
         await publish_machine_event(machine.id, MachineStatus.ONLINE.value, machine.hostname)

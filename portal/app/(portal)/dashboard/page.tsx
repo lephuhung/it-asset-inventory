@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Briefcase, ChevronRight, Ghost, HardDriveDownload, Hourglass, Monitor, Timer, Ticket, User, Wifi, WifiOff, XCircle } from "lucide-react";
 import { api } from "@/lib/api";
-import type { MachineEvent, MachineListItem, StatsOverview } from "@/lib/types";
+import type { MachineEvent, MachineListItem, StatsOverview, SystemProfileStats } from "@/lib/types";
 import { useRealtimeEvents, useRealtimeStatus } from "@/components/realtime-context";
 import {
   Badge,
@@ -24,6 +24,17 @@ import {
   TABLE_WRAP,
 } from "@/components/ui";
 import { MACHINE_STATUS_META, timeAgo } from "@/lib/format";
+import { LevelBadge, StatusBadge } from "@/components/system-profile-badges";
+import type { SystemProfileStatus } from "@/lib/types";
+
+/** 5 trạng thái chính hiển thị thống kê hồ sơ trên dashboard. */
+const PROFILE_STATUS_CARDS: Array<[SystemProfileStatus, string]> = [
+  ["drafted", "Nháp"],
+  ["pending_review", "Chờ duyệt"],
+  ["approved", "Đã phê duyệt"],
+  ["implemented", "Đã khai báo triển khai"],
+  ["fulfilled", "Đáp ứng hồ sơ"],
+];
 
 const EVENT_ICON: Record<string, string> = {
   online: "bg-emerald-500",
@@ -37,6 +48,7 @@ export default function DashboardPage() {
   const { connected } = useRealtimeStatus();
   const { events, lastEvent } = useRealtimeEvents();
   const [stats, setStats] = useState<StatsOverview | null>(null);
+  const [profileStats, setProfileStats] = useState<SystemProfileStats | null>(null);
   const [recent, setRecent] = useState<MachineListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,12 +77,15 @@ export default function DashboardPage() {
     // không xung đột với UX.
     lastRefreshAtRef.current = Date.now();
     try {
-      const [s, m] = await Promise.all([
+      const [s, m, ps] = await Promise.all([
         api.get<StatsOverview>("/stats/overview"),
         api.get<PageResponse<MachineListItem>>("/machines", { limit: 50 }),
+        // Thống kê hồ sơ cấp độ — lỗi (vd 403 với viewer) không chặn dashboard
+        api.get<SystemProfileStats>("/system-profiles/stats").catch(() => null),
       ]);
       if (myGeneration !== loadGenerationRef.current) return;
       setStats(s);
+      setProfileStats(ps);
       setRecent(m.items.slice(0, 10));
       setUpdatedAt(new Date());
       setError(null);
@@ -202,6 +217,45 @@ export default function DashboardPage() {
               sub="Tập con của máy công vụ"
             />
           </div>
+
+          {/* Thống kê hồ sơ cấp độ hệ thống thông tin */}
+          {profileStats && (
+            <Card
+              className="mt-4"
+              title="Hồ sơ cấp độ hệ thống thông tin"
+              subtitle={`${profileStats.total} hồ sơ theo trạng thái và cấp độ`}
+              actions={
+                <Link
+                  href="/system-profiles"
+                  className="inline-flex items-center gap-0.5 text-xs font-medium text-brand-600 hover:underline"
+                >
+                  Xem tất cả <ChevronRight className="size-3.5" />
+                </Link>
+              }
+              padded={false}
+            >
+              <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-5">
+                {PROFILE_STATUS_CARDS.map(([st, label]) => (
+                  <div key={st} className="rounded-lg border border-slate-100 p-3">
+                    <StatusBadge status={st} />
+                    <div className="mt-2 text-2xl font-semibold text-slate-800">
+                      {profileStats.by_status[st] ?? 0}
+                    </div>
+                    <div className="text-xs text-slate-400">{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-center gap-4 border-t border-slate-100 px-4 py-3">
+                <span className="text-xs text-slate-500">Theo cấp độ:</span>
+                {([1, 2, 3] as const).map((lv) => (
+                  <span key={lv} className="inline-flex items-center gap-1.5">
+                    <LevelBadge level={lv} />
+                    <span className="text-sm font-semibold text-slate-700">{profileStats.by_level[String(lv)] ?? 0}</span>
+                  </span>
+                ))}
+              </div>
+            </Card>
+          )}
 
           <div className="mt-6 grid gap-6 xl:grid-cols-3">
             <div className="xl:col-span-2">

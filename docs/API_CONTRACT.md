@@ -312,6 +312,10 @@ Response 200:
 |---|---|---|---|---|
 | GET | `/download/agent.msi` | `application/x-msi` | Cả 2 chế độ: Online & Offline | Ký số EV Authenticode (chống SmartScreen & giả mạo) |
 | GET | `/download/agent.msi.sha256` | `text/plain` | Cả 2 chế độ: Verify toàn vẹn | Mã băm SHA-256 đối chiếu trước khi thực thi |
+| GET | `/download/agent-{rid}` | `application/octet-stream` | Linux: binary theo RID (`linux-x64`/`linux-arm64`) | Verify SHA-256 qua `/download/agent-{rid}.sha256` |
+| GET | `/download/agent-{rid}.sha256` | `text/plain` | Linux: verify toàn vẹn binary | Sai → install.sh dừng; thiếu → cảnh báo |
+| GET | `/download/agent-version` | `application/json` | Manifest phiên bản (sidecar `.version` trong `agent_dist`) | Script cài so sánh để auto-upgrade; thiếu → không nâng cấp |
+| GET | `/download/velociraptor-linux-{arch}.{ext}` | deb/rpm | Velociraptor Linux theo arch (`amd64`/`arm64` × `deb`/`rpm`) | File `agent_dist/velociraptor_client_{arch}.{ext}`; thiếu → 404 → install.sh báo FAIL Velociraptor |
 | GET | `/download/install-offline.cmd` | `text/plain` | **Chế độ 2**: Launcher 1-click | Script batch nháy đúp chuột, tự động xin quyền UAC |
 | GET | `/download/install-offline.ps1` | `text/plain` | **Chế độ 2**: Bộ điều phối thu thập | Xác thực chữ ký số file config và kiểm tra toàn vẹn MSI |
 | GET | `/download/server_public_key.pem` | `text/plain` | **Chế độ 2**: Khóa công khai Server | Dùng để verify chữ ký file config và mã hóa gói kết quả |
@@ -344,6 +348,23 @@ Response 200:
 - **Tùy chọn mã hóa (`offline_config.enc`):** Trong môi trường bảo mật cao, file cấu hình được mã hóa bằng AES-256-GCM với khóa mã hóa bảo vệ, chống đọc trộm thông tin token hoặc cấu hình mạng nội bộ khi lưu trữ trên USB.
 
 ---
+
+### 3.9. Enroll attempts — hàng đợi máy "xin vào" bị từ chối (Portal API, JWT)
+
+Máy chạy lệnh cài với **token đã dùng / hết hạn / thu hồi / lạ** trước đây chỉ nhận 401
+im lặng. Giờ server ghi 1 dòng `enroll_attempts` (dedupe theo weighted fingerprint trong
+24h) để admin duyệt. Enroll attempt KHÔNG xác định được org (token lạ) chỉ Super Admin
+thấy.
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/api/enroll/attempts?status=pending` | Danh sách attempt (org-scoped; mặc định pending) |
+| POST | `/api/enroll/attempts/{id}/approve` | Sinh token thay thế TTL 72h cho org của attempt + trả install command (Windows/Linux/offline). Attempt → `approved` |
+| POST | `/api/enroll/attempts/{id}/reject` | Chặn attempt (không sinh token) → `rejected` |
+
+Enforcement decline: máy bị **decline** (`decommissioned`) — heartbeat chỉ cập nhật
+`last_seen` (không tự bật lại online), **inventory bị từ chối 403**, enroll lại (fingerprint
+khớp) quay về `pending` chờ duyệt thay vì tự online.
 
 ---
 

@@ -16,6 +16,143 @@ _EVENT_LOGGER_NAME = "deepagent.events"
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)(api[_-]?key|authorization|bearer|token|client_private_key)\s*([:=])\s*[^\s,;]+"
 )
+
+
+# ---------------------------------------------------------------------------
+# Error categorization
+#
+# Why: when an investigation fails, the error message currently surfaces as
+# "External error message withheld to protect sensitive investigation
+# data." — accurate, but useless to operators and end-users. The
+# front-end (portal) renders `dfir_investigations.error` verbatim, so the
+# only way to give operators an actionable signal without leaking
+# sensitive content is to classify the exception into a stable category
+# and pair it with a hand-written hint. Exception class names, HTTP status
+# codes, and these static hint strings are the only safe-to-emit surface.
+# ---------------------------------------------------------------------------
+
+try:  # openai is required transitively; guard import for test isolation
+    from openai import (
+        APIConnectionError,
+        APIStatusError,
+        APITimeoutError,
+        BadRequestError,
+        ContentFilterFinishReasonError,
+        InternalServerError,
+        LengthFinishReasonError,
+        PermissionDeniedError,
+        RateLimitError,
+    )
+except ImportError:  # pragma: no cover - openai always available at runtime
+    APIConnectionError = APIStatusError = APITimeoutError = BadRequestError = None  # type: ignore[assignment]
+    ContentFilterFinishReasonError = InternalServerError = None  # type: ignore[assignment]
+    LengthFinishReasonError = PermissionDeniedError = RateLimitError = None  # type: ignore[assignment]
+
+
+# (category, hint) tuples. Hints are short, hand-written, in Vietnamese to
+# match the rest of the operator-facing UI. They MUST NOT include any
+# fragment of the raw error message.
+_CATEGORY_HINTS: dict[str, str] = {
+    "llm_timeout": (
+        "LLM backend timeout. Kiểm tra kết nối tới LLM endpoint và xem xét "
+        "tăng `DEEPAGENT_LLM_TIMEOUT_SECONDS`."
+    ),
+    "llm_unreachable": (
+        "Không kết nối được tới LLM backend. Kiểm tra base_url và network "
+        "tới LLM server."
+    ),
+    "llm_output_truncated": (
+        "LLM trả về output vượt quá max_tokens. Xem xét tăng max_tokens "
+        "trong llm_config hoặc rút gọn prompt."
+    ),
+    "llm_content_filtered": (
+        "LLM từ chối trả lời do bộ lọc nội dung. Kiểm tra lại prompt và "
+        "dữ liệu đầu vào."
+    ),
+    "llm_rate_limited": (
+        "LLM backend đang rate-limit. Đợi một lúc rồi retry investigation."
+    ),
+    "llm_bad_request": (
+        "LLM backend từ chối request (400). Kiểm tra prompt có hợp lệ, "
+        "schema đúng và không vượt context window."
+    ),
+    "llm_forbidden": (
+        "LLM backend từ chối xác thực (403). Kiểm tra API key trong llm_config."
+    ),
+    "llm_server_error": (
+        "LLM backend gặp lỗi 5xx. Kiểm tra trạng thái dịch vụ upstream."
+    ),
+    "internal": (
+        "Lỗi nội bộ DeepAgent. Xem log chi tiết trong container `deepagent`."
+    ),
+}
+
+
+def categorize_error(error: BaseException) -> tuple[str, str]:
+    """Map an exception to a stable (category, hint) pair.
+
+    The category is a short snake_case identifier; the hint is a static,
+    hand-written Vietnamese string from `_CATEGORY_HINTS`. The raw error
+    message is NEVER included — only the exception class name and HTTP
+    status code are extracted for diagnostic display.
+    """
+    cls = type(error)
+    name = cls.__name__
+
+    # OpenAI exception classes (lazy-imported, may be None in tests).
+    if LengthFinishReasonError is not None and isinstance(error, LengthFinishReasonError):
+        return "llm_output_truncated", _CATEGORY_HINTS["llm_output_truncated"]
+    if ContentFilterFinishReasonError is not None and isinstance(
+        error, ContentFilterFinishReasonError
+    ):
+        return "llm_content_filtered", _CATEGORY_HINTS["llm_content_filtered"]
+    if APITimeoutError is not None and isinstance(error, APITimeoutError):
+        return "llm_timeout", _CATEGORY_HINTS["llm_timeout"]
+    if APIConnectionError is not None and isinstance(error, APIConnectionError):
+        return "llm_unreachable", _CATEGORY_HINTS["llm_unreachable"]
+    if RateLimitError is not None and isinstance(error, RateLimitError):
+        return "llm_rate_limited", _CATEGORY_HINTS["llm_rate_limited"]
+    if BadRequestError is not None and isinstance(error, BadRequestError):
+        return "llm_bad_request", _CATEGORY_HINTS["llm_bad_request"]
+    if PermissionDeniedError is not None and isinstance(
+        error, PermissionDeniedError
+    ):
+        return "llm_forbidden", _CATEGORY_HINTS["llm_forbidden"]
+    if InternalServerError is not None and isinstance(
+        error, InternalServerError
+    ):
+        return "llm_server_error", _CATEGORY_HINTS["llm_server_error"]
+    if APIStatusError is not None and isinstance(error, APIStatusError):
+        # Fallback for any other APIStatusError subclass.
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int):
+            if 500 <= status <= 599:
+                return "llm_server_error", _CATEGORY_HINTS["llm_server_error"]
+            if status == 429:
+                return "llm_rate_limited", _CATEGORY_HINTS["llm_rate_limited"]
+            if status == 401 or status == 403:
+                return "llm_forbidden", _CATEGORY_HINTS["llm_forbidden"]
+            if 400 <= status <= 499:
+                return "llm_bad_request", _CATEGORY_HINTS["llm_bad_request"]
+
+    # DeepAgent internal categories
+    if name == "MCPToolTimeout" or "ToolTimeout" in name:
+        return "mcp_timeout", (
+            "Velociraptor MCP timeout. Tool chạy quá lâu. Xem xét tăng "
+            "DEEPAGENT_MCP_TOOL_TIMEOUT_SECONDS hoặc thu hẹp time range."
+        )
+    if name == "MCPPolicyError":
+        return "mcp_policy", (
+            "MCP policy violation: tool hoặc argument bị chặn bởi allowlist. "
+            "Kiểm tra catalog Tier 1 / Tier 2."
+        )
+    if name == "ArtifactPushError":
+        return "velociraptor_push", (
+            "Velociraptor không nhận artifact Custom.*. Kiểm tra artifact "
+            "definition hợp lệ và push status trên portal admin."
+        )
+
+    return "internal", _CATEGORY_HINTS["internal"]
 _context: ContextVar[dict[str, Any] | None] = ContextVar("deepagent_log_context", default=None)
 
 
@@ -84,16 +221,27 @@ def _safe_error_message(error: BaseException, sensitive_values: tuple[str, ...])
 
 
 def safe_error_detail(error: BaseException, sensitive_values: tuple[str, ...] = ()) -> str:
-    """Return safe external diagnostics: exception type, redacted message, optional HTTP status.
+    """Return safe external diagnostics: category + hint + HTTP status.
 
-    HTTP status code (4xx/5xx) là metadata an toàn — phân biệt được 400 (validation)
-    vs 401 (auth) vs 404 (model) vs 500 (server) mà không lộ evidence hay secret.
+    Output format (single-line, safe to render verbatim in the portal):
+        `[<category>] <hint> [HTTP <status>]`
+
+    `category` is a stable identifier (e.g. `llm_output_truncated`). `hint`
+    is a hand-written Vietnamese string from `_CATEGORY_HINTS`. HTTP status
+    code (4xx/5xx) is metadata an toàn — phân biệt được 400 (validation)
+    vs 401 (auth) vs 404 (model) vs 500 (server) mà không lộ evidence
+    hay secret.
+
+    The raw exception body is NEVER included — only the exception class
+    name (truncated) is allowed, and even that is wrapped inside the
+    structured category hint.
     """
-    detail = f"{type(error).__name__}: {_safe_error_message(error, sensitive_values)}"
+    category, hint = categorize_error(error)
+    parts = [f"[{category}]", hint]
     status = _safe_http_status(error)
     if status is not None:
-        detail = f"{detail} [HTTP {status}]"
-    return detail
+        parts.append(f"[HTTP {status}]")
+    return " ".join(parts)
 
 
 def log_event(
@@ -120,6 +268,8 @@ def log_event(
     event.update({key: value for key, value in metadata.items() if value is not None})
     if error is not None:
         event["error_type"] = type(error).__name__[:100]
+        category, _hint = categorize_error(error)
+        event["error_category"] = category
         event["error_message"] = _safe_error_message(
             error, context.get("sensitive_values", ())
         )

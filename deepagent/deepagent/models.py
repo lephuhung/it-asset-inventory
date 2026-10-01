@@ -41,13 +41,35 @@ class LlmRuntime(BaseModel):
     model: str = Field(min_length=1, max_length=255)
     temperature: float = Field(default=0, ge=0, le=2)
     timeout_seconds: int = Field(default=180, ge=10, le=600)
-    max_tokens: int = Field(default=64_000, ge=64_000, le=128_000)
+    max_tokens: int = Field(default=8_000, ge=1_000, le=128_000)
     system_prompt: str | None = Field(default=None, max_length=8000)
+
+
+ArtifactTier = Literal[1, 2]
+ArtifactPlatform = Literal["windows", "linux", "macos"]
 
 
 class CustomArtifactRef(BaseModel):
     """Một artifact Custom.* do backend ký phát trong request — model chỉ được
-    chọn theo tên, không được tự thêm artifact hay tham số."""
+    chọn theo tên, không được tự thêm artifact hay tham số.
+
+    `tier` xác định khi nào artifact được phép gọi:
+      - tier=1: artifact trusted cho initial collection (chạy ngay đầu investigation)
+      - tier=2: artifact chỉ chạy sau khi có evidence Tier 1 trigger cụ thể
+
+    Backend đặt tier này khi admin promote artifact (lưu trong DB
+    `velociraptor_artifacts.tier`). Default = 2 vì Tier 1 phải là opt-in rõ ràng.
+
+    `supported_platforms` là danh sách OS mà artifact này hỗ trợ — bắt buộc
+    (không có implicit default) để bắt buộc backend declare OS coverage. Đảm bảo
+    rằng artifact Linux không bao giờ được cung cấp cho investigation Windows
+    và ngược lại — defense-in-depth chống backend mis-config.
+
+    Defense-in-depth cho Tier 1: tier=1 trong DB là CẦN nhưng CHƯA ĐỦ. Tên
+    artifact cũng phải thuộc hardcoded `TIER1_CUSTOM_TOOLS[platform]` whitelist
+    (xem `catalog.initial_custom_tool_names`). Một backend/DB compromise đặt
+    tier=1 cho Custom.* ngoài whitelist sẽ bị filter ra ở bước này.
+    """
 
     name: str = Field(
         min_length=8,
@@ -55,6 +77,11 @@ class CustomArtifactRef(BaseModel):
         pattern=r"^Custom\.[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$",
     )
     description: str = Field(default="", max_length=300)
+    tier: ArtifactTier = Field(default=2, description="1 = Tier 1, 2 = Tier 2")
+    supported_platforms: list[ArtifactPlatform] = Field(
+        min_length=1,
+        description="OS mà artifact này hỗ trợ — bắt buộc, không default.",
+    )
 
 
 class InvestigationRequest(BaseModel):

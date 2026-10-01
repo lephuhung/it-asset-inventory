@@ -3,24 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  AlertOctagon,
   ArrowLeft,
   Brain,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Clock,
   ExternalLink,
   Filter,
-  Loader2,
-  RefreshCcw,
   Search,
-  ShieldAlert,
   TrendingUp,
   X,
-  XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { timeAgo } from "@/lib/format";
+import {
+  INVESTIGATION_SEVERITY_META as SEVERITY_STYLES,
+  INVESTIGATION_STATUS_META as STATUS_STYLES,
+} from "@/lib/investigation-meta";
 import {
   Badge,
   Button,
@@ -35,35 +33,10 @@ import {
 import type {
   DfirInvestigation,
   DfirInvestigationListOut,
-  InvestigationSeverity,
-  InvestigationStatus,
 } from "@/lib/types";
 
-/* Pill tinted theo Design.md — màu đã remap trong globals.css
-   (đồng bộ với trang /llm-dfir/investigations) */
-const STATUS_STYLES: Record<
-  InvestigationStatus,
-  { label: string; badge: string; icon: any }
-> = {
-  pending: { label: "Chờ", badge: "bg-slate-100 text-slate-700 ring-slate-600/20", icon: Clock },
-  running: { label: "Khởi động", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Loader2 },
-  collecting: { label: "Thu thập", badge: "bg-sky-50 text-sky-700 ring-sky-600/20", icon: RefreshCcw },
-  analyzing: { label: "Phân tích", badge: "bg-violet-100 text-violet-700 ring-violet-600/20", icon: Brain },
-  completed: { label: "Hoàn thành", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-  failed: { label: "Lỗi", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: XCircle },
-};
-
-const SEVERITY_STYLES: Record<
-  InvestigationSeverity,
-  { label: string; badge: string; icon: any }
-> = {
-  critical: { label: "Critical", badge: "bg-rose-100 text-rose-700 ring-rose-600/20", icon: AlertOctagon },
-  high: { label: "High", badge: "bg-amber-100 text-amber-700 ring-amber-600/20", icon: ShieldAlert },
-  medium: { label: "Medium", badge: "bg-amber-50 text-amber-800 ring-amber-600/20", icon: ShieldAlert },
-  low: { label: "Low", badge: "bg-blue-100 text-blue-700 ring-blue-600/20", icon: Search },
-  info: { label: "Info", badge: "bg-emerald-100 text-emerald-700 ring-emerald-600/20", icon: CheckCircle2 },
-};
-
+/* Pill tinted theo Design.md — màu đã remap trong globals.css.
+   STATUS_STYLES / SEVERITY_STYLES dùng bản chuẩn lib/investigation-meta. */
 const STATUS_FALLBACK = STATUS_STYLES.pending;
 const SEVERITY_FALLBACK = SEVERITY_STYLES.info;
 
@@ -384,16 +357,4 @@ function Pagination({
       </div>
     </div>
   );
-}
-
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s trước`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}ph trước`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}giờ trước`;
-  const d = Math.floor(h / 24);
-  return `${d}ngày trước`;
 }

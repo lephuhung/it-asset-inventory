@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Activity,
   AlertTriangle,
@@ -20,6 +21,7 @@ import {
   Trash2,
   X,
   XCircle,
+  Brain,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/components/auth-context";
@@ -47,6 +49,7 @@ import type {
   VelociraptorLink,
 } from "@/lib/types";
 import { formatDateTime, timeAgo } from "@/lib/format";
+import { DfirLlmTab } from "./_llm-tab";
 
 /** Dashboard DFIR (Digital Forensics & Incident Response).
  *
@@ -61,11 +64,26 @@ import { formatDateTime, timeAgo } from "@/lib/format";
  *  - "Run Hunt" / "Collect Artifact" (per machine)
  *  - Mở máy /machines/[id] → tự động lookup hostname live qua Velociraptor API.
  */
+type Tab = "velociraptor" | "llm";
+
 export default function DfirPage() {
   const { user } = useAuth();
   const isSuperAdmin = user?.role === "super_admin" || user?.role === "admin_global";
   const isAdmin = user?.role === "super_admin" || user?.role === "admin_global"
     || user?.role === "org_admin" || user?.role === "admin_org";
+
+  const searchParams = useSearchParams();
+  // Mở thẳng tab từ ?tab=llm (link từ sidebar hoặc bookmark).
+  // Chỉ chấp nhận khi user có quyền xem tab đó (LLM chỉ super admin).
+  const requestedTab = searchParams.get("tab");
+  const [tab, setTab] = useState<Tab>(
+    requestedTab === "llm" && isSuperAdmin ? "llm" : "velociraptor",
+  );
+  // Đồng bộ nếu user đổi query khi đang ở trang (vd mở tab mới cùng URL).
+  useEffect(() => {
+    if (requestedTab === "llm" && isSuperAdmin && tab !== "llm") setTab("llm");
+    else if (requestedTab !== "llm" && tab === "llm" && !isSuperAdmin) setTab("velociraptor");
+  }, [requestedTab, isSuperAdmin, tab]);
 
   const [config, setConfig] = useState<VelociraptorConfig | null>(null);
   const [links, setLinks] = useState<VelociraptorLink[]>([]);
@@ -73,6 +91,14 @@ export default function DfirPage() {
   const [alerts, setAlerts] = useState<VelociraptorAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const tabLabels: Array<{ key: Tab; label: string }> = useMemo(
+    () => [
+      { key: "velociraptor", label: "Velociraptor" },
+      ...(isSuperAdmin ? ([{ key: "llm" as Tab, label: "Cấu hình LLM" }] as const) : []),
+    ],
+    [isSuperAdmin],
+  );
 
   const [showHuntModal, setShowHuntModal] = useState(false);
   const [confirmSync, setConfirmSync] = useState(false);
@@ -102,6 +128,8 @@ export default function DfirPage() {
   const [editError, setEditError] = useState<string | null>(null);
   // Tên artifact đang xóa (disable nút để chặn double-click trong lúc DELETE đang bay)
   const [deletingArtifactName, setDeletingArtifactName] = useState<string | null>(null);
+  // Artifact chờ xác nhận xóa — ConfirmDialog thay window.confirm
+  const [confirmDeleteArtifact, setConfirmDeleteArtifact] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
       const [cfg, lk, hs, al, ar] = await Promise.all([
@@ -231,17 +259,18 @@ export default function DfirPage() {
     }
   };
 
-  // Xóa artifact — native confirm() (UX ngắn gọn) rồi DELETE.
+  // Xóa artifact — mở ConfirmDialog xác nhận rồi DELETE.
   // Backend (velociraptor_artifacts.py:delete_custom_artifact) sẽ gọi delete_artifact trên
   // Velociraptor server trước, sau đó xóa DB row. Nếu server lỗi sẽ trả 502 trừ khi
   // ?force=true (UI chưa dùng force để tránh xóa DB khi server chưa chắc).
-  const handleDeleteArtifact = async (name: string) => {
+  const handleDeleteArtifact = (name: string) => {
     if (deletingArtifactName) return;
-    const ok = window.confirm(
-      `Xóa artifact "${name}" trên Velociraptor server và trong DB?\n\n` +
-      "Hành động này không thể hoàn tác.",
-    );
-    if (!ok) return;
+    setHuntError(null);
+    setHuntSuccess(null);
+    setConfirmDeleteArtifact(name);
+  };
+
+  const doDeleteArtifact = async (name: string) => {
     setDeletingArtifactName(name);
     setHuntError(null);
     setHuntSuccess(null);
@@ -376,6 +405,27 @@ export default function DfirPage() {
         }
       />
 
+      {/* Tabs — Velociraptor (mặc định, mọi admin) + Cấu hình LLM (chỉ super admin). */}
+      <div className="flex gap-1 border-b border-slate-200">
+        {tabLabels.map((t) => (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors duration-150 motion-reduce:transition-none ${
+              tab === t.key
+                ? "border-brand-600 text-slate-900"
+                : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "llm" && isSuperAdmin ? <DfirLlmTab /> : (
+        <>
       {error && <ErrorBanner message={error} />}
 
       {!isSuperAdmin && (
@@ -677,7 +727,7 @@ export default function DfirPage() {
               (vd <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Windows.Persistence.*</code>,
               {" "}
               <code className="rounded bg-slate-100 px-1 font-mono text-[11px]">Generic.Detection.FIM.High</code>).
-              Bấm "Scan alerts" ở trên để detect thủ công sau khi chạy hunt/collect.
+              Bấm &quot;Scan alerts&quot; ở trên để detect thủ công sau khi chạy hunt/collect.
             </p>
           </div>
         ) : (
@@ -1108,6 +1158,23 @@ export default function DfirPage() {
         onClose={() => setConfirmSync(false)}
         onConfirm={() => void handleSync()}
       />
+
+      <ConfirmDialog
+        open={confirmDeleteArtifact !== null}
+        onClose={() => setConfirmDeleteArtifact(null)}
+        onConfirm={() => {
+          const name = confirmDeleteArtifact;
+          setConfirmDeleteArtifact(null);
+          if (name) void doDeleteArtifact(name);
+        }}
+        title="Xóa artifact"
+        message={`Xóa artifact "${confirmDeleteArtifact ?? ""}" trên Velociraptor server và trong DB? Hành động này không thể hoàn tác.`}
+        confirmLabel="Xóa"
+        danger
+        loading={deletingArtifactName !== null}
+      />
+        </>
+      )}
     </div>
   );
 }

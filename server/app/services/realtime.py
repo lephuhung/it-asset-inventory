@@ -12,16 +12,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-import redis.asyncio as aioredis
-
-from app.core.config import settings
+from app.core.redis_client import get_redis
 
 CHANNEL = "machine:events"
 logger = logging.getLogger("realtime")
-
-
-def _redis() -> aioredis.Redis:
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
 
 
 async def publish_machine_event(
@@ -36,8 +30,6 @@ async def publish_machine_event(
         **extra,
     }
     try:
-        r = _redis()
-        await r.publish(CHANNEL, json.dumps(payload, ensure_ascii=False))
-        await r.aclose()
+        await get_redis().publish(CHANNEL, json.dumps(payload, ensure_ascii=False))
     except Exception:  # noqa: BLE001 — Redis down: realtime là non-critical, không làm lỗi API
         logger.debug("Redis chưa khả dụng — bỏ qua publish realtime")

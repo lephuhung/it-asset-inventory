@@ -14,19 +14,16 @@ File MSI + SHA256 đặt trong thư mục `settings.agent_msi_dir`. Cấu trúc:
   <agent_msi_dir>/OrgInventoryAgent.msi
   <agent_msi_dir>/OrgInventoryAgent.msi.sha256
 
-Build (chỉ trên Windows, cần WiX):
-  cd agent && dotnet publish -c Release -r win-x64
-  powershell installer/build-msi.ps1 -CertificateThumbprint \"<EV code signing thumbprint>\"
-  → copy OrgInventoryAgent.msi + .sha256 vào server.
+Build MSI trong repo agent riêng (Windows, cần WiX), rồi copy vào `agent_msi_dir`
+(hoặc set AGENT_RELEASES_BASE để redirect sang GitHub Releases — không cần copy local).
 """
 from __future__ import annotations
 
 import hashlib
-
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -37,15 +34,40 @@ router = APIRouter(prefix="/download", tags=["download"])
 
 MSI_FILENAME = "OrgInventoryAgent.msi"
 SHA256_FILENAME = "OrgInventoryAgent.msi.sha256"
-AGENT_LINUX_FILENAME = "OrgInventoryAgent-linux-x64"
+AGENT_LINUX_RIDS = ("linux-x64", "linux-arm64")
 VELOCIRAPTOR_ZIP_FILENAME = "velociraptor-agent-windows.zip"
 VELOCIRAPTOR_MSI_FILENAME = "velociraptor-windows-amd64.msi"
 VELOCIRAPTOR_CONFIG_FILENAME = "velociraptor-client.config.yaml"
 VELOCIRAPTOR_INSTALL_BAT = "install-velociraptor.bat"
 VELOCIRAPTOR_CONFIG_ONLY_ZIP = "velociraptor-config-only.zip"
-VELOCIRAPTOR_DEB_FILENAME = "velociraptor_client_amd64.deb"
-VELOCIRAPTOR_RPM_FILENAME = "velociraptor_client_amd64.rpm"
+VELOCIRAPTOR_LINUX_ARCHES = ("amd64", "arm64")
 INSTALL_BOTH_PS1 = "install-both.ps1"
+
+
+def _release_url(filename: str) -> str | None:
+    """URL asset trên GitHub Releases khi `settings.agent_releases_base` được cấu hình.
+
+    Trả None khi chưa cấu hình → caller fallback file local trong `agent_msi_dir`
+    (giữ tương thích triển khai cũ không dùng GitHub Releases).
+    """
+    base = settings.agent_releases_base.strip().rstrip("/")
+    return f"{base}/latest/download/{filename}" if base else None
+
+
+async def _fetch_release_asset(filename: str) -> bytes | None:
+    """Tải asset từ GitHub Releases (dùng cho /download/agent-version proxy và
+    offline-package.zip). None khi chưa cấu hình hoặc fetch lỗi."""
+    url = _release_url(filename)
+    if not url:
+        return None
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+            resp = await client.get(url)
+            return resp.content if resp.status_code == status.HTTP_200_OK else None
+    except httpx.HTTPError:
+        return None
 
 
 def _safe_resolve(filename: str) -> Path:
@@ -69,9 +91,14 @@ def _ensure_exists(path: Path) -> None:
         )
 
 
-@router.get("/agent.msi", response_class=FileResponse)
+@router.get("/agent.msi")
 async def download_agent_msi():
-    """Trả về file MSI — verify SHA256 trước khi cài (xem install.ps1)."""
+    """Trả về file MSI — verify SHA256 trước khi cài (xem install.ps1).
+
+    Khi `agent_releases_base` được cấu hình → 302 sang GitHub Releases asset."""
+    url = _release_url(MSI_FILENAME)
+    if url:
+        return RedirectResponse(url)
     path = _safe_resolve(MSI_FILENAME)
     _ensure_exists(path)
     return FileResponse(
@@ -81,9 +108,12 @@ async def download_agent_msi():
     )
 
 
-@router.get("/agent.msi.sha256", response_class=PlainTextResponse)
+@router.get("/agent.msi.sha256")
 async def download_agent_msi_sha256():
     """Trả về chuỗi SHA-256 hex của file MSI (để PowerShell verify trước khi cài)."""
+    url = _release_url(SHA256_FILENAME)
+    if url:
+        return RedirectResponse(url)
     path = _safe_resolve(SHA256_FILENAME)
     _ensure_exists(path)
     return PlainTextResponse(content=path.read_text(encoding="utf-8").strip())
@@ -93,32 +123,85 @@ async def download_agent_msi_sha256():
 async def download_agent_linux():
     """Binary OrgInventoryAgent cho Linux amd64 (self-contained single-file).
 
-    Build (trên máy có .NET 8 SDK):
+    Alias tĩnh của `/agent-linux-x64` (giữ cho script/lệnh cũ). Build (trên máy
+    có .NET 8 SDK):
       cd agent && dotnet publish src/OrgInventoryAgent -c Release -r linux-x64 \
           --self-contained -p:PublishSingleFile=true -p:DebugType=none -o publish/linux-x64
-    → copy `OrgInventoryAgent` vào `agent_msi_dir` với tên `OrgInventoryAgent-linux-x64`.
-    Linux one-liner `curl -fsSL <portal>/i/<token> | sudo bash` (render `install.sh.j2`)
-    tải file này.
+    → copy `OrgInventoryAgent` vào `agent_msi_dir` với tên `OrgInventoryAgent-linux-x64`
+    (kèm `.sha256` + `.version`). Linux one-liner `curl -fsSL <portal>/i/<token> | sudo bash`
+    (render `install.sh.j2`) tải file này.
     """
-    path = _safe_resolve(AGENT_LINUX_FILENAME)
+    return await download_agent_linux_dynamic("linux-x64")
+
+
+@router.get("/agent-version", response_class=PlainTextResponse)
+async def download_agent_version():
+    """Manifest phiên bản agent (JSON) — script cài so sánh để tự nâng cấp.
+
+    Khi `agent_releases_base` được cấu hình: proxy asset `agent-version.json`
+    của release mới nhất (giữ media_type application/json để Invoke-RestMethod
+    parse đúng). Không fetch được → trả manifest null như trường hợp thiếu file.
+
+    Fallback local: phiên bản đọc từ file sidecar `.version` trong `agent_msi_dir`.
+      OrgInventoryAgent.msi.version              → msi_version (Windows)
+      OrgInventoryAgent-linux-x64.version        → linux.linux-x64
+      OrgInventoryAgent-linux-arm64.version      → linux.linux-arm64
+      velociraptor-windows-amd64.msi.version     → velociraptor_msi_version
+    """
+    import json
+
+    remote = await _fetch_release_asset("agent-version.json")
+    if remote:
+        return PlainTextResponse(content=remote, media_type="application/json")
+
+    base = Path(settings.agent_msi_dir).resolve()
+
+    def _ver(name: str) -> str | None:
+        p = base / name
+        if p.exists() and p.is_file():
+            return p.read_text(encoding="utf-8").strip() or None
+        return None
+
+    payload = {
+        "msi_version": _ver(f"{MSI_FILENAME}.version"),
+        "linux": {rid: _ver(f"OrgInventoryAgent-{rid}.version") for rid in AGENT_LINUX_RIDS},
+        "velociraptor_msi_version": _ver(f"{VELOCIRAPTOR_MSI_FILENAME}.version"),
+    }
+    return PlainTextResponse(content=json.dumps(payload), media_type="application/json")
+
+
+@router.get("/agent-{rid}.sha256", response_class=PlainTextResponse)
+async def download_agent_linux_sha256(rid: str):
+    """SHA-256 hex của binary Linux (`OrgInventoryAgent-{rid}.sha256` cạnh binary).
+
+    install.sh verify trước khi cài: thiếu file → WARN, sai → ABORT.
+    Route khai báo TRƯỚC `/agent-{rid}` để không bị shadow (`agent-linux-x64.sha256`
+    sẽ khớp `/agent-{rid}` với rid="linux-x64.sha256" nếu khai sau).
+    """
+    if rid not in AGENT_LINUX_RIDS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"RID không hỗ trợ: {rid}")
+    url = _release_url(f"OrgInventoryAgent-{rid}.sha256")
+    if url:
+        return RedirectResponse(url)
+    path = _safe_resolve(f"OrgInventoryAgent-{rid}.sha256")
     _ensure_exists(path)
-    return FileResponse(
-        path,
-        media_type="application/octet-stream",
-        filename=AGENT_LINUX_FILENAME,
-    )
+    return PlainTextResponse(content=path.read_text(encoding="utf-8").strip())
 
 
 @router.get("/agent-{rid}", response_class=FileResponse)
 async def download_agent_linux_dynamic(rid: str):
     """Generic download cho OrgInventoryAgent binary theo RID (linux-x64 / linux-arm64).
 
-    File phải đặt tại `OrgInventoryAgent-{rid}` trong `agent_msi_dir`.
-    Build script `installer/linux/build-linux.sh` publish vào `agent/dist/{rid}/OrgInventoryAgent`
-    rồi copy sang `server/agent_dist/`.
+    File phải đặt tại `OrgInventoryAgent-{rid}` trong `agent_msi_dir` (+ file
+    `OrgInventoryAgent-{rid}.sha256` để script verify, + `.version` cho manifest
+    `/download/agent-version`). Build script `installer/linux/build-linux.sh`
+    publish vào `agent/dist/{rid}/OrgInventoryAgent` rồi copy sang `server/agent_dist/`.
     """
-    if rid not in ("linux-x64", "linux-arm64"):
+    if rid not in AGENT_LINUX_RIDS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"RID không hỗ trợ: {rid}")
+    url = _release_url(f"OrgInventoryAgent-{rid}")
+    if url:
+        return RedirectResponse(url)
     filename = f"OrgInventoryAgent-{rid}"
     path = _safe_resolve(filename)
     _ensure_exists(path)
@@ -137,6 +220,9 @@ async def download_install_offline_script():
     So với `install.ps1` (online): script này bỏ qua bước tải MSI (đã có sẵn trên USB)
     và bỏ qua bước verify qua server. BOM UTF-8 có sẵn trong file template.
     """
+    url = _release_url("install-offline.ps1")
+    if url:
+        return RedirectResponse(url)
     template_path = Path(__file__).resolve().parents[2] / "templates" / "install-offline.ps1"
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.ps1")
@@ -149,6 +235,9 @@ async def download_install_offline_script():
 @router.get("/install-offline.cmd", response_class=PlainTextResponse)
 async def download_install_offline_launcher():
     """Trả về `install-offline.cmd` — launcher nháy đúp chuột 1-click cho máy cách ly."""
+    url = _release_url("install-offline.cmd")
+    if url:
+        return RedirectResponse(url)
     template_path = Path(__file__).resolve().parents[2] / "templates" / "install-offline.cmd"
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-offline.cmd")
@@ -262,13 +351,7 @@ async def download_velociraptor_linux_deb():
     (hoặc lệnh `velociraptor debian client --config client.config.yaml`), copy vào
     `agent_msi_dir` với tên `velociraptor_client_amd64.deb`. Cài: `sudo dpkg -i ...`.
     """
-    path = _safe_resolve(VELOCIRAPTOR_DEB_FILENAME)
-    _ensure_exists(path)
-    return FileResponse(
-        path,
-        media_type="application/vnd.debian.binary-package",
-        filename=VELOCIRAPTOR_DEB_FILENAME,
-    )
+    return await download_velociraptor_linux_package("amd64", "deb")
 
 
 @router.get("/velociraptor-linux-amd64.rpm", response_class=FileResponse)
@@ -279,13 +362,36 @@ async def download_velociraptor_linux_rpm():
     (hoặc lệnh `velociraptor rpm client --config client.config.yaml`), copy vào
     `agent_msi_dir` với tên `velociraptor_client_amd64.rpm`. Cài: `sudo rpm -i ...`.
     """
-    path = _safe_resolve(VELOCIRAPTOR_RPM_FILENAME)
+    return await download_velociraptor_linux_package("amd64", "rpm")
+
+
+@router.get("/velociraptor-linux-{arch}.{ext}", response_class=FileResponse)
+async def download_velociraptor_linux_package(arch: str, ext: str):
+    """Velociraptor Client .deb/.rpm THEO KIẾN TRÚC — amd64 | arm64.
+
+    install.sh.j2 sinh URL `/download/velociraptor-linux-$VR_ARCH.$PKG_EXT` theo
+    `uname -m` (x86_64→amd64, aarch64→arm64) — ARM64 không còn cài nhầm package
+    AMD64. File đặt trong `agent_msi_dir`:
+      velociraptor_client_amd64.deb / .rpm
+      velociraptor_client_arm64.deb / .rpm
+    Thiếu file cho arch đó → 404 → install.sh báo FAIL cho phần Velociraptor
+    (hệ thống bắt buộc đủ 2 agent) kèm hướng dẫn rõ tên file cần bổ sung.
+    """
+    if arch not in VELOCIRAPTOR_LINUX_ARCHES:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Kiến trúc không hỗ trợ: {arch} (chỉ {'/'.join(VELOCIRAPTOR_LINUX_ARCHES)})",
+        )
+    if ext not in ("deb", "rpm"):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"Loại package không hỗ trợ: {ext} (chỉ deb/rpm)",
+        )
+    filename = f"velociraptor_client_{arch}.{ext}"
+    path = _safe_resolve(filename)
     _ensure_exists(path)
-    return FileResponse(
-        path,
-        media_type="application/x-rpm",
-        filename=VELOCIRAPTOR_RPM_FILENAME,
-    )
+    media_type = "application/vnd.debian.binary-package" if ext == "deb" else "application/x-rpm"
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 # ── Script cài đặt kết hợp (install-both) — cài OrgInventory + Velociraptor bằng 1 lệnh ──
@@ -303,6 +409,9 @@ async def download_install_both_ps1():
     encoding. Nếu thiếu BOM, các ký tự Unicode (─, ≤, ≥, ...) sẽ bị corrupt →
     parse error như "Try statement is missing its Catch or Finally block".
     """
+    url = _release_url(INSTALL_BOTH_PS1)
+    if url:
+        return RedirectResponse(url)
     template_path = Path(__file__).resolve().parents[2] / "templates" / INSTALL_BOTH_PS1
     if not template_path.exists():
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Thiếu template install-both.ps1")
@@ -334,7 +443,9 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
     import io
     import json
     import zipfile
+
     from fastapi.responses import Response
+
     from app.services.server_crypto import get_server_public_key_pem
 
     agent_cfg = await effective_agent_config(db)
@@ -347,31 +458,51 @@ async def download_offline_package(db: AsyncSession = Depends(get_db)):
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         assert not hasattr(zf, "_password") or zf._password is None, "ZIP tải về phải KHÔNG có password"
 
-        cmd_path = template_dir / "install-offline.cmd"
-        if cmd_path.exists():
-            zf.writestr("install-offline.cmd", cmd_path.read_text(encoding="utf-8"))
+        # Script offline: canonical source là release assets (repo org-inventory-agent);
+        # fallback template local khi chưa cấu hình releases_base hoặc fetch lỗi.
+        cmd_bytes = await _fetch_release_asset("install-offline.cmd")
+        if cmd_bytes is not None:
+            zf.writestr("install-offline.cmd", cmd_bytes)
+        else:
+            cmd_path = template_dir / "install-offline.cmd"
+            if cmd_path.exists():
+                zf.writestr("install-offline.cmd", cmd_path.read_text(encoding="utf-8"))
 
-        ps1_path = template_dir / "install-offline.ps1"
-        if ps1_path.exists():
-            zf.writestr("install-offline.ps1", ps1_path.read_text(encoding="utf-8"))
+        ps1_bytes = await _fetch_release_asset("install-offline.ps1")
+        if ps1_bytes is not None:
+            zf.writestr("install-offline.ps1", ps1_bytes)
+        else:
+            ps1_path = template_dir / "install-offline.ps1"
+            if ps1_path.exists():
+                zf.writestr("install-offline.ps1", ps1_path.read_text(encoding="utf-8"))
 
         zf.writestr("server_public_key.pem", get_server_public_key_pem())
 
         sample_cfg = {
             "token": "",
+            "org_id": "",
             "endpoints": agent_cfg["agent_server_url"],
             "note": "Cấu hình offline tạo bởi IT Asset Inventory Portal",
         }
         zf.writestr("offline_config.json", json.dumps(sample_cfg, indent=2, ensure_ascii=False))
 
-        # Đính kèm MSI và SHA256 nếu có sẵn trong thư mục agent_msi_dir
-        base = Path(settings.agent_msi_dir).resolve()
-        msi_p = base / MSI_FILENAME
-        if msi_p.exists():
-            zf.write(msi_p, arcname=MSI_FILENAME)
-        sha_p = base / SHA256_FILENAME
-        if sha_p.exists():
-            zf.write(sha_p, arcname=SHA256_FILENAME)
+        # Đính kèm MSI + SHA256 — lấy atomic từ 1 nguồn: cặp release asset khi
+        # fetch được CẢ 2, fallback cặp file local. Trộn nguồn (MSI release +
+        # checksum local cũ hoặc ngược lại) làm install-offline.ps1 reject
+        # SHA-256 mismatch trên máy air-gap.
+        msi_bytes = await _fetch_release_asset(MSI_FILENAME)
+        sha_bytes = await _fetch_release_asset(SHA256_FILENAME)
+        if msi_bytes is not None and sha_bytes is not None:
+            zf.writestr(MSI_FILENAME, msi_bytes)
+            zf.writestr(SHA256_FILENAME, sha_bytes)
+        else:
+            base = Path(settings.agent_msi_dir).resolve()
+            msi_p = base / MSI_FILENAME
+            if msi_p.exists():
+                zf.write(msi_p, arcname=MSI_FILENAME)
+            sha_p = base / SHA256_FILENAME
+            if sha_p.exists():
+                zf.write(sha_p, arcname=SHA256_FILENAME)
 
     return Response(
         content=zip_buf.getvalue(),

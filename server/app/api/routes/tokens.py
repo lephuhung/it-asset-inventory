@@ -72,9 +72,13 @@ def _install_command(token: str, portal_url: str, agent_server_url: str) -> str:
     # (parser in-memory không chịu & trong comment), tạo ScriptBlock rồi invoke.
     # Tránh ExecutionPolicy chặn, AV quarantine file .ps1, và parse error từ
     # ký tự đặc biệt trong comment.
+    #
+    # ORGINV_ALLOW_UNSIGNED: bypass check chữ ký Authenticode chỉ khi MSI
+    # chưa được ký (settings.agent_msi_signed=False — giai đoạn test).
+    bypass = '' if settings.agent_msi_signed else '$env:ORGINV_ALLOW_UNSIGNED="1";'
     script = (
-        f'$env:ORGINV_ALLOW_UNSIGNED="1";'
-        f'$t="{token}";'
+        bypass
+        + f'$t="{token}";'
         f'$p="{portal_url}";'
         f'$e="{agent_server_url}";'
         f'Write-Host "Tai script install-both.ps1 tu $p/download/install-both.ps1 (in-memory)...";'
@@ -104,14 +108,18 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
     """
     import base64
 
+    bypass = '' if settings.agent_msi_signed else '$env:ORGINV_ALLOW_UNSIGNED="1";'
     script = (
-        f'$env:ORGINV_ALLOW_UNSIGNED="1";'
-        f'$t="{token}";'
+        bypass
+        + f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
         f'$m="$env:TEMP\\agent-$t.msi";'
         f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
         f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
-        f'$b=(irm "{portal_url}/download/agent.msi.sha256").Trim().ToLower();'
+        f'$b=(irm "{portal_url}/download/agent.msi.sha256");'
+        # GitHub Releases trả octet-stream → irm trả Byte[] → decode UTF8 trước khi Trim.
+        f'if($b -is [byte[]]){{$b=[Text.Encoding]::UTF8.GetString($b)}};'
+        f'$b="$b".Trim().ToLower();'
         f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
         f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
     )
@@ -271,20 +279,11 @@ async def list_tokens(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    from sqlalchemy import delete, func as sa_func, or_
+    from sqlalchemy import func as sa_func
 
     now = datetime.now(UTC)
-
-    # Tự động dọn dẹp các token đã quá hạn hoặc đã bị thu hồi khỏi DB
-    await db.execute(
-        delete(EnrollToken).where(
-            or_(
-                EnrollToken.expires_at < now,
-                EnrollToken.status.in_([TokenStatus.EXPIRED.value, TokenStatus.REVOKED.value]),
-            )
-        )
-    )
-    await db.commit()
+    # Token hết hạn/revoked chỉ bị LỌC khỏi list — việc xóa khỏi DB do monitor
+    # làm định kỳ (endpoint GET không được phát sinh ghi).
 
     q = select(EnrollToken)
     visible = await visible_org_ids(db, admin)

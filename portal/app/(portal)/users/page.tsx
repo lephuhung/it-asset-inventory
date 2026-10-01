@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import {
   KeyRound,
   Lock,
@@ -20,6 +21,7 @@ import {
   Badge,
   Button,
   Card,
+  EmailInput,
   EmptyState,
   ErrorBanner,
   Field,
@@ -28,6 +30,7 @@ import {
   PageHeader,
   Pagination,
   PageResponse,
+  PhoneInput,
   Select,
   Spinner,
   TABLE,
@@ -37,7 +40,7 @@ import {
   THEAD,
   TR_HOVER,
 } from "@/components/ui";
-import { ORG_TYPE_META, ROLE_META, formatDateTime } from "@/lib/format";
+import { ORG_TYPE_META, ROLE_META, formatDate } from "@/lib/format";
 import { useFlatOrgs } from "@/lib/use-flat-orgs";
 
 const ROLE_OPTIONS: Array<{ value: UserRole; label: string }> = [
@@ -55,7 +58,10 @@ function roleBadge(role: string) {
 
 function roleLabel(role: string) {
   const meta = ROLE_META[role as UserRole];
-  return meta ? meta.label : role;
+  if (!meta) return role;
+  // Gọn nhãn để cột Tổ chức có chỗ hiển thị
+  if (role === "org_admin" || role === "admin_org") return "Admin";
+  return meta.label;
 }
 
 export default function UsersPage() {
@@ -81,6 +87,9 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  // touched field — chỉ hiển thị error sau khi user blur hoặc submit lần đầu
+  // để tránh đỏ ầm ĩ ngay khi vừa mở modal.
+  const [touched, setTouched] = useState<{ email?: boolean; phone?: boolean }>({});
   const [form, setForm] = useState<UserCreatePayload>({
     email: "",
     full_name: "",
@@ -89,11 +98,11 @@ export default function UsersPage() {
     password: "",
     phone: "",
   });
-
   // Reset password / khóa
   const [resetUser, setResetUser] = useState<ManagedUser | null>(null);
   const [resetPass, setResetPass] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
+  const [resetErr, setResetErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false, overrideOffset?: number) => {
@@ -120,21 +129,32 @@ export default function UsersPage() {
     }
   }, [offset, activated]);
 
+  // Cây org chỉ phụ thuộc phiên đăng nhập — tách effect để không bị refetch
+  // mỗi lần đổi trang/filter (deps [load] trước đây bắt offset/activated).
   useEffect(() => {
-    void load();
     api
       .get<Organization[]>("/orgs")
       .then((list) => setOrgs(Array.isArray(list) ? list : []))
       .catch(() => setOrgs([]));
+  }, []);
+
+  useEffect(() => {
+    void load();
   }, [load]);
 
+  // Validate cục bộ trước khi POST — tránh round-trip 422 cho email/SĐT sai format.
+  const emailError = validateEmail(form.email, { required: true });
+  const phoneError = validatePhoneVN(form.phone);
   const createUser = async (e: FormEvent) => {
     e?.preventDefault?.();
     setCreateErr(null);
+    setTouched({ email: true, phone: true });
+    if (emailError || phoneError) return;
     setCreateBusy(true);
     try {
       await api.post<ManagedUser>("/users", { ...form, phone: form.phone || undefined });
       setShowCreate(false);
+      setTouched({});
       setForm({ email: "", full_name: "", role: "org_admin", org_id: "", password: "", phone: "" });
       await load(true);
     } catch (err) {
@@ -147,12 +167,16 @@ export default function UsersPage() {
   const doResetPassword = async () => {
     if (!resetUser) return;
     setResetBusy(true);
+    setResetErr(null);
     try {
       await api.post(`/users/${resetUser.id}/reset-password`, { new_password: resetPass });
       setResetUser(null);
       setResetPass("");
+      // Refresh để badge "Cần đổi MK" / trạng thái phản ánh đúng ngay
+      await load(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Reset mật khẩu thất bại");
+      // Hiển thị TRONG modal — banner ngoài trang bị backdrop của modal che
+      setResetErr(err instanceof Error ? err.message : "Reset mật khẩu thất bại");
     } finally {
       setResetBusy(false);
     }
@@ -273,7 +297,7 @@ export default function UsersPage() {
                         {u.last_login_at ? (
                           <>
                             <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20">Đã kích hoạt</Badge>
-                            <p className="text-xs text-slate-400">{formatDateTime(u.last_login_at)}</p>
+                            <p className="text-xs text-slate-400">{formatDate(u.last_login_at)}</p>
                           </>
                         ) : (
                           <Badge className="bg-slate-100 text-slate-600 ring-slate-500/20">Chưa kích hoạt</Badge>
@@ -292,7 +316,7 @@ export default function UsersPage() {
                         <Badge className="bg-amber-50 text-amber-700 ring-amber-600/20">Chưa bật</Badge>
                       )}
                     </td>
-                    <td className={`${TD} text-xs`}>{formatDateTime(u.created_at)}</td>
+                    <td className={`${TD} text-xs`}>{formatDate(u.created_at)}</td>
                     <td className={`${TD} text-right`}>
                       <div className="flex items-center justify-end gap-1.5">
                         <Button
@@ -367,11 +391,15 @@ export default function UsersPage() {
                 required
               />
             </Field>
-            <Field label="Email" required>
-              <Input
-                type="email"
+            <Field
+              label="Email"
+              required
+              error={touched.email ? emailError : undefined}
+            >
+              <EmailInput
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
+                onBlur={() => setTouched((t) => ({ ...t, email: true }))}
                 placeholder="a@example.gov.vn"
                 required
               />
@@ -416,17 +444,22 @@ export default function UsersPage() {
                 required
               />
             </Field>
-            <Field label="Số điện thoại (tùy chọn)" hint="Mã hóa AES-256-GCM">
-              <Input
+            <Field
+              label="Số điện thoại (tùy chọn)"
+              hint={touched.phone && !phoneError ? "Mã hóa AES-256-GCM" : undefined}
+              error={touched.phone ? phoneError : undefined}
+            >
+              <PhoneInput
                 value={form.phone ?? ""}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
                 placeholder="0983…"
               />
             </Field>
           </div>
           {createErr && <p className="text-sm text-rose-600">{createErr}</p>}
           <p className="text-xs text-slate-400">
-            Tài khoản tạo xong có thể đăng nhập ngay. Admin nên bật 2FA ở trang "Bảo mật tài khoản".
+            Tài khoản tạo xong có thể đăng nhập ngay. Admin nên bật 2FA ở trang &quot;Bảo mật tài khoản&quot;.
           </p>
         </form>
       </Modal>
@@ -450,11 +483,19 @@ export default function UsersPage() {
             <Input
               type="password"
               value={resetPass}
-              onChange={(e) => setResetPass(e.target.value)}
+              onChange={(e) => {
+                setResetPass(e.target.value);
+                setResetErr(null);
+              }}
               placeholder="••••••••"
               minLength={8}
             />
           </Field>
+          {resetErr && (
+            <p role="alert" className="text-sm text-rose-600">
+              {resetErr}
+            </p>
+          )}
           <p className="text-xs text-slate-400">
             Hành động ghi vào audit log. Người dùng phải đăng nhập bằng mật khẩu mới.
           </p>

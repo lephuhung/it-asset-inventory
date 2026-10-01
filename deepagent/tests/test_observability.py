@@ -110,7 +110,8 @@ def test_safe_error_detail_includes_http_status_for_api_errors() -> None:
             self.status_code = status_code
 
     detail = safe_error_detail(FakeApiError(400), sensitive_values=())
-    assert detail.startswith("FakeApiError: ")
+    # Format: [<category>] <hint> [HTTP <code>]
+    assert detail.startswith("[")
     assert "[HTTP 400]" in detail
     # Nội dung gốc KHÔNG được lộ
     assert "upstream message" not in detail
@@ -132,7 +133,7 @@ def test_safe_error_detail_omits_http_status_for_non_http_errors() -> None:
     # Exception không có status_code
     detail_plain = safe_error_detail(RuntimeError("boom"), sensitive_values=())
     assert "[HTTP" not in detail_plain
-    assert detail_plain.startswith("RuntimeError: ")
+    assert detail_plain.startswith("[")
 
     # status_code ngoài HTTP error range (vd: 200, 0, 100) phải bị bỏ
     class WeirdStatusError(Exception):

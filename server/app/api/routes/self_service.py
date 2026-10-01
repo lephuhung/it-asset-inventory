@@ -13,12 +13,11 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin, visible_org_ids
-from app.core.client_ip import get_client_ip
+from app.core.client_ip import get_client_ip, rate_limit_key
 from app.core.audit import append_audit
 from app.core.config import settings
 from app.core.security import generate_enroll_token, hash_token
@@ -36,7 +35,7 @@ from app.services.phone_encryption import encrypt_phone
 from app.services.agent_settings import effective_agent_config
 
 router = APIRouter(prefix="/api/self-service", tags=["self-service"])
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=rate_limit_key)
 
 
 def _make_code() -> str:

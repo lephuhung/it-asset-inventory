@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.db.models import MachineStatus, TokenStatus
 
@@ -52,7 +52,9 @@ class BulkTagRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)  # Hỗ trợ cả email và username
     password: str
-    totp_code: str | None = Field(default=None, max_length=6)
+    totp_code: str | None = Field(
+        default=None, max_length=16
+    )  # mã TOTP 6 số hoặc backup code (10 ký tự hex)
 
 
 class LoginResponse(BaseModel):
@@ -680,6 +682,37 @@ class MachineDecision(BaseModel):
     """Duyệt / từ chối máy chờ duyệt (pending approval) hoặc drift."""
 
     note: str | None = Field(default=None, max_length=1000)
+
+
+class EnrollAttemptOut(BaseModel):
+    """1 yêu cầu enroll bị từ chối ở cổng token (máy xin vào với token cũ/lạ)."""
+
+    id: uuid.UUID
+    org_id: uuid.UUID | None
+    org_name: str | None = None
+    token_status: str  # unknown | used | expired | revoked
+    token_prefix: str | None
+    hostname: str | None
+    ip: str | None
+    fingerprint: dict = {}
+    matched_machine_id: uuid.UUID | None = None
+    matched_machine_hostname: str | None = None
+    status: str  # pending | approved | rejected
+    note: str | None
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class EnrollAttemptDecision(BaseModel):
+    """Approve/Reject 1 enroll attempt (note tùy chọn)."""
+
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class EnrollAttemptApproveResponse(TokenCreateResponse):
+    """Approve attempt → sinh token thay thế (kèm lệnh cài) — trả về cho admin."""
+
+    attempt_id: uuid.UUID
 
 
 class AssignUserRequest(BaseModel):
@@ -1735,3 +1768,509 @@ class AnnouncementResponse(BaseModel):
     creator_name: str | None = None
     created_at: datetime
 
+
+
+
+# ── Yêu cầu an toàn theo cấp độ + thẩm định ─────────────────
+
+
+class LevelRequirementIn(BaseModel):
+    """Tạo/sửa yêu cầu an toàn trong catalog theo cấp độ (Super Admin)."""
+
+    level: int = Field(ge=1, le=3)
+    code: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class LevelRequirementOut(LevelRequirementIn):
+    id: uuid.UUID
+
+
+class LevelRequirementUpdate(BaseModel):
+    """Cập nhật một phần yêu cầu trong catalog (Super Admin)."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class ProfileRequirementRequest(BaseModel):
+    """Đơn vị khai báo hoàn thành yêu cầu, trình Super Admin thẩm định."""
+
+    evidence: str = Field(min_length=1)
+
+
+class ProfileRequirementReview(BaseModel):
+    """Super Admin thẩm định yêu cầu: verify (đạt) / reject (không đạt)."""
+
+    action: str = Field(pattern="^(verify|reject)$")
+    review_note: str | None = None
+
+
+class ProfileRequirementOut(BaseModel):
+    id: uuid.UUID
+    requirement_id: uuid.UUID
+    code: str
+    title: str
+    description: str | None = None
+    sort_order: int = 0
+    status: str
+    evidence: str | None = None
+    review_note: str | None = None
+    requested_at: datetime | None = None
+    reviewed_at: datetime | None = None
+
+# ── Cán bộ phụ trách (đầu mối SuperAdmin) — đặt TRƯỚC SystemProfileCreate
+# vì SystemProfileOut cần tham chiếu tới OfficerOut (forward ref khi
+# `from __future__ import annotations` không resolve được nếu đặt sau). ──
+
+class OfficerIn(BaseModel):
+    """Tạo cán bộ phụ trách mới (Super Admin)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerUpdate(BaseModel):
+    """Cập nhật một phần cán bộ phụ trách. Tất cả trường đều optional."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerOut(OfficerIn):
+    id: uuid.UUID
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileAssignOfficerIn(BaseModel):
+    """Body gán cán bộ phụ trách vào hồ sơ (PUT /system-profiles/{id}/officer)."""
+
+    officer_id: uuid.UUID
+
+
+# ── Hồ sơ cấp độ hệ thống thông tin ─────────────────────────
+
+
+class SystemProfileCreate(BaseModel):
+    """Tạo hồ sơ cấp độ — mã hồ sơ tự sinh; Super Admin có thể approve trực tiếp."""
+
+    org_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=255)
+    level: int = Field(ge=1, le=3)
+    description: str | None = None
+    diagram_mermaid: str | None = None
+    managed_by: str | None = Field(default=None, max_length=255)
+    document_number: str | None = Field(default=None, max_length=128)
+    document_date: date | None = None
+    # Chỉ Super Admin — tạo kèm quyết định phê duyệt (approved ngay)
+    decision_number: str | None = Field(default=None, max_length=255)
+    decision_date: datetime | None = None
+    decision_agency: str | None = Field(default=None, max_length=255)
+
+
+class SystemProfileUpdate(BaseModel):
+    """Cập nhật hồ sơ — không cho sửa qua endpoint này khi đã approved
+    (trừ Super Admin, xử lý ở router).
+
+    BLOCKER 3 v3: Contract nullable rõ ràng:
+      - `name`, `level` là NOT NULL trong DB. Explicit null bị reject 422.
+      - Các field khác (description, diagram_mermaid, v.v.) cho phép explicit
+        null để clear (nullable clearing feature).
+    """
+
+    # NOT NULL fields: explicit null phải raise validation error.
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    level: int | None = Field(default=None, ge=1, le=3)
+    description: str | None = None
+    diagram_mermaid: str | None = None
+    physical_diagram_mermaid: str | None = None
+    # Bố cục sơ đồ React Flow (vị trí node kéo thả) — dict tự do, server chỉ
+    # lưu thô; client tự validate shape khi đọc.
+    diagram_layout: dict | None = None
+    physical_diagram_layout: dict | None = None
+    physical_location: str | None = None
+    user_accounts: int | None = Field(default=None, ge=0)
+    data_volume: str | None = None
+    service_audience: str | None = Field(default=None, max_length=32)
+    managed_by: str | None = Field(default=None, max_length=255)
+    document_number: str | None = Field(default=None, max_length=128)
+    document_date: date | None = None
+
+    @field_validator("name", "level")
+    @classmethod
+    def _no_explicit_null_for_required_fields(cls, value, info):
+        """BLOCKER 3 v3: name/level phải là giá trị thực (NOT NULL), KHÔNG null.
+
+        Trước fix: schema cho phép null; router setattr(field, None) → DB
+        IntegrityError / 500.
+        Sau fix: explicit null reject 422 controlled.
+        """
+        if value is None:
+            raise ValueError(
+                f"{info.field_name} không được null (DB NOT NULL); "
+                "để giữ nguyên, bỏ field khỏi body PATCH."
+            )
+        return value
+
+
+# ── Dossier hồ sơ: chủ quản/vận hành, ứng dụng, vùng mạng ──
+
+
+class SystemProfilePartyIn(BaseModel):
+    """Thông tin chủ quản / đơn vị vận hành (1 hồ sơ có tối đa 2 bản ghi)."""
+
+    role: str = Field(default="owner", pattern="^(owner|operator)$")
+    name: str = Field(min_length=1, max_length=255)
+    mandate_document: str | None = None
+    legal_representative: str | None = Field(default=None, max_length=255)
+    representative_title: str | None = Field(default=None, max_length=128)
+    address: str | None = None
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+
+
+class SystemProfilePartyOut(SystemProfilePartyIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileApplicationIn(BaseModel):
+    """Ứng dụng/dịch vụ: máy chủ cài đặt (Machine hoặc nhập tay) + vai trò."""
+
+    name: str = Field(min_length=1, max_length=255)
+    machine_id: uuid.UUID | None = None
+    server_name: str | None = Field(default=None, max_length=255)
+    os_name: str | None = Field(default=None, max_length=255)
+    role: str | None = None
+    url: str | None = Field(default=None, max_length=255)
+    note: str | None = None
+
+
+class SystemProfileApplicationOut(SystemProfileApplicationIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileIpRangeIn(BaseModel):
+    """Dải IP trong quy hoạch vùng mạng.
+
+    Validation:
+      - `cidr` phải là CIDR hợp lệ (vd `192.168.0.0/24`, `2001:db8::/32`). Parse
+        bằng Python `ipaddress.ip_network(strict=False)` để chấp nhận cả
+        `192.168.0.5/24` (host bits set) → reject nếu không phải prefix length.
+      - `gateway` (optional) phải là IP hợp lệ nếu có.
+      - Nếu gateway tồn tại + cùng IP version (CIDR/gateway cùng family), không
+        bắt buộc gateway phải nằm trong network (business rule có thể relax; hiện
+        chỉ check version match).
+    """
+
+    zone: str = Field(min_length=1, max_length=128)
+    zone_description: str | None = None
+    cidr: str = Field(min_length=1, max_length=64)
+    ip_kind: str = Field(default="private", pattern="^(private|public)$")
+    gateway: str | None = Field(default=None, max_length=45)
+    note: str | None = None
+
+    @field_validator("cidr")
+    @classmethod
+    def _validate_cidr(cls, value: str) -> str:
+        import ipaddress as _ip
+        try:
+            # strict=False chấp nhận host bits set — sau đó check bằng prefixlen
+            # để đảm bảo là network thực sự. Nếu network == IP thì mask che toàn bộ → OK.
+            net = _ip.ip_network(value, strict=False)
+            if net.num_addresses == 1 and "/" not in value:
+                raise ValueError(
+                    f"cidr phải là dải CIDR (vd 10.0.0.0/24); nhận {value!r}"
+                )
+        except ValueError as exc:
+            raise ValueError(f"cidr không hợp lệ {value!r}: {exc}") from exc
+        return value
+
+    @field_validator("gateway")
+    @classmethod
+    def _validate_gateway(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return value
+        import ipaddress as _ip
+        try:
+            _ip.ip_address(value)
+        except ValueError as exc:
+            raise ValueError(f"gateway không phải IP hợp lệ {value!r}: {exc}") from exc
+        return value
+
+    @model_validator(mode="after")
+    def _validate_cidr_gateway_same_family(self) -> "SystemProfileIpRangeIn":
+        """P2 v3: cidr và gateway phải cùng IP family (IPv4 hoặc IPv6).
+        Business rule hiện tại chỉ enforce family match (chưa enforce gateway ∈ network).
+        Document rõ nếu sau này muốn enforce membership.
+        """
+        if self.gateway is None or self.gateway == "":
+            return self
+        import ipaddress as _ip
+        try:
+            network = _ip.ip_network(self.cidr, strict=False)
+            gateway = _ip.ip_address(self.gateway)
+        except ValueError as exc:
+            # _validate_cidr / _validate_gateway đã catch các lỗi format; đến đây
+            # chỉ là safety net nếu validator bị skip.
+            raise ValueError(f"cidr/gateway format invalid: {exc}") from exc
+        if network.version != gateway.version:
+            raise ValueError(
+                f"cidr {self.cidr} (IPv{network.version}) và gateway {self.gateway} "
+                f"(IPv{gateway.version}) phải cùng IP family"
+            )
+        return self
+
+
+class SystemProfileIpRangeOut(SystemProfileIpRangeIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileDeviceIn(BaseModel):
+    """Thêm/sửa thiết bị khai báo trong hồ sơ (nhập tay)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    device_code: str | None = Field(default=None, max_length=128)
+    tag: str | None = Field(default=None, max_length=128)
+    device_type: str = Field(default="other", max_length=32)
+    ip: str | None = Field(default=None, max_length=45)
+    model: str | None = Field(default=None, max_length=255)
+    machine_id: uuid.UUID | None = None
+    sort_order: int = 0
+    location: str | None = Field(default=None, max_length=255)
+    purpose: str | None = None
+
+
+class SystemProfileDeviceOut(SystemProfileDeviceIn):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+
+
+class SystemProfileMachineOut(BaseModel):
+    machine_id: uuid.UUID
+    hostname: str | None = None
+    machine_uuid: str | None = None
+    status: str | None = None
+    note: str | None = None
+    added_at: datetime
+
+
+class SystemProfileReview(BaseModel):
+    """Super Admin duyệt / từ chối hồ sơ."""
+
+    action: str = Field(pattern="^(approve|reject)$")
+    decision_number: str | None = Field(default=None, max_length=255)
+    decision_date: datetime | None = None
+    decision_agency: str | None = Field(default=None, max_length=255)
+    review_note: str | None = None
+
+
+class SystemProfileReportImplementation(BaseModel):
+    """Đơn vị khai báo đã triển khai hệ thống theo hồ sơ (approved → implemented)."""
+
+    note: str | None = None
+
+
+class SystemProfileConfirmImplementation(BaseModel):
+    """Super Admin xác nhận đơn vị đáp ứng hồ sơ (implemented → fulfilled)."""
+
+    review_note: str | None = None
+
+
+class SystemProfileEventOut(BaseModel):
+    """Một mốc trên timeline hồ sơ (mới nhất trước)."""
+
+    id: uuid.UUID
+    event: str
+    message: str
+    actor_id: uuid.UUID | None = None
+    actor_name: str | None = None
+    created_at: datetime
+
+
+class OfficerIn(BaseModel):
+    """Tạo cán bộ phụ trách mới (Super Admin)."""
+
+    name: str = Field(min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerUpdate(BaseModel):
+    """Cập nhật một phần cán bộ phụ trách. Tất cả trường đều optional."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    organization: str | None = Field(default=None, max_length=255)
+    title: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr | None = None
+    note: str | None = None
+
+
+class OfficerOut(OfficerIn):
+    id: uuid.UUID
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileAssignOfficerIn(BaseModel):
+    """Body gán cán bộ phụ trách vào hồ sơ (PUT /system-profiles/{id}/officer)."""
+
+    officer_id: uuid.UUID
+
+class SystemProfileStats(BaseModel):
+    """Thống kê hồ sơ cấp độ (scoped theo đơn vị người dùng)."""
+
+    total: int = 0
+    by_status: dict[str, int] = {}
+    by_level: dict[str, int] = {}  # "1" | "2" | "3" (khóa string cho JSON ổn định)
+
+
+class SystemProfileOut(BaseModel):
+    id: uuid.UUID
+    org_id: uuid.UUID
+    org_name: str | None = None
+    code: str
+    name: str
+    level: int
+    description: str | None = None
+    status: str
+    decision_number: str | None = None
+    decision_date: datetime | None = None
+    decision_agency: str | None = None
+    managed_by: str | None = None
+    # Cán bộ phụ trách (đầu mối SuperAdmin) — FK sang bảng officers (toàn cục,
+    # 1 cán bộ có thể phụ trách nhiều hồ sơ). Nested object khi load; chỉ Super
+    # Admin thay đổi officer_id.
+    officer_id: uuid.UUID | None = None
+    officer: OfficerOut | None = None
+    document_number: str | None = None
+    document_date: date | None = None
+    review_note: str | None = None
+    reviewed_at: datetime | None = None
+    diagram_mermaid: str | None = None
+    diagram_layout: dict | None = None
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+    device_count: int = 0
+    machine_count: int = 0
+
+
+class SystemProfileDetailOut(SystemProfileOut):
+    devices: list[SystemProfileDeviceOut] = []
+    machines: list[SystemProfileMachineOut] = []
+    requirements: list[ProfileRequirementOut] = []
+    parties: list[SystemProfilePartyOut] = []
+    applications: list[SystemProfileApplicationOut] = []
+    ip_ranges: list[SystemProfileIpRangeOut] = []
+    contacts: list[SystemProfileContactOut] = []
+    events: list[SystemProfileEventOut] = []
+    # Đáp ứng cấp độ: đủ n yêu cầu của cấp độ hồ sơ được thẩm định đạt
+    requirements_total: int = 0
+    requirements_verified: int = 0
+    level_compliant: bool = False
+    physical_diagram_mermaid: str | None = None
+    physical_diagram_layout: dict | None = None
+    physical_location: str | None = None
+    user_accounts: int | None = None
+    data_volume: str | None = None
+    service_audience: str | None = None
+
+
+# ── Catalog loại thiết bị (quản trị động) ───────────────────
+
+
+class DeviceTypeIn(BaseModel):
+    """Tạo/cập nhật loại thiết bị (Super Admin). `icon` là emoji cho sơ đồ Mermaid."""
+
+    code: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=128)
+    icon: str | None = Field(default=None, max_length=16)
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class DeviceTypeOut(DeviceTypeIn):
+    id: uuid.UUID
+
+
+class DeviceTypeUpdate(BaseModel):
+    """Cập nhật một phần loại thiết bị. `code` không cho đổi (được tham chiếu bởi hồ sơ)."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=128)
+    icon: str | None = Field(default=None, max_length=16)
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+# ── Danh bạ chuyên trách CNTT / tổ chức vận hành ────────────
+
+
+class ItContactIn(BaseModel):
+    """Tạo/sửa contact: cá nhân chuyên trách CNTT hoặc tổ chức vận hành."""
+
+    org_id: uuid.UUID
+    kind: str = Field(default="person", pattern="^(person|org)$")
+    name: str = Field(min_length=1, max_length=255)
+    position: str | None = Field(default=None, max_length=255)
+    contact_person: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = None
+    note: str | None = None
+
+
+class ItContactUpdate(BaseModel):
+    """Cập nhật một phần contact. `org_id` và `kind` không cho đổi."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    position: str | None = Field(default=None, max_length=255)
+    contact_person: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = None
+    note: str | None = None
+
+
+class ItContactOut(ItContactIn):
+    id: uuid.UUID
+    org_name: str | None = None
+    profile_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class SystemProfileContactOut(BaseModel):
+    """Contact đã gắn vào hồ sơ."""
+
+    contact_id: uuid.UUID
+    kind: str
+    name: str
+    position: str | None = None
+    contact_person: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    note: str | None = None
+    added_at: datetime

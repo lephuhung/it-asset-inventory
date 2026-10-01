@@ -71,7 +71,18 @@ async def websocket_status(ws: WebSocket, token: str = Query(...)):
                 elif mtype == "subscribe":
                     new_chs = msg.get("channels") or []
                     for ch in new_chs:
-                        if ch not in channels and isinstance(ch, str) and ch.startswith(("machine:", "notification:", "user:")):
+                        # Whitelist: kênh machine public, broadcast chung, và
+                        # notification CỦA CHÍNH user — chặn subscribe hộ kênh
+                        # `notification:user:<id-khác>` (lộ notification cá nhân).
+                        if (
+                            isinstance(ch, str)
+                            and ch not in channels
+                            and (
+                                ch.startswith("machine:")
+                                or ch == "notification:broadcast"
+                                or ch == f"notification:user:{user_id}"
+                            )
+                        ):
                             await pubsub.subscribe(ch)
                             channels.add(ch)
                 elif mtype == "unsubscribe":

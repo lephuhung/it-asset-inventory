@@ -4,13 +4,15 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import type { LoginResponse } from "@/lib/types";
+import { safeInternalPath } from "@/lib/validators";
 import { Button, Card, Field, Input } from "@/components/ui";
 import { LogoMark } from "@/components/logo";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") ?? "/dashboard";
+  // Chỉ nhận path nội bộ — chặn open-redirect qua `?next=//evil.com`
+  const next = safeInternalPath(searchParams.get("next"), "/dashboard") ?? "/dashboard";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

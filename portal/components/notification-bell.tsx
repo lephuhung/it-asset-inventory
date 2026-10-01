@@ -11,9 +11,11 @@ import {
 } from "react";
 import { api } from "@/lib/api";
 import type { NotificationOut } from "@/lib/types";
+import { timeAgo } from "@/lib/format";
 import { Bell, BellRing, Check, ExternalLink, X } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { Badge, IconButton } from "@/components/ui";
+import { Badge, ConfirmDialog, IconButton } from "@/components/ui";
+import { useRealtimeEmitter } from "@/components/realtime-context";
 
 /** Validate link investigation trước khi navigate — tránh 422 nếu link lỗi. */
 function isValidInvestigationLink(link: string): boolean {
@@ -62,12 +64,13 @@ interface NotificationContextValue {
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
-/** Provider quản lý state + nhận realtime qua WebSocket context hiện có. */
+/** Provider quản lý state + nhận realtime qua emitter của RealtimeProvider. */
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationOut[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [toast, setToast] = useState<NotificationOut | null>(null);
   const lastToastedIdRef = useRef<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -82,17 +85,21 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const markRead = useCallback(async (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n)),
-    );
-    setUnreadCount((c) => Math.max(0, c - 1));
-    try {
-      await api.patch(`/notifications/${id}/read`);
-    } catch {
-      // ignore
-    }
-  }, []);
+  const markRead = useCallback(
+    async (id: string) => {
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, read_at: new Date().toISOString() } : n)),
+      );
+      setUnreadCount((c) => Math.max(0, c - 1));
+      try {
+        await api.patch(`/notifications/${id}/read`);
+      } catch {
+        // Optimistic fail → resync từ server để badge không nói dối
+        void refresh();
+      }
+    },
+    [refresh],
+  );
 
   const markAllRead = useCallback(async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read_at: n.read_at ?? new Date().toISOString() })));
@@ -100,54 +107,81 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     try {
       await api.post("/notifications/mark-all-read", {});
     } catch {
-      // ignore
+      void refresh();
     }
-  }, []);
+  }, [refresh]);
 
-  const deleteOne = useCallback(async (id: string) => {
-    const n = notifications.find((x) => x.id === id);
-    setNotifications((prev) => prev.filter((x) => x.id !== id));
-    if (n && !n.read_at) setUnreadCount((c) => Math.max(0, c - 1));
-    try {
-      await api.delete(`/notifications/${id}`);
-    } catch {
-      // ignore
-    }
-  }, [notifications]);
+  const deleteOne = useCallback(
+    async (id: string) => {
+      const n = notifications.find((x) => x.id === id);
+      setNotifications((prev) => prev.filter((x) => x.id !== id));
+      if (n && !n.read_at) setUnreadCount((c) => Math.max(0, c - 1));
+      try {
+        await api.delete(`/notifications/${id}`);
+      } catch {
+        void refresh();
+      }
+    },
+    [notifications, refresh],
+  );
 
   const dismissToast = useCallback(() => setToast(null), []);
+
+  const showToast = useCallback((n: NotificationOut) => {
+    lastToastedIdRef.current = n.id;
+    setToast(n);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 8000);
+  }, []);
 
   // Poll lần đầu khi mount
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  // Lắng nghe realtime từ WebSocket
-  const realtime = useRealtimeSafe();
+  // Poll định kỳ 60s — lưới an toàn khi WS không tới được (proxy chặn WS,
+  // mạng họp...). Realtime chỉ là lớp tăng tốc, polling đảm bảo badge luôn đúng.
   useEffect(() => {
-    if (!realtime) return;
+    const t = setInterval(() => {
+      void refresh();
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  // Toast timer phải được clear khi unmount (trước đây bị rò timer)
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
+
+  // Lắng nghe realtime từ WebSocket emitter (loại `notification:new`)
+  const emitter = useRealtimeEmitter();
+  useEffect(() => {
+    if (!emitter) return;
     const handle = (raw: unknown) => {
-      const data = raw as { type?: string; notifications?: NotificationOut[] };
-      if (data?.type === "notification:new" && Array.isArray(data.notifications)) {
-        setNotifications((prev) => [...data.notifications!, ...prev].slice(0, 100));
-        setUnreadCount((c) => c + data.notifications!.length);
-        // Toast cho notification đầu tiên (chỉ khi severity >= warning)
-        const first = data.notifications[0];
-        if (
-          first &&
-          ["warning", "error", "critical"].includes(first.severity) &&
-          lastToastedIdRef.current !== first.id
-        ) {
-          lastToastedIdRef.current = first.id;
-          setToast(first);
-          // Auto-dismiss sau 8s
-          setTimeout(() => setToast(null), 8000);
-        }
+      const data = raw as { notifications?: NotificationOut[] };
+      const incoming = Array.isArray(data?.notifications) ? data.notifications : [];
+      if (incoming.length === 0) return;
+      // Chèn phần chưa có trong list (polling có thể đã nhặt trước đó)
+      setNotifications((prev) => {
+        const known = new Set(prev.map((n) => n.id));
+        return [...incoming.filter((n) => !known.has(n.id)), ...prev].slice(0, 100);
+      });
+      setUnreadCount((c) => c + incoming.length);
+      // Toast cho notification đầu tiên (chỉ khi severity >= warning)
+      const first = incoming[0];
+      if (
+        first &&
+        ["warning", "error", "critical"].includes(first.severity) &&
+        lastToastedIdRef.current !== first.id
+      ) {
+        showToast(first);
       }
     };
-    realtime.on("notification:new", handle);
-    return () => realtime.off("notification:new", handle);
-  }, [realtime]);
+    emitter.on("notification:new", handle);
+    return () => emitter.off("notification:new", handle);
+  }, [emitter, showToast]);
 
   return (
     <NotificationContext.Provider
@@ -185,37 +219,30 @@ export function useNotifications(): NotificationContextValue {
   return ctx;
 }
 
-/** Hook phụ trợ: lấy emitter từ realtime-context (nếu có) để đăng ký listener. */
-function useRealtimeSafe(): {
-  on: (type: string, fn: (data: unknown) => void) => void;
-  off: (type: string, fn: (data: unknown) => void) => void;
-} | null {
-  try {
-    // Tận dụng useRealtime() nếu đã có. Nếu không có event emitter, fallback null.
-    // Hiện tại realtime-context chưa có emitter → trả null (vẫn hoạt động nhờ polling).
-    // Để đơn giản, khi cần ta sẽ thêm emitter vào realtime-context.
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 // ── Bell + dropdown ────────────────────────────────────────────
 
 export function NotificationBell() {
   const { notifications, unreadCount, markRead, markAllRead, deleteOne } = useNotifications();
   const [open, setOpen] = useState(false);
+  const [invalidLinkOpen, setInvalidLinkOpen] = useState(false);
   const router = useRouter();
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Click outside để đóng
+  // Click outside + Escape để đóng
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const onMouseDown = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const handleClick = (n: NotificationOut) => {
@@ -224,8 +251,7 @@ export function NotificationBell() {
       setOpen(false);
       // Validate UUID trong link trước khi navigate (tránh 422)
       if (!isValidInvestigationLink(n.link)) {
-        // eslint-disable-next-line no-alert
-        alert("Link không hợp lệ — investigation này có thể đã bị xoá hoặc link bị lỗi.");
+        setInvalidLinkOpen(true);
         return;
       }
       router.push(n.link);
@@ -252,6 +278,15 @@ export function NotificationBell() {
           </span>
         )}
       </button>
+
+      <ConfirmDialog
+        open={invalidLinkOpen}
+        onClose={() => setInvalidLinkOpen(false)}
+        onConfirm={() => setInvalidLinkOpen(false)}
+        title="Liên kết không hợp lệ"
+        confirmLabel="Đã hiểu"
+        message="Liên kết trong thông báo này không còn hợp lệ — investigation có thể đã bị xoá hoặc link bị lỗi."
+      />
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 flex max-h-[600px] w-96 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
@@ -384,16 +419,4 @@ export function NotificationToast() {
       </div>
     </div>
   );
-}
-
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s trước`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}ph trước`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}giờ trước`;
-  const d = Math.floor(h / 24);
-  return `${d}ngày trước`;
 }

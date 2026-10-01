@@ -28,6 +28,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
+import { validateEmail, validatePhoneVN } from "@/lib/validators";
 import type {
   AssignUserMode,
   AssignUserRequest,
@@ -35,7 +36,7 @@ import type {
   ManagedUser,
   OfflineImportResponse,
 } from "@/lib/types";
-import { Button, Card, ErrorBanner, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
+import { Button, Card, ConfirmDialog, EmailInput, ErrorBanner, Field, Input, PageHeader, PhoneInput, Select, Textarea } from "@/components/ui";
 
 const SAMPLE_PAYLOAD = {
   machine_uuid: "offline-demo-1",
@@ -73,9 +74,14 @@ export default function OfflineImportPage() {
   const [newDepartment, setNewDepartment] = useState("");
   const [assignNote, setAssignNote] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
+  // Xác nhận gỡ người dùng — ConfirmDialog thay confirm() native
+  const [confirmUnassign, setConfirmUnassign] = useState(false);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [touched, setTouched] = useState<{ newEmail?: boolean; newPhone?: boolean }>({});
   const [assignResult, setAssignResult] = useState<AssignUserResponse | null>(null);
-
+  // Validate cục bộ — dùng để hiển thị error inline và chặn submit.
+  const newEmailError = validateEmail(newEmail, { required: true });
+  const newPhoneError = validatePhoneVN(newPhone);
   const fillSample = () => {
     setPayload(JSON.stringify(SAMPLE_PAYLOAD, null, 2));
     setSignature("(dán chữ ký ECDSA base64 — sinh bởi agent khi xuất file)");
@@ -160,9 +166,7 @@ export default function OfflineImportPage() {
       }
     })();
   }, [result?.machine_id]);
-
-  const submitAssignUser = async () => {
-    if (!result) return;
+  const assignUser = async () => {
     setAssignBusy(true);
     setAssignError(null);
     setAssignResult(null);
@@ -175,6 +179,8 @@ export default function OfflineImportPage() {
         if (!newFullName.trim() || !newEmail.trim()) {
           throw new ApiError(400, "Nhập họ tên và email");
         }
+        setTouched({ newEmail: true, newPhone: true });
+        if (newEmailError || newPhoneError) return;
         body = {
           mode: "new",
           full_name: newFullName.trim(),
@@ -184,6 +190,7 @@ export default function OfflineImportPage() {
           note: assignNote || undefined,
         };
       }
+      if (!result) return;
       const res = await api.post<AssignUserResponse>(
         `/machines/${result.machine_id}/assign-user`,
         body,
@@ -196,9 +203,13 @@ export default function OfflineImportPage() {
     }
   };
 
-  const unassignUser = async () => {
+  const unassignUser = () => {
     if (!result) return;
-    if (!confirm("Gỡ người dùng khỏi máy này?")) return;
+    setConfirmUnassign(true);
+  };
+
+  const doUnassignUser = async () => {
+    if (!result) return;
     setAssignBusy(true);
     setAssignError(null);
     try {
@@ -483,20 +494,30 @@ export default function OfflineImportPage() {
                             placeholder="Nguyễn Văn A"
                           />
                         </Field>
-                        <Field label="Email" required hint="Dùng email cơ quan — không trùng user khác">
-                          <Input
-                            type="email"
+                        <Field
+                          label="Email"
+                          required
+                          hint={touched.newEmail && !newEmailError ? "Dùng email cơ quan — không trùng user khác" : undefined}
+                          error={touched.newEmail ? newEmailError : undefined}
+                        >
+                          <EmailInput
                             value={newEmail}
                             onChange={(e) => setNewEmail(e.target.value)}
+                            onBlur={() => setTouched((t) => ({ ...t, newEmail: true }))}
                             placeholder="a@coquan.gov.vn"
                           />
                         </Field>
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <Field label="Số điện thoại" hint="Mã hóa AES-256-GCM khi lưu">
-                          <Input
+                        <Field
+                          label="Số điện thoại"
+                          hint={touched.newPhone && !newPhoneError ? "Mã hóa AES-256-GCM khi lưu" : undefined}
+                          error={touched.newPhone ? newPhoneError : undefined}
+                        >
+                          <PhoneInput
                             value={newPhone}
                             onChange={(e) => setNewPhone(e.target.value)}
+                            onBlur={() => setTouched((t) => ({ ...t, newPhone: true }))}
                             placeholder="0987654321"
                           />
                         </Field>
@@ -519,7 +540,7 @@ export default function OfflineImportPage() {
                   )}
 
                   <Button
-                    onClick={() => void submitAssignUser()}
+                    onClick={() => void assignUser()}
                     loading={assignBusy}
                     disabled={
                       (assignMode === "existing" && !selectedUserId) ||
@@ -734,6 +755,20 @@ export default function OfflineImportPage() {
           </Card>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmUnassign}
+        onClose={() => setConfirmUnassign(false)}
+        onConfirm={() => {
+          setConfirmUnassign(false);
+          void doUnassignUser();
+        }}
+        title="Gỡ người dùng khỏi máy?"
+        message="Liên kết người dùng hiện tại với máy này sẽ bị xoá."
+        confirmLabel="Gỡ"
+        danger
+        loading={assignBusy}
+      />
     </div>
   );
 }

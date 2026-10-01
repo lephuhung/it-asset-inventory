@@ -192,3 +192,14 @@ def get_client_ip(
             return _normalize(xri.strip())
 
     return _normalize(peer) if peer else None
+
+
+def rate_limit_key(request: Request) -> str:
+    """Key function cho slowapi — IP thật của client sau proxy.
+
+    Mặc định slowapi dùng `get_remote_address` (peer IP). Khi FastAPI chạy sau
+    nginx/portal thì peer IP luôn là proxy → mọi user chung 1 bucket rate-limit
+    (dễ khóa đăng nhập toàn hệ thống) và không throttle được từng attacker.
+    Dùng `get_client_ip` để key theo IP gốc (đã verify trusted proxy).
+    """
+    return get_client_ip(request) or "unknown"

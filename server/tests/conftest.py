@@ -113,6 +113,22 @@ async def db_engine() -> AsyncEngine:
         # Fresh schema mỗi test
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        # Seed catalog loại thiết bị (test không chạy alembic — mirror migration d4e5f6a7b8c9)
+        from sqlalchemy import insert as _insert
+        from app.db.models import DeviceType
+        for i, (code, label, icon) in enumerate([
+            ("firewall", "Firewall", "🛡️"),
+            ("router", "Router", "📡"),
+            ("switch", "Switch", "🔀"),
+            ("server", "Máy chủ", "🖥️"),
+            ("workstation", "Máy trạm", "💻"),
+            ("storage", "Hệ thống lưu trữ", "💾"),
+            ("ups", "UPS", "🔋"),
+            ("other", "Khác", "📦"),
+        ]):
+            await conn.execute(
+                _insert(DeviceType).values(id=__import__("uuid").uuid4(), code=code, label=label, icon=icon, sort_order=i)
+            )
     yield engine
     await engine.dispose()
 

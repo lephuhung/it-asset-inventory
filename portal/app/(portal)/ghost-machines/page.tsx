@@ -160,7 +160,7 @@ export default function GhostMachinesPage() {
           </table>
           <p className="flex items-center gap-1.5 border-t border-slate-100 px-4 py-2.5 text-xs text-slate-400">
             <Ghost className="size-3.5" />
-            Thời gian 'mất kết nối' ước tính từ <code>last_seen_at</code>; ngưỡng chính xác do
+            Thời gian &#39;mất kết nối&#39; ước tính từ <code>last_seen_at</code>; ngưỡng chính xác do
             server cấu hình <code>LOST_AFTER_DAYS</code> (mặc định 15 ngày).
           </p>
         </div>

@@ -14,7 +14,7 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 COPY package.json pnpm-lock.yaml* ./
 
 # Cài deps (frozen lockfile). node_modules + .next được mount qua volume để cache.
-RUN pnpm install --frozen-lockfile || npm install
+RUN pnpm install --frozen-lockfile
 
 EXPOSE 3003
 

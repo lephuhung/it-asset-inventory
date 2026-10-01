@@ -199,20 +199,27 @@ function subtreeHasVisible(org: Organization, visibleIds: Set<string>): boolean 
   return (org.children ?? []).some((c) => subtreeHasVisible(c, visibleIds));
 }
 
-/** Một khối tổ chức (UBND cấp xã / Sở ban ngành) — header + cây con riêng. */
+/** Một khối tổ chức (UBND cấp xã / Sở ban ngành) — header + cây con riêng.
+    Header có nút thu gọn riêng của khối; đang tìm kiếm thì luôn mở. */
 function OrgSection({
+  id,
   icon,
   title,
   nodes,
   collapsed,
   onToggle,
+  sectionCollapsed,
+  onToggleSection,
   visibleIds,
 }: {
+  id: string;
   icon: React.ReactNode;
   title: string;
   nodes: Organization[];
   collapsed: Set<string>;
   onToggle: (id: string) => void;
+  sectionCollapsed: Set<string>;
+  onToggleSection: (id: string) => void;
   visibleIds: Set<string> | null;
 }) {
   if (nodes.length === 0) return null;
@@ -220,16 +227,28 @@ function OrgSection({
   if (visibleIds && !nodes.some((n) => subtreeHasVisible(n, visibleIds))) return null;
 
   const count = nodes.reduce((acc, n) => acc + countNodes(n), 0);
+  const open = visibleIds !== null || !sectionCollapsed.has(id);
   return (
     <div className="mb-4 last:mb-0">
       <div className="mb-1.5 flex items-center gap-2 rounded-md bg-slate-50/80 px-2.5 py-1.5">
+        <button
+          onClick={() => onToggleSection(id)}
+          aria-expanded={open}
+          aria-label={`${open ? "Thu gọn" : "Mở"} ${title}`}
+          className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-slate-400 transition-colors hover:bg-white hover:text-slate-600"
+        >
+          <ChevronRight
+            className={`size-3.5 transition-transform motion-reduce:transition-none ${open ? "rotate-90" : ""}`}
+          />
+        </button>
         <span className="text-slate-400">{icon}</span>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-600">{title}</h3>
         <span className="ml-auto rounded-full bg-white px-2 py-0.5 text-[11px] font-medium tabular-nums text-slate-400 ring-1 ring-inset ring-slate-200">
           {count} tổ chức
         </span>
       </div>
-      <ul>
+      {open && (
+        <ul>
         {nodes.map((n) => (
           <OrgNode
             key={n.id}
@@ -239,7 +258,8 @@ function OrgSection({
             visibleIds={visibleIds}
           />
         ))}
-      </ul>
+        </ul>
+      )}
     </div>
   );
 }
@@ -267,6 +287,7 @@ export default function OrganizationsPage() {
   /* ── Cây co cụm + tìm kiếm ── */
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [sectionCollapsed, setSectionCollapsed] = useState<Set<string>>(new Set());
   const bootstrapped = useRef(false);
 
   // Lần đầu tải xong: thu gọn TOÀN BỘ các nhánh có cấp dưới (mặc định đóng)
@@ -295,6 +316,15 @@ export default function OrganizationsPage() {
 
   const toggle = useCallback((id: string) => {
     setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSection = useCallback((id: string) => {
+    setSectionCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -446,27 +476,36 @@ export default function OrganizationsPage() {
                    2 khối RIÊNG: UBND cấp xã · Sở ban ngành (không trộn chung). */
                 <div className="max-h-[560px] overflow-y-auto p-3">
                   <OrgSection
+                    id="ubnd"
                     icon={<Landmark className="size-4" />}
                     title="UBND cấp xã"
                     nodes={ubnd}
                     collapsed={collapsed}
                     onToggle={toggle}
+                    sectionCollapsed={sectionCollapsed}
+                    onToggleSection={toggleSection}
                     visibleIds={visibleIds}
                   />
                   <OrgSection
+                    id="so"
                     icon={<Network className="size-4" />}
                     title="Sở ban ngành"
                     nodes={so}
                     collapsed={collapsed}
                     onToggle={toggle}
+                    sectionCollapsed={sectionCollapsed}
+                    onToggleSection={toggleSection}
                     visibleIds={visibleIds}
                   />
                   <OrgSection
+                    id="other"
                     icon={<Building2 className="size-4" />}
                     title="Khác"
                     nodes={other}
                     collapsed={collapsed}
                     onToggle={toggle}
+                    sectionCollapsed={sectionCollapsed}
+                    onToggleSection={toggleSection}
                     visibleIds={visibleIds}
                   />
                 </div>

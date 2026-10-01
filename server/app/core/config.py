@@ -75,12 +75,41 @@ class Settings(BaseSettings):
 
     # Agent installer artifacts (phục vụ /download/agent.msi + /download/agent.msi.sha256).
     # Đặt OrgInventoryAgent.msi + OrgInventoryAgent.msi.sha256 vào thư mục này (cùng cấp).
-    # Có thể trỏ tới `agent/publish/win-x64/` sau khi build MSI trên Windows.
+    # Source agent đã tách repo riêng — build MSI ở repo đó rồi copy vào đây,
+    # hoặc set AGENT_RELEASES_BASE để redirect sang GitHub Releases.
     agent_msi_dir: str = "./agent_dist"
+
+    # GitHub Releases của repo agent (org-inventory-agent) — khi set, các route
+    # /download/agent* và script cài redirect sang `…/releases/latest/download/<asset>`
+    # thay vì đọc file local trong agent_msi_dir. Vd:
+    #   https://github.com/lephuhung/org-inventory-agent/releases
+    agent_releases_base: str = ""
+
+    # MSI OrgInventory Agent đã được ký Authenticode chưa. False (mặc định) →
+    # install command tự nướng `$env:ORGINV_ALLOW_UNSIGNED="1"` để script cài
+    # bỏ qua check chữ ký (giai đoạn test). True → command KHÔNG bypass,
+    # install script sẽ bắt buộc verify chữ ký Authenticode hợp lệ.
+    # Set true sau khi CI release đã cấu hình cert ký MSI.
+    agent_msi_signed: bool = False
 
     # Server RSA Keypair cho giải mã gói offline (mã hóa lai AES-256-GCM + RSA-OAEP)
     server_private_key_path: str = "./data/server_private_key.pem"
     server_public_key_path: str = "./data/server_public_key.pem"
+
+    # ── Dấu thời gian tin cậy cho báo cáo PDF (RFC 3161 / TSA) ──
+    # Nhúng Document Timestamp (DocTS) vào PDF khi export → chứng minh báo cáo
+    # tồn tại tại thời điểm TSA cấp dấu. Chỉ gửi SHA-256 của file lên TSA,
+    # không gửi nội dung báo cáo.
+    # - tsa_url: endpoint RFC 3161. Mặc định FreeTSA (dev).
+    #   Prod: trỏ về TSA của nhà cung cấp dịch vụ cấp dấu thời gian tin cậy
+    #   được cấp phép theo NĐ 23/2025/NĐ-CP (VNPT-CA, BKAV-CA, FPT-CA...)
+    #   hoặc TSA nội bộ nếu chỉ cần bằng chứng kỹ thuật.
+    # - tsa_username/password: để trống cho TSA public không xác thực.
+    report_timestamp_enabled: bool = True
+    tsa_url: str = "https://freetsa.org/tsr"
+    tsa_timeout_seconds: int = 20
+    tsa_username: str = ""
+    tsa_password: str = ""
 
     # Ký số: agent mode (chặn nếu không phải mTLS header hợp lệ)
     require_agent_mtls_header: bool = False  # True khi chạy sau nginx ở prod
@@ -180,7 +209,12 @@ class Settings(BaseSettings):
     deepagent_api_key: str = ""
     deepagent_request_timeout_seconds: int = 30
     deepagent_default_lookback_hours: int = 24
-    deepagent_max_concurrent_jobs: int = Field(default=2, ge=1, le=3)
+    deepagent_max_concurrent_jobs: int = Field(default=12, ge=1, le=12)
+    # Age bound cho `dispatch_uncertain`: nếu GET /v1/jobs vẫn transient
+    # (5xx/408/429/timeout) sau khoảng này tính từ `started_at` → terminal
+    # `reconcile_timeout` để giải phóng capacity slot (không giữ slot vô hạn
+    # khi backend unhealthy kéo dài).
+    deepagent_reconcile_max_uncertain_seconds: int = Field(default=1800, ge=60)
 
     # ── Alert delivery (Phase 2) ──────────────────────────────
     # Trống = chưa cấu hình → alert chỉ ghi event + log (delivered=False)

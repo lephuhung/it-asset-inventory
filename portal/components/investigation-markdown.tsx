@@ -13,55 +13,170 @@ import { memo } from "react";
  * Logic render/format được giữ nguyên 100% — chỉ di chuyển ra file này.
  */
 
-function renderMarkdown(md: string): React.ReactElement {
-  const lines = md.split("\n");
-  const out: React.ReactElement[] = [];
-  let inCode = false;
-  let codeBuf: string[] = [];
-  let codeKey = 0;
-  let prevBlank = false; // gộp nhiều dòng trắng liên tiếp → chỉ 1 dòng trắng
-  lines.forEach((line, idx) => {
+/** Block types: heading (h1/h2/h3), paragraph, list (ul/ol), code fence, blank. */
+type Block =
+  | { kind: "h1"; text: string }
+  | { kind: "h2"; text: string }
+  | { kind: "h3"; text: string }
+  | { kind: "p"; lines: string[] }
+  | { kind: "ul"; items: string[] }
+  | { kind: "ol"; items: string[] }
+  | { kind: "code"; text: string };
+
+/** Parse markdown thành danh sách block — gộp dòng liên tiếp cùng loại
+ *  (CommonMark-style): nhiều dòng text liên tiếp → 1 paragraph,
+ *  nhiều `- ` liên tiếp → 1 <ul>, nhiều `1. ` liên tiếp → 1 <ol>. */
+function parseBlocks(md: string): Block[] {
+  // Bỏ YAML frontmatter ở đầu: dòng đầu là `---`, tiếp theo là nội dung,
+  // đóng bằng `---` — phổ biến trong report schema.
+  const stripped = md.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  const lines = stripped.split("\n");
+  const blocks: Block[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
     if (line.startsWith("```")) {
-      if (inCode) {
-        out.push(
-          <pre key={`c${codeKey++}`} className="my-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs leading-relaxed text-slate-100">
-            <code>{codeBuf.join("\n")}</code>
-          </pre>,
-        );
-        codeBuf = [];
-        inCode = false;
-      } else {
-        inCode = true;
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        buf.push(lines[i]);
+        i++;
       }
-      prevBlank = false;
-      return;
-    }
-    if (inCode) {
-      codeBuf.push(line);
-      return;
+      if (i < lines.length) i++;
+      blocks.push({ kind: "code", text: buf.join("\n") });
+      continue;
     }
     if (line.trim() === "") {
-      // Nhiều dòng trắng liên tiếp → chỉ render 1 <br> (1 dòng trắng)
-      if (!prevBlank) out.push(<br key={idx} />);
-      prevBlank = true;
-      return;
+      i++;
+      continue;
     }
-    prevBlank = false;
+    // Horizontal rule `---` đứng một mình — bỏ qua
+    if (/^---\s*$/.test(line)) {
+      i++;
+      continue;
+    }
     if (line.startsWith("# ")) {
-      out.push(<h1 key={idx} className="mb-2 mt-4 text-lg font-bold tracking-tight text-slate-900">{line.slice(2)}</h1>);
-    } else if (line.startsWith("## ")) {
-      out.push(<h2 key={idx} className="mb-2 mt-4 text-base font-semibold tracking-tight text-slate-900">{line.slice(3)}</h2>);
-    } else if (line.startsWith("### ")) {
-      out.push(<h3 key={idx} className="mb-1 mt-3 text-sm font-semibold text-slate-900">{line.slice(4)}</h3>);
-    } else if (line.startsWith("- ")) {
-      out.push(<li key={idx} className="ml-4 list-disc text-sm leading-relaxed text-slate-600">{formatInline(line.slice(2))}</li>);
-    } else if (/^\d+\.\s/.test(line)) {
-      out.push(<li key={idx} className="ml-4 list-decimal text-sm leading-relaxed text-slate-600">{formatInline(line.replace(/^\d+\.\s/, ""))}</li>);
-    } else {
-      out.push(<p key={idx} className="my-1 text-sm leading-relaxed text-slate-600">{formatInline(line)}</p>);
+      blocks.push({ kind: "h1", text: line.slice(2) });
+      i++;
+      continue;
     }
-  });
-  return <div>{out}</div>;
+    if (line.startsWith("## ")) {
+      blocks.push({ kind: "h2", text: line.slice(3) });
+      i++;
+      continue;
+    }
+    if (line.startsWith("### ")) {
+      blocks.push({ kind: "h3", text: line.slice(4) });
+      i++;
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const items: string[] = [line.slice(2)];
+      i++;
+      while (i < lines.length && lines[i].startsWith("- ")) {
+        items.push(lines[i].slice(2));
+        i++;
+      }
+      blocks.push({ kind: "ul", items });
+      continue;
+    }
+    if (/^\d+\.\s/.test(line)) {
+      const items: string[] = [line.replace(/^\d+\.\s/, "")];
+      i++;
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s/, ""));
+        i++;
+      }
+      blocks.push({ kind: "ol", items });
+      continue;
+    }
+    // Paragraph: gộp các dòng text liên tiếp (kể cả dòng rỗng đơn) thành 1 block
+    const para: string[] = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() !== "" && !isBlockStart(lines[i])) {
+      para.push(lines[i]);
+      i++;
+    }
+    blocks.push({ kind: "p", lines: para });
+  }
+  return blocks;
+}
+
+function isBlockStart(line: string): boolean {
+  return (
+    line.startsWith("# ") ||
+    line.startsWith("## ") ||
+    line.startsWith("### ") ||
+    line.startsWith("- ") ||
+    line.startsWith("```") ||
+    /^\d+\.\s/.test(line)
+  );
+}
+
+function renderMarkdown(md: string): React.ReactElement {
+  const blocks = parseBlocks(md);
+  return (
+    <div className="space-y-3 text-sm leading-relaxed text-slate-700">
+      {blocks.map((b, idx) => {
+        switch (b.kind) {
+          case "h1":
+            return (
+              <h1 key={idx} className="text-lg font-bold tracking-tight text-slate-900">
+                {formatInline(b.text)}
+              </h1>
+            );
+          case "h2":
+            return (
+              <h2 key={idx} className="text-base font-semibold tracking-tight text-slate-900">
+                {formatInline(b.text)}
+              </h2>
+            );
+          case "h3":
+            return (
+              <h3 key={idx} className="text-sm font-semibold text-slate-900">
+                {formatInline(b.text)}
+              </h3>
+            );
+          case "p":
+            return (
+              <p key={idx} className="text-slate-700">
+                {b.lines.map((ln, j) => (
+                  <span key={j}>
+                    {j > 0 && " "}
+                    {formatInline(ln)}
+                  </span>
+                ))}
+              </p>
+            );
+          case "ul":
+            return (
+              <ul key={idx} className="list-disc space-y-1 pl-5">
+                {b.items.map((it, j) => (
+                  <li key={j}>{formatInline(it)}</li>
+                ))}
+              </ul>
+            );
+          case "ol":
+            return (
+              <ol key={idx} className="list-decimal space-y-1 pl-5">
+                {b.items.map((it, j) => (
+                  <li key={j}>{formatInline(it)}</li>
+                ))}
+              </ol>
+            );
+          case "code":
+            return (
+              <pre
+                key={idx}
+                className="overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs leading-relaxed text-slate-100"
+              >
+                <code>{b.text}</code>
+              </pre>
+            );
+        }
+      })}
+    </div>
+  );
 }
 
 function formatInline(text: string): React.ReactNode {
