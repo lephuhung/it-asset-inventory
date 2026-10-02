@@ -9,6 +9,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from deepagent.catalog import BASELINE_TOOLS, catalog_prompt, tool_policies_for
+from deepagent.egress import assert_llm_egress
 from deepagent.models import (
     MAX_TIER2_STEPS,
     Assessment,
@@ -62,6 +63,9 @@ class AnalysisModel(Protocol):
 
 class OpenAIAnalysisModel:
     def __init__(self, runtime: LlmRuntime):
+        # V3-6/R7: DeepAgent là một executor — validate egress của endpoint LLM
+        # (private host) trước khi tạo client; allow_cloud do backend truyền sang.
+        assert_llm_egress(runtime.base_url, runtime.allow_cloud)
         self.model_name = runtime.model
         configured = runtime.system_prompt.strip() if runtime.system_prompt else ""
         self._operator_prompt = configured or DEFAULT_DFIR_PLAYBOOK

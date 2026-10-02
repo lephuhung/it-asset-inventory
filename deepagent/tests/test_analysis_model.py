@@ -11,7 +11,7 @@ from deepagent.models import EvidenceItem, InvestigationRequest, LlmRuntime
 
 def _runtime(system_prompt: str | None) -> LlmRuntime:
     return LlmRuntime(
-        base_url="http://llm.example/v1",
+        base_url="http://127.0.0.1:11434/v1",
         api_key="test-key",
         model="test-model",
         system_prompt=system_prompt,

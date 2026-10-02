@@ -162,6 +162,7 @@ async def _chat_json(cfg, system_prompt: str, user_prompt: str) -> tuple[dict, s
         async with LlmClient(
             cfg.base_url, api_key, cfg.model, timeout=cfg.request_timeout,
             max_tokens=cfg.max_tokens, temperature=float(cfg.temperature),
+            allow_cloud=cfg.allow_cloud,
         ) as llm:
             resp = await llm.chat([LlmMessage(role="system", content=system_prompt), LlmMessage(role="user", content=user_prompt)])
     except LlmError:

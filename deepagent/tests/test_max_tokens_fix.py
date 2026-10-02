@@ -39,7 +39,7 @@ class TestLlmRuntimeMaxTokensConstraint:
         against max_tokens runaway if per-call override is forgotten.
         """
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="test-key",
             model="test-model",
         )
@@ -48,7 +48,7 @@ class TestLlmRuntimeMaxTokensConstraint:
     def test_accepts_1000_as_minimum(self) -> None:
         """Lower bound 1_000 — prevents pathological max_tokens=100 config."""
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="test-key",
             model="test-model",
             max_tokens=1_000,
@@ -59,7 +59,7 @@ class TestLlmRuntimeMaxTokensConstraint:
         """Anything below 1_000 is too small for any schema in this codebase."""
         with pytest.raises(ValidationError):
             LlmRuntime(
-                base_url="http://llm.example/v1",
+                base_url="http://127.0.0.1:11434/v1",
                 api_key="test-key",
                 model="test-model",
                 max_tokens=500,
@@ -68,7 +68,7 @@ class TestLlmRuntimeMaxTokensConstraint:
     def test_rejects_max_tokens_zero(self) -> None:
         with pytest.raises(ValidationError):
             LlmRuntime(
-                base_url="http://llm.example/v1",
+                base_url="http://127.0.0.1:11434/v1",
                 api_key="test-key",
                 model="test-model",
                 max_tokens=0,
@@ -77,7 +77,7 @@ class TestLlmRuntimeMaxTokensConstraint:
     def test_upper_bound_unchanged(self) -> None:
         """Upper bound 128_000 still valid (existing test kept)."""
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="test-key",
             model="test-model",
             max_tokens=128_000,
@@ -96,7 +96,7 @@ class TestChatOpenAIMaxRetries:
         amplify to 3× wall-clock via the langchain retry layer.
         """
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="test-key",
             model="test-model",
         )
@@ -152,7 +152,7 @@ class _SpyChatModel:
 class TestPerCallMaxTokensOverrides:
     def _model_with_spy(self, return_value) -> tuple[OpenAIAnalysisModel, _SpyChatModel]:
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="test-key",
             model="test-model",
         )
@@ -268,7 +268,7 @@ class TestLogEventIncludesMaxTokens:
             steps=[{"tool": "windows_pslist", "rationale": "y"}],
         )
         runtime = LlmRuntime(
-            base_url="http://llm.example/v1",
+            base_url="http://127.0.0.1:11434/v1",
             api_key="k",
             model="m",
         )

@@ -1062,6 +1062,7 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
             timeout=cfg.request_timeout,
             max_tokens=cfg.max_tokens,
             temperature=cfg.temperature,
+            allow_cloud=cfg.allow_cloud,
         ) as llm:
             resp = await llm.chat(messages)
 
@@ -1155,6 +1156,7 @@ async def chat_with_llm(
         timeout=cfg.request_timeout,
         max_tokens=cfg.max_tokens,
         temperature=cfg.temperature,
+        allow_cloud=cfg.allow_cloud,
     ) as llm:
         resp = await llm.chat(llm_messages)
 

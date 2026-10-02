@@ -39,6 +39,8 @@ class LlmRuntime(BaseModel):
     base_url: str = Field(min_length=8, max_length=512)
     api_key: str = Field(min_length=1, max_length=4096)
     model: str = Field(min_length=1, max_length=255)
+    # V3-6/R7: policy egress do backend quyết định; deepagent dùng để validate base_url.
+    allow_cloud: bool = False
     temperature: float = Field(default=0, ge=0, le=2)
     timeout_seconds: int = Field(default=180, ge=10, le=600)
     max_tokens: int = Field(default=8_000, ge=1_000, le=128_000)

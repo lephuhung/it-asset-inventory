@@ -19,6 +19,7 @@ from app.api.deps import get_db, require_super_admin
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
+from app.core.egress import EgressError, resolve_private_host
 from app.core.security import decrypt_aes_gcm, encrypt_aes_gcm
 from app.db.models import (
     DfirInvestigation,
@@ -111,14 +112,6 @@ def _config_to_out(
     )
 
 
-def _is_private_host(url: str) -> bool:
-    """True nếu URL thuộc mạng nội bộ (không tính cloud)."""
-    return any(
-        marker in url
-        for marker in ("127.0.0.1", "localhost", "10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30", "172.31", ".internal", ".local")
-    )
-
-
 def _inv_to_out(inv: DfirInvestigation, machine: Machine | None) -> DfirInvestigationOut:
     return DfirInvestigationOut(
         id=inv.id,
@@ -171,7 +164,9 @@ async def list_llm_models(
     cfg = await _get_or_create_config(db)
     api_key = _decrypt_for_display(cfg.api_key_encrypted)
     try:
-        async with LlmClient(cfg.base_url, api_key, cfg.model, timeout=15) as llm:
+        async with LlmClient(
+            cfg.base_url, api_key, cfg.model, timeout=15, allow_cloud=cfg.allow_cloud
+        ) as llm:
             return LlmModelsOut(models=await llm.list_models())
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Không tải được danh sách model: {exc}") from exc
@@ -207,12 +202,15 @@ async def update_llm_config(
             cfg.api_key_encrypted = None
             changes["api_key"] = "cleared"
         else:
-            if not cfg.allow_cloud and not _is_private_host(cfg.base_url):
-                raise HTTPException(
-                    403,
-                    "Không thể đặt API key cho endpoint public khi allow_cloud=false. "
-                    "Bật allow_cloud=true trước hoặc dùng LLM nội bộ.",
-                )
+            if not cfg.allow_cloud:
+                try:
+                    resolve_private_host(cfg.base_url)
+                except EgressError as exc:
+                    raise HTTPException(
+                        403,
+                        "Không thể đặt API key cho endpoint public khi allow_cloud=false. "
+                        "Bật allow_cloud=true trước hoặc dùng LLM nội bộ.",
+                    ) from exc
             cfg.api_key_encrypted = encrypt_aes_gcm(body.api_key.strip())
             changes["api_key"] = "set"
     if body.model is not None:
@@ -293,7 +291,9 @@ async def test_llm_connection(
     if not cfg.base_url or not cfg.model:
         raise HTTPException(422, "Cần base_url + model trước khi test")
     api_key = _decrypt_for_display(cfg.api_key_encrypted)
-    async with LlmClient(cfg.base_url, api_key, cfg.model, timeout=15) as llm:
+    async with LlmClient(
+        cfg.base_url, api_key, cfg.model, timeout=15, allow_cloud=cfg.allow_cloud
+    ) as llm:
         result = await llm.test_connection()
 
     cfg.test_status = "ok" if result["ok"] else "error"

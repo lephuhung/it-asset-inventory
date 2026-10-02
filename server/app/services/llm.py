@@ -13,6 +13,14 @@ from typing import Any
 
 import httpx
 
+from app.core.egress import (
+    assert_redirect_allowed,
+    host_header,
+    pinned_base_url,
+    resolve_private_host,
+    sni_hostname,
+)
+
 logger = logging.getLogger("llm")
 
 
@@ -91,6 +99,7 @@ class LlmClient:
         api_key: str | None,
         model: str,
         *,
+        allow_cloud: bool = False,
         fallback_model: str | None = None,
         timeout: int = 120,
         max_tokens: int = 4096,
@@ -102,6 +111,14 @@ class LlmClient:
             raise ValueError("base_url phải bắt đầu bằng http:// hoặc https://")
         if not model.strip():
             raise ValueError("model không được rỗng")
+
+        # R7/V3-6: xác thực egress (loopback/private/link-local/CGNAT) và GHIM IP đã
+        # resolve để kết nối — chống DNS rebinding giữa lúc kiểm tra và lúc gọi.
+        self._host, self._pinned_ip = resolve_private_host(base_url, allow_cloud=allow_cloud)
+        self._pinned_base_url = pinned_base_url(base_url, self._pinned_ip)
+        self._host_header = host_header(base_url)
+        self._sni_hostname = sni_hostname(base_url)
+        self._allow_cloud = allow_cloud
 
         self.base_url = base_url
         self.api_key = api_key
@@ -117,12 +134,35 @@ class LlmClient:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        # URL kết nối đã bị đổi host sang IP đã ghim → gửi kèm Host header gốc để
+        # virtual-host vẫn đúng.
+        headers["Host"] = self._host_header
         self._client = httpx.AsyncClient(
+            base_url=self._pinned_base_url,
             timeout=httpx.Timeout(self.timeout, connect=10.0),
             verify=self.verify_ssl,
             headers=headers,
+            event_hooks={"response": [self._guard_redirect_hook]},
         )
         return self
+
+    def _request_extensions(self) -> dict[str, str]:
+        """Extension cho mỗi request: giữ TLS SNI = hostname gốc khi URL đã đổi sang IP."""
+        return {"sni_hostname": self._sni_hostname}
+
+    def _guard_redirect(self, response: httpx.Response) -> None:
+        """R7: cấm redirect sang host public (chạy trên mọi response 3xx)."""
+        if not response.is_redirect:
+            return
+        location = response.headers.get("location")
+        if location:
+            assert_redirect_allowed(
+                str(response.request.url), location, self._allow_cloud
+            )
+
+    async def _guard_redirect_hook(self, response: httpx.Response) -> None:
+        """httpx async client yêu cầu event hook async — bọc phần logic đồng bộ."""
+        self._guard_redirect(response)
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._client:
@@ -133,10 +173,10 @@ class LlmClient:
         """Gọi GET {base_url}/models."""
         if not self._client:
             raise LlmError("Client chưa khởi tạo — dùng async with")
-        url = f"{self.base_url}/models"
+        url = "/models"
         t0 = time.time()
         try:
-            r = await self._client.get(url)
+            r = await self._client.get(url, extensions=self._request_extensions())
         except httpx.ConnectError as e:
             raise LlmError(f"Không kết nối được LLM server: {e}") from e
         except httpx.TimeoutException as e:
@@ -182,11 +222,13 @@ class LlmClient:
             "stream": False,
         }
 
-        url = f"{self.base_url}/chat/completions"
+        url = "/chat/completions"
         t0 = time.time()
 
         try:
-            r = await self._client.post(url, json=body)
+            r = await self._client.post(
+                url, json=body, extensions=self._request_extensions()
+            )
         except httpx.ConnectError as e:
             raise LlmError(f"Không kết nối được LLM server: {e}") from e
         except httpx.TimeoutException as e:
