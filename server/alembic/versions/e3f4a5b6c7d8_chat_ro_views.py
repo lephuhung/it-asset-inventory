@@ -10,9 +10,10 @@ Ranh giới quyền (fail-closed):
   gốc / `users` / `llm_config` / `velociraptor_config` / `api_keys` / `audit_log` /
   `chat_*`. Không dùng `GRANT ... ON ALL TABLES`/`ALTER DEFAULT PRIVILEGES` (sẽ tự
   động mở quyền cho object tương lai — phá manifest đóng).
-- Nhánh role đã tồn tại: siết thuộc tính, thu hồi membership + mọi quyền trên quan
-  hệ schema `public`, và **fail closed** nếu role còn sở hữu object hoặc thuộc tính
-  đặc quyền.
+- Nhánh role đã tồn tại: siết thuộc tính, thu hồi membership + mọi quyền
+  relation-level **và column-level** trên schema `public`, và **fail closed** nếu
+  role còn sở hữu object (mọi catalog: relation/schema/database/function/type/…) hoặc
+  thuộc tính đặc quyền.
 - `search_path` đặt khi tạo connection **và** reset lại mỗi lần checkout ở engine
   (`app/db/session.py`).
 - Catalog/function isolation **không** DB-enforced (PostgreSQL cấp PUBLIC đọc
@@ -90,9 +91,8 @@ def role_ddl(password: str) -> str:
 # DO block cố định (không nhúng input) → tag `$chh$` an toàn.
 _HARDEN_TAG = "$chh$"
 
-ROLE_HARDEN_DDL: list[str] = [
-    # 1) Thu hồi mọi membership — NOINHERIT không tước quyền SET ROLE.
-    f"""DO {_HARDEN_TAG}
+# 1) Thu hồi mọi membership — NOINHERIT không tước quyền SET ROLE.
+MEMBERSHIP_REVOKE_DDL = f"""DO {_HARDEN_TAG}
 DECLARE r RECORD;
 BEGIN
   FOR r IN
@@ -104,9 +104,10 @@ BEGIN
   LOOP
     EXECUTE format('REVOKE %I FROM {CHAT_RO_ROLE}', r.parent_role);
   END LOOP;
-END {_HARDEN_TAG}""",
-    # 2) Thu hồi mọi quyền trực tiếp trên quan hệ schema `public` (bảng/view/sequence).
-    f"""DO {_HARDEN_TAG}
+END {_HARDEN_TAG}"""
+
+# 2) Thu hồi mọi quyền **relation-level** trên schema `public` (bảng/view/sequence).
+RELATION_REVOKE_DDL = f"""DO {_HARDEN_TAG}
 DECLARE r RECORD;
 BEGIN
   FOR r IN
@@ -121,20 +122,67 @@ BEGIN
       EXECUTE format('REVOKE ALL ON TABLE public.%I FROM {CHAT_RO_ROLE}', r.relname);
     END IF;
   END LOOP;
-END {_HARDEN_TAG}""",
-    # 3) Fail closed nếu role còn sở hữu object.
-    f"""DO {_HARDEN_TAG}
-DECLARE n integer;
+END {_HARDEN_TAG}"""
+
+# 3) Thu hồi mọi quyền **column-level** (`GRANT SELECT(email)` không bị `REVOKE ALL
+# ON TABLE` gỡ). Quét `pg_attribute.attacl` + `aclexplode`, gỡ đúng privilege/column.
+# Áp cho cả `public` lẫn `chat_ro_views` (phòng object cũ ngoài manifest).
+COLUMN_REVOKE_DDL = f"""DO {_HARDEN_TAG}
+DECLARE r RECORD;
 BEGIN
-  SELECT count(*) INTO n
-  FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-  WHERE r.rolname = '{CHAT_RO_ROLE}';
-  IF n > 0 THEN
-    RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} owns % relation(s); refusing to continue', n;
+  FOR r IN
+    SELECT n.nspname AS sch, c.relname AS rel, a.attname AS col, x.privilege_type AS priv
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_roles ro ON ro.rolname = '{CHAT_RO_ROLE}'
+    CROSS JOIN LATERAL aclexplode(a.attacl) AS x
+    WHERE n.nspname IN ('public', '{CHAT_RO_SCHEMA}')
+      AND a.attacl IS NOT NULL
+      AND x.grantee = ro.oid
+  LOOP
+    EXECUTE format('REVOKE %s (%I) ON TABLE %I.%I FROM {CHAT_RO_ROLE}',
+                   r.priv, r.col, r.sch, r.rel);
+  END LOOP;
+END {_HARDEN_TAG}"""
+
+# 4) Fail closed nếu role còn SỞ HỮU object thuộc bất kỳ catalog nào (chủ sở hữu có
+# quyền DROP/ALTER → leo thang). Không chỉ `pg_class`.
+OWNERSHIP_CHECK_DDL = f"""DO {_HARDEN_TAG}
+DECLARE offenders integer;
+BEGIN
+  SELECT count(*) INTO offenders FROM (
+    SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_type t JOIN pg_roles r ON r.oid = t.typowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_language l JOIN pg_roles r ON r.oid = l.lanowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_collation co JOIN pg_roles r ON r.oid = co.collowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_conversion cv JOIN pg_roles r ON r.oid = cv.conowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_operator o JOIN pg_roles r ON r.oid = o.oprowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_opclass oc JOIN pg_roles r ON r.oid = oc.opcowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_opfamily of2 JOIN pg_roles r ON r.oid = of2.opfowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    UNION ALL
+    SELECT 1 FROM pg_extension e JOIN pg_roles r ON r.oid = e.extowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+  ) AS owned;
+  IF offenders > 0 THEN
+    RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} owns % object(s); refusing to continue', offenders;
   END IF;
-END {_HARDEN_TAG}""",
-    # 4) Fail closed nếu role còn thuộc tính đặc quyền.
-    f"""DO {_HARDEN_TAG}
+END {_HARDEN_TAG}"""
+
+# 5) Fail closed nếu role còn thuộc tính đặc quyền.
+ATTRS_CHECK_DDL = f"""DO {_HARDEN_TAG}
 DECLARE r RECORD;
 BEGIN
   SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
@@ -142,22 +190,50 @@ BEGIN
   IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN
     RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} retains elevated attributes';
   END IF;
-END {_HARDEN_TAG}""",
-    # 5) Thu hồi USAGE/USAGE-trên-schema public (least privilege).
-    f"REVOKE ALL ON SCHEMA public FROM {CHAT_RO_ROLE}",
+END {_HARDEN_TAG}"""
+
+# 6) Thu hồi quyền trên schema `public` (least privilege).
+SCHEMA_REVOKE_DDL = f"REVOKE ALL ON SCHEMA public FROM {CHAT_RO_ROLE}"
+
+ROLE_HARDEN_DDL: list[str] = [
+    MEMBERSHIP_REVOKE_DDL,
+    RELATION_REVOKE_DDL,
+    COLUMN_REVOKE_DDL,
+    OWNERSHIP_CHECK_DDL,
+    ATTRS_CHECK_DDL,
+    SCHEMA_REVOKE_DDL,
 ]
 
 
 # ── View projections ─────────────────────────────────────────────────────────
 
 # Build (Windows) — ưu tiên thành phần thứ 3 của `os_version` ("10.0.22631" → 22631),
-# fallback `os_build` (chỉ giữ chữ số). Không nhận diện → NULL.
-_BUILD_EXPR = (
-    "COALESCE("
-    "NULLIF(substring(split_part(COALESCE(mc.os_version, ''), '.', 3) FROM '^[0-9]+$'), '')::int, "
-    "NULLIF(regexp_replace(COALESCE(mc.os_build, ''), '[^0-9]', '', 'g'), '')::int"
-    ")"
-)
+# fallback `os_build` khi **toàn bộ** là 1–5 chữ số. Validate TRƯỚC khi cast:
+#   - `os_build` phi số/nhiều thành phần ("26100.1") → NULL (không nối thành 261001);
+#   - giá trị quá dài ("9999999999") → NULL (không tràn `int`);
+#   - thiếu dữ liệu → NULL (không đoán).
+# Hàm nhận `alias` để test gọi thẳng trên `public.machine_current`.
+def build_expr(alias: str = "mc") -> str:
+    version_component = f"split_part(COALESCE({alias}.os_version, ''), '.', 3)"
+    build_col = f"COALESCE({alias}.os_build, '')"
+    return (
+        "COALESCE("
+        f"CASE WHEN {version_component} ~ '^[0-9]{{1,5}}$' THEN {version_component}::int END, "
+        f"CASE WHEN {build_col} ~ '^[0-9]{{1,5}}$' THEN {build_col}::int END"
+        ")"
+    )
+
+
+_BUILD_EXPR = build_expr("mc")
+
+# Mốc build Windows 11 + ngày EOL tham chiếu (đồng bộ `portal/lib/eol.ts`). Export để
+# test tính kỳ vọng từ chính hằng số này → không phụ thuộc ngày chạy.
+WIN11_21H2_BUILD = 22000
+WIN11_22H2_BUILD = 22621
+WIN11_23H2_BUILD = 22631
+WIN11_24H2_BUILD = 26100
+WIN11_24H2_EOL_DATE = "2026-10-13"
+WIN11_NEWER_EOL_DATE = "2027-10-12"
 
 # EOL heuristic — cùng tập họ OS + cửa sổ hỗ trợ với `portal/lib/eol.ts`.
 # TRUE = đã hết hỗ trợ, FALSE = còn hỗ trợ, NULL = không đủ dữ liệu (không đoán).
@@ -168,9 +244,9 @@ _EOL_CASE = f"""CASE
         WHEN mc.os_name ILIKE '%Windows 11%' THEN
             CASE
                 WHEN {_BUILD_EXPR} IS NULL THEN NULL
-                WHEN {_BUILD_EXPR} IN (22000, 22621, 22631) THEN TRUE
-                WHEN {_BUILD_EXPR} = 26100 THEN (DATE '2026-10-13' < CURRENT_DATE)
-                WHEN {_BUILD_EXPR} > 26100 THEN (DATE '2027-10-12' < CURRENT_DATE)
+                WHEN {_BUILD_EXPR} IN ({WIN11_21H2_BUILD}, {WIN11_22H2_BUILD}, {WIN11_23H2_BUILD}) THEN TRUE
+                WHEN {_BUILD_EXPR} = {WIN11_24H2_BUILD} THEN (DATE '{WIN11_24H2_EOL_DATE}' < CURRENT_DATE)
+                WHEN {_BUILD_EXPR} > {WIN11_24H2_BUILD} THEN (DATE '{WIN11_NEWER_EOL_DATE}' < CURRENT_DATE)
                 ELSE NULL
             END
         WHEN mc.os_name ILIKE '%Windows 10%' THEN TRUE

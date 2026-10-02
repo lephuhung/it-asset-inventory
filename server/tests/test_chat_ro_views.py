@@ -41,6 +41,23 @@ SENSITIVE_TABLES = [
 ]
 
 
+def _expected_win11_eol(build: int | None) -> bool | None:
+    """Kỳ vọng EOL Windows 11 tính từ hằng số migration → không phụ thuộc ngày chạy."""
+    from datetime import UTC, date, datetime
+
+    mig = _load_migration()
+    today = datetime.now(UTC).date()
+    if build is None:
+        return None
+    if build in (mig.WIN11_21H2_BUILD, mig.WIN11_22H2_BUILD, mig.WIN11_23H2_BUILD):
+        return True
+    if build == mig.WIN11_24H2_BUILD:
+        return date.fromisoformat(mig.WIN11_24H2_EOL_DATE) < today
+    if build > mig.WIN11_24H2_BUILD:
+        return date.fromisoformat(mig.WIN11_NEWER_EOL_DATE) < today
+    return None
+
+
 def _load_migration():
     path = Path(__file__).parents[1] / "alembic/versions" / _MIGRATION_FILE
     spec = util.spec_from_file_location("chat_ro_views_migration", path)
@@ -218,6 +235,95 @@ async def test_chat_ro_checkout_resets_session_state(chat_ro_session):
         await engine.dispose()
 
 
+async def test_chat_ro_checkout_resets_committed_session_state(chat_ro_session):
+    """Fix2: RESET phải chạy **autocommit** — `SET` đã commit vẫn bị xoá.
+
+    `SET` (không LOCAL) đã commit tồn tại ở session-level. Nếu listener chạy trong
+    transaction ẩn của adapter, `ROLLBACK` sau đó khôi phục giá trị nhiễm — assertion
+    `sp_after_rollback` bắt đúng lỗi đó (implementation cũ fail test này).
+    """
+    engine = session_module.create_chat_ro_engine(
+        _chat_ro_test_url(), poolclass=sa_pool.AsyncAdaptedQueuePool,
+        pool_size=1, max_overflow=0,
+    )
+    try:
+        async with engine.connect() as c1:
+            await c1.execute(text("SET search_path TO public"))
+            await c1.execute(text("SET statement_timeout = 123456"))
+            await c1.commit()  # session-level SET → tồn tại sau commit
+        async with engine.connect() as c2:
+            sp = (await c2.execute(text("SHOW search_path"))).scalar()
+            st = (await c2.execute(text("SHOW statement_timeout"))).scalar()
+            await c2.rollback()  # nếu RESET nằm trong txn → khôi phục giá trị nhiễm
+            sp_after_rollback = (await c2.execute(text("SHOW search_path"))).scalar()
+        assert "chat_ro_views" in sp
+        assert st != "123456"
+        assert "chat_ro_views" in sp_after_rollback
+    finally:
+        await engine.dispose()
+
+
+async def test_chat_ro_column_grant_revoked(db_engine):
+    """Critical 1 (R2): quyền column-level (`GRANT SELECT(email)`) phải bị gỡ.
+
+    `REVOKE ALL ON TABLE` không gỡ quyền column-level — phải quét `pg_attribute.attacl`.
+    """
+    mig = _load_migration()
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+        await conn.exec_driver_sql(
+            f"GRANT SELECT (email) ON public.users TO {mig.CHAT_RO_ROLE}"
+        )
+
+    engine = session_module.create_chat_ro_engine(
+        _chat_ro_test_url(), poolclass=sa_pool.NullPool
+    )
+    try:
+        # Trước harden: grant column-level còn hiệu lực → đọc được `email`.
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT email FROM public.users LIMIT 1"))
+
+        async with db_engine.begin() as conn:
+            for stmt in mig.ROLE_HARDEN_DDL:
+                await conn.exec_driver_sql(stmt)
+
+        # Sau harden: quyền column-level đã bị gỡ.
+        async with engine.connect() as conn:
+            with pytest.raises(Exception) as exc:
+                await conn.execute(text("SELECT email FROM public.users LIMIT 1"))
+            assert "permission denied" in str(exc.value).lower()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("kind", ["schema", "function"])
+async def test_chat_ro_ownership_fails_closed(db_engine, kind):
+    """Critical 2 (R2): role sở hữu object (mọi catalog) → harden fail closed."""
+    mig = _load_migration()
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+        if kind == "schema":
+            await conn.exec_driver_sql(
+                f"CREATE SCHEMA chatro_owned AUTHORIZATION {mig.CHAT_RO_ROLE}"
+            )
+        else:
+            await conn.exec_driver_sql(
+                "CREATE FUNCTION public.chatro_fn() RETURNS int LANGUAGE sql AS 'SELECT 1'"
+            )
+            await conn.exec_driver_sql(
+                f"ALTER FUNCTION public.chatro_fn() OWNER TO {mig.CHAT_RO_ROLE}"
+            )
+    try:
+        with pytest.raises(Exception) as exc:
+            async with db_engine.begin() as conn:
+                await conn.exec_driver_sql(mig.OWNERSHIP_CHECK_DDL)
+        assert "owns" in str(exc.value).lower()
+    finally:
+        async with db_engine.begin() as conn:
+            await conn.exec_driver_sql("DROP SCHEMA IF EXISTS chatro_owned CASCADE")
+            await conn.exec_driver_sql("DROP FUNCTION IF EXISTS public.chatro_fn()")
+
+
 async def test_chat_ro_catalog_is_readable_and_validator_enforced(chat_ro_session):
     """Spec V3-4: PUBLIC đọc `pg_catalog`; cô lập catalog do validator T9, không DB."""
     rows = await _chat_ro_fetch("SELECT 1 AS one FROM pg_catalog.pg_user LIMIT 1")
@@ -265,7 +371,7 @@ async def test_chat_ro_machines_view_reads_machine(db, chat_ro_session):
     assert row["org_name"] == org.name
     assert row["os_name"] == "Windows 11 Pro"
     assert row["status"] == "online"
-    assert row["eol_flag"] is False
+    assert row["eol_flag"] == _expected_win11_eol(26100)
 
 
 async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
@@ -285,7 +391,7 @@ async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
         for r in await _chat_ro_fetch("SELECT hostname, eol_flag FROM v_chat_machines")
     }
     assert flags["EOL-10"] is True
-    assert flags["OK-11"] is False       # build 26100 còn hỗ trợ
+    assert flags["OK-11"] == _expected_win11_eol(26100)   # build 26100: theo ngày tham chiếu
     assert flags["EOL-11"] is True       # build 22621 đã hết hỗ trợ
     assert flags["EOL-2012"] is True
     assert flags["UNK"] is None
@@ -301,6 +407,44 @@ async def test_chat_ro_eol_win11_without_build_is_unknown(db, chat_ro_session):
         "SELECT eol_flag FROM v_chat_machines WHERE hostname = 'WIN11-NOVER'"
     )
     assert rows[0]["eol_flag"] is None
+
+
+async def test_chat_ro_build_expr_takes_first_component_and_validates(db, chat_ro_session):
+    """Fix3: `os_build` nhiều thành phần không nối chuỗi; quá dài → NULL (không tràn int).
+
+    `os_build="26100.1"` trước đây bị `regexp_replace` nối thành `261001`; nay lấy
+    thành phần build thứ 3 của `os_version` (= 26100) và validate `os_build` trước khi cast.
+    """
+    mig = _load_migration()
+    _, dotted = await _seed_machine(
+        db, hostname="B-DOTTED", os_name="Windows 11 Pro",
+        os_version="10.0.26100.1", os_build="26100.1",
+    )
+    _, overflow = await _seed_machine(db, hostname="B-OVERFLOW", os_version=None,
+                                      os_build="9999999999")
+    _, missing = await _seed_machine(db, hostname="B-MISSING", os_version=None, os_build=None)
+    _, pure = await _seed_machine(db, hostname="B-PURE", os_version=None, os_build="26100")
+    await db.commit()
+
+    expr = mig.build_expr("machine_current")
+    builds = {}
+    for label, mid in [("dotted", dotted.id), ("overflow", overflow.id),
+                       ("missing", missing.id), ("pure", pure.id)]:
+        builds[label] = (await db.execute(
+            text(f"SELECT {expr} FROM public.machine_current WHERE machine_id = :id"),
+            {"id": mid},
+        )).scalar()
+
+    assert builds["dotted"] == 26100      # KHÔNG phải 261001
+    assert builds["overflow"] is None     # không tràn int
+    assert builds["missing"] is None
+    assert builds["pure"] == 26100
+
+    # Lifecycle của build 26100 (không phải 261001) thể hiện qua eol_flag.
+    rows = await _chat_ro_fetch(
+        "SELECT eol_flag FROM v_chat_machines WHERE hostname = 'B-DOTTED'"
+    )
+    assert rows[0]["eol_flag"] == _expected_win11_eol(26100)
 
 
 async def test_chat_ro_machine_detail_jsonb_extraction(db, chat_ro_session):
@@ -372,10 +516,10 @@ async def test_chat_ro_org_stats_aggregates(db, chat_ro_session):
     db.add(org)
     await db.flush()
     await _seed_machine(db, hostname="S-ON", status="online", os_name="Windows 10 Pro", org=org)
-    await _seed_machine(db, hostname="S-OFF", status="offline", os_name="Windows 11 Pro",
-                        os_version="10.0.26100.1", org=org)
-    await _seed_machine(db, hostname="S-ON2", status="online", os_name="Windows 11 Pro",
-                        os_version="10.0.26100.1", org=org)
+    await _seed_machine(db, hostname="S-OFF", status="offline", os_name="Windows Server 2022",
+                        org=org)
+    await _seed_machine(db, hostname="S-ON2", status="online", os_name="Windows Server 2022",
+                        org=org)
     await db.commit()
 
     rows = await _chat_ro_fetch(

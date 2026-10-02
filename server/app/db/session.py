@@ -25,14 +25,22 @@ CHAT_RO_SEARCH_PATH = "chat_ro_views, pg_catalog"
 
 
 def _register_chat_ro_hygiene(engine_: AsyncEngine) -> None:
-    """RESET ALL + đặt lại `search_path` trên mỗi lần mượn connection từ pool."""
+    """RESET ALL + đặt lại `search_path` trên mỗi lần mượn connection từ pool.
+
+    Thực thi qua **autocommit** bằng cách gọi thẳng asyncpg `Connection.execute`
+    (không qua `cursor()` của adapter). `cursor.execute` khiến adapter
+    `_start_transaction()` mở transaction ẩn — `RESET ALL`/`SET` khi đó nằm trong
+    transaction và bị rollback khi kết thúc dùng connection, làm hygiene mất tác dụng.
+    Gọi thẳng asyncpg không mở transaction nên hai câu lệnh có hiệu lực session ngay.
+    """
 
     @event.listens_for(engine_.sync_engine, "checkout")
     def _reset_session_state(dbapi_conn, connection_record, connection_proxy):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("RESET ALL")
-        cursor.execute(f"SET search_path TO {CHAT_RO_SEARCH_PATH}")
-        cursor.close()
+        raw = getattr(dbapi_conn, "_connection", None)
+        if raw is None:  # DBAPI không phải asyncpg — bỏ qua an toàn
+            return
+        dbapi_conn.await_(raw.execute("RESET ALL"))
+        dbapi_conn.await_(raw.execute(f"SET search_path TO {CHAT_RO_SEARCH_PATH}"))
 
 
 def create_chat_ro_engine(url: str | None = None, **kwargs) -> AsyncEngine:
