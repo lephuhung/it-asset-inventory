@@ -344,8 +344,9 @@ error_category|null, created_at}`.
     - Đã có `completion_committed_at`: trùng `content_digest` → `200` idempotent; khác → `409` + audit
       `chat.turn.late_output`, không persist.
     - Ngoài grace → `409` + audit `chat.turn.late_output_expired`, không persist.
-  - Precedence: completion commit trước cancel/lease-fail → `completed`; cancel/lease-fail trước →
-    `canceled`/`failed` giữ nguyên dù completion đến sau (trong grace).
+  - Precedence: completion commit trước cancel/lease-fail → theo `finish_reason` (`stop|length`→`completed`,
+    `canceled`→`canceled`, `error`→`failed`); cancel/lease-fail trước → `canceled`/`failed` giữ nguyên dù
+    completion đến sau (trong grace).
 
 ### Agent API
 
