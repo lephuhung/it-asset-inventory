@@ -3,17 +3,25 @@
 Task 3 của Chat Assistant P1. Tạo role read-only `inventory_chat_ro` + schema
 `chat_ro_views` + 6 view tối giản (loại PII) cho chat assistant truy vấn inventory.
 
-- Role: `inventory_chat_ro`, `LOGIN NOINHERIT`, không là member role khác, không
-  sở hữu object. Chỉ có `USAGE` trên schema `chat_ro_views` + `SELECT` trên các view
-  đã duyệt; **không** grant bảng gốc / `users` / `llm_config` / `api_client.yaml` /
-  `api_keys` / `audit_log` / `chat_*`.
-- `search_path` do engine đặt (`chat_ro_views, pg_catalog`).
+Ranh giới quyền (fail-closed):
+- Role `inventory_chat_ro`: `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS`; không là member role khác, không sở hữu object.
+- **Chỉ** `GRANT SELECT` trên **6 view đã duyệt** (manifest đóng). Không grant bảng
+  gốc / `users` / `llm_config` / `velociraptor_config` / `api_keys` / `audit_log` /
+  `chat_*`. Không dùng `GRANT ... ON ALL TABLES`/`ALTER DEFAULT PRIVILEGES` (sẽ tự
+  động mở quyền cho object tương lai — phá manifest đóng).
+- Nhánh role đã tồn tại: siết thuộc tính, thu hồi membership + mọi quyền trên quan
+  hệ schema `public`, và **fail closed** nếu role còn sở hữu object hoặc thuộc tính
+  đặc quyền.
+- `search_path` đặt khi tạo connection **và** reset lại mỗi lần checkout ở engine
+  (`app/db/session.py`).
 - Catalog/function isolation **không** DB-enforced (PostgreSQL cấp PUBLIC đọc
   `pg_catalog`) — tuyến chính là validator SQL ở T9 (spec V3-4/R5).
 
 EOL: `portal/lib/eol.ts` là nguồn tham chiếu (backend chưa có field). View suy ra
-`eol_flag` từ `os_name` theo họ OS đã biết hết hỗ trợ; thiếu dữ liệu → NULL (unknown),
-**không đoán**.
+`eol_flag` từ `os_name` + `os_version`/`os_build`: họ OS đã hết hỗ trợ → TRUE; Windows
+11 chỉ FALSE khi build nằm trong cửa sổ còn hỗ trợ, thiếu/không nhận diện build →
+NULL (unknown), **không đoán**.
 
 Revision ID: e3f4a5b6c7d8
 Revises: d2e3f4a5b6c7
@@ -31,13 +39,140 @@ depends_on = None
 
 CHAT_RO_ROLE = "inventory_chat_ro"
 CHAT_RO_SCHEMA = "chat_ro_views"
+CHAT_RO_SEARCH_PATH = f"{CHAT_RO_SCHEMA}, pg_catalog"
 
-# EOL heuristic — cùng tập họ OS với `portal/lib/eol.ts`. TRUE = đã hết hỗ trợ,
-# FALSE = còn hỗ trợ, NULL = không đủ dữ liệu. Thứ tự CASE quan trọng: "Windows 11"
-# phải đứng trước "Windows 1" nếu dùng prefix ngắn; ở đây dùng chuỗi đầy đủ.
-_EOL_CASE = """CASE
+
+# ── SQL literal helpers ──────────────────────────────────────────────────────
+
+def _pg_literal(value: str) -> str:
+    """Sinh literal an toàn, khớp semantics `quote_literal` của PostgreSQL.
+
+    Chuỗi chứa backslash → dùng `E'...'` (backslash + nháy đơn nhân đôi); ngược lại
+    dùng `'...'` (chỉ nháy đơn nhân đôi). Nhờ vậy password chứa `$`, `$$`, nháy đơn,
+    backslash hay dấu hai chấm đều không phá câu lệnh (không cần dollar-quote bao ngoài).
+    """
+    if "\\" in value:
+        escaped = value.replace("\\", "\\\\").replace("'", "''")
+        return "E'" + escaped + "'"
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _dollar_tag(*values: str) -> str:
+    """Chọn tag dollar-quote không xuất hiện trong bất kỳ `values` nào."""
+    i = 0
+    while True:
+        tag = f"$chatro{i}$"
+        if all(tag not in v for v in values):
+            return tag
+        i += 1
+
+
+def role_ddl(password: str) -> str:
+    """CREATE/ALTER role idempotent, siết thuộc tính, KHÔNG nhúng password thô.
+
+    Password đi qua `_pg_literal` (literal chuẩn) — không dollar-quote bao ngoài nên
+    `$$` trong password vô hại.
+    """
+    literal = _pg_literal(password)
+    tag = _dollar_tag(literal)
+    attrs = "LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+    return (
+        f"DO {tag} BEGIN "
+        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{CHAT_RO_ROLE}') THEN "
+        f"CREATE ROLE {CHAT_RO_ROLE} WITH {attrs} PASSWORD {literal}; "
+        f"ELSE ALTER ROLE {CHAT_RO_ROLE} WITH {attrs} PASSWORD {literal}; "
+        f"END IF; END {tag};"
+    )
+
+
+# ── Role hardening (nhánh role đã tồn tại) ───────────────────────────────────
+
+# DO block cố định (không nhúng input) → tag `$chh$` an toàn.
+_HARDEN_TAG = "$chh$"
+
+ROLE_HARDEN_DDL: list[str] = [
+    # 1) Thu hồi mọi membership — NOINHERIT không tước quyền SET ROLE.
+    f"""DO {_HARDEN_TAG}
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    SELECT parent.rolname AS parent_role
+    FROM pg_auth_members m
+    JOIN pg_roles parent ON parent.oid = m.roleid
+    JOIN pg_roles member ON member.oid = m.member
+    WHERE member.rolname = '{CHAT_RO_ROLE}'
+  LOOP
+    EXECUTE format('REVOKE %I FROM {CHAT_RO_ROLE}', r.parent_role);
+  END LOOP;
+END {_HARDEN_TAG}""",
+    # 2) Thu hồi mọi quyền trực tiếp trên quan hệ schema `public` (bảng/view/sequence).
+    f"""DO {_HARDEN_TAG}
+DECLARE r RECORD;
+BEGIN
+  FOR r IN
+    SELECT c.relname, c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r','v','m','p','S','f')
+  LOOP
+    IF r.relkind = 'S' THEN
+      EXECUTE format('REVOKE ALL ON SEQUENCE public.%I FROM {CHAT_RO_ROLE}', r.relname);
+    ELSE
+      EXECUTE format('REVOKE ALL ON TABLE public.%I FROM {CHAT_RO_ROLE}', r.relname);
+    END IF;
+  END LOOP;
+END {_HARDEN_TAG}""",
+    # 3) Fail closed nếu role còn sở hữu object.
+    f"""DO {_HARDEN_TAG}
+DECLARE n integer;
+BEGIN
+  SELECT count(*) INTO n
+  FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+  WHERE r.rolname = '{CHAT_RO_ROLE}';
+  IF n > 0 THEN
+    RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} owns % relation(s); refusing to continue', n;
+  END IF;
+END {_HARDEN_TAG}""",
+    # 4) Fail closed nếu role còn thuộc tính đặc quyền.
+    f"""DO {_HARDEN_TAG}
+DECLARE r RECORD;
+BEGIN
+  SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
+  INTO r FROM pg_roles WHERE rolname = '{CHAT_RO_ROLE}';
+  IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN
+    RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} retains elevated attributes';
+  END IF;
+END {_HARDEN_TAG}""",
+    # 5) Thu hồi USAGE/USAGE-trên-schema public (least privilege).
+    f"REVOKE ALL ON SCHEMA public FROM {CHAT_RO_ROLE}",
+]
+
+
+# ── View projections ─────────────────────────────────────────────────────────
+
+# Build (Windows) — ưu tiên thành phần thứ 3 của `os_version` ("10.0.22631" → 22631),
+# fallback `os_build` (chỉ giữ chữ số). Không nhận diện → NULL.
+_BUILD_EXPR = (
+    "COALESCE("
+    "NULLIF(substring(split_part(COALESCE(mc.os_version, ''), '.', 3) FROM '^[0-9]+$'), '')::int, "
+    "NULLIF(regexp_replace(COALESCE(mc.os_build, ''), '[^0-9]', '', 'g'), '')::int"
+    ")"
+)
+
+# EOL heuristic — cùng tập họ OS + cửa sổ hỗ trợ với `portal/lib/eol.ts`.
+# TRUE = đã hết hỗ trợ, FALSE = còn hỗ trợ, NULL = không đủ dữ liệu (không đoán).
+# Windows 11 phụ thuộc build: 21H2/22H2/23H2 đã hết hạn; 24H2 (26100) và mới hơn theo
+# ngày EOL tham chiếu; thiếu/không nhận diện build → NULL.
+_EOL_CASE = f"""CASE
         WHEN mc.os_name IS NULL THEN NULL
-        WHEN mc.os_name ILIKE '%Windows 11%' THEN FALSE
+        WHEN mc.os_name ILIKE '%Windows 11%' THEN
+            CASE
+                WHEN {_BUILD_EXPR} IS NULL THEN NULL
+                WHEN {_BUILD_EXPR} IN (22000, 22621, 22631) THEN TRUE
+                WHEN {_BUILD_EXPR} = 26100 THEN (DATE '2026-10-13' < CURRENT_DATE)
+                WHEN {_BUILD_EXPR} > 26100 THEN (DATE '2027-10-12' < CURRENT_DATE)
+                ELSE NULL
+            END
         WHEN mc.os_name ILIKE '%Windows 10%' THEN TRUE
         WHEN mc.os_name ILIKE '%Windows 8%'  THEN TRUE
         WHEN mc.os_name ILIKE '%Windows 7%'  THEN TRUE
@@ -50,6 +185,19 @@ _EOL_CASE = """CASE
         WHEN mc.os_name ILIKE '%Windows Server 2025%' THEN FALSE
         ELSE NULL
     END"""
+
+# Dung lượng đĩa — payload thật dùng `size_bytes`/`size` (bytes) hoặc legacy `size_gb`.
+# NULL khi không có trường nào được biết.
+_DISK_GB_BYTES = (
+    "(d->>'size_bytes')::numeric / 1073741824"
+)
+_DISK_CAPACITY = (
+    "COALESCE("
+    f"{_DISK_GB_BYTES}, "
+    "(d->>'size')::numeric / 1073741824, "
+    "(d->>'size_gb')::numeric"
+    ")"
+)
 
 _VIEWS: dict[str, str] = {
     "v_chat_machines": f"""
@@ -75,12 +223,14 @@ _VIEWS: dict[str, str] = {
             o.name         AS org_name,
             mc.os_name     AS os_name,
             mc.os_version  AS os_version,
-            COALESCE(mc.cpu->>'model', mc.cpu->>'brand', mc.cpu->>'name') AS cpu,
+            COALESCE(mc.cpu->>'model', mc.cpu->>'brand') AS cpu,
             CASE WHEN mc.ram_gb IS NULL THEN NULL
                  ELSE round(mc.ram_gb * 1024)::integer END AS ram_mb,
             CASE WHEN jsonb_typeof(mc.disks) = 'array' THEN (
-                SELECT sum((d->>'capacity_gb')::numeric)::integer
-                FROM jsonb_array_elements(mc.disks) AS d
+                SELECT sum(cap)::integer FROM (
+                    SELECT {_DISK_CAPACITY} AS cap
+                    FROM jsonb_array_elements(mc.disks) AS d
+                ) AS disks_x
             ) ELSE NULL END AS disk_gb,
             m.status       AS status,
             m.last_seen_at AS last_seen
@@ -117,7 +267,7 @@ _VIEWS: dict[str, str] = {
     "v_chat_hardware": f"""
         CREATE OR REPLACE VIEW {CHAT_RO_SCHEMA}.v_chat_hardware AS
         SELECT mc.machine_id, m.hostname, 'cpu'::text AS component,
-               COALESCE(mc.cpu->>'model', mc.cpu->>'brand', mc.cpu->>'name') AS value
+               COALESCE(mc.cpu->>'model', mc.cpu->>'brand') AS value
         FROM public.machine_current mc
         JOIN public.machines m ON m.id = mc.machine_id
         UNION ALL
@@ -140,7 +290,12 @@ _VIEWS: dict[str, str] = {
         UNION ALL
         SELECT mc.machine_id, m.hostname, 'disk'::text,
                COALESCE(d->>'model', d->>'name', 'disk') || ' '
-                   || COALESCE(d->>'capacity_gb', '?') || 'GB'
+                   || COALESCE(
+                          round((d->>'size_bytes')::numeric / 1073741824)::text,
+                          round((d->>'size')::numeric / 1073741824)::text,
+                          d->>'size_gb',
+                          '?'
+                      ) || 'GB'
         FROM public.machine_current mc
         JOIN public.machines m ON m.id = mc.machine_id
         CROSS JOIN LATERAL jsonb_array_elements(
@@ -164,42 +319,41 @@ _VIEWS: dict[str, str] = {
     """,
 }
 
-# Tạo/ALTER role idempotent. Password được escape ở Python (không log).
-def role_ddl(password: str) -> str:
-    literal = password.replace("'", "''")
-    return (
-        "DO $$ BEGIN "
-        f"IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{CHAT_RO_ROLE}') THEN "
-        f"  CREATE ROLE {CHAT_RO_ROLE} LOGIN PASSWORD '{literal}' NOINHERIT; "
-        f"ELSE ALTER ROLE {CHAT_RO_ROLE} LOGIN PASSWORD '{literal}' NOINHERIT; "
-        "END IF; END $$;"
-    )
-
 
 SCHEMA_DDL = f"CREATE SCHEMA IF NOT EXISTS {CHAT_RO_SCHEMA}"
 
 VIEW_DDL: list[str] = list(_VIEWS.values())
 
+# Manifest đóng: chỉ 6 GRANT SELECT tường minh; gỡ mọi grant/default-privilege cũ.
 GRANT_DDL: list[str] = [
     f"REVOKE ALL ON SCHEMA {CHAT_RO_SCHEMA} FROM PUBLIC",
-    f"GRANT USAGE ON SCHEMA {CHAT_RO_SCHEMA} TO {CHAT_RO_ROLE}",
-    f"GRANT SELECT ON ALL TABLES IN SCHEMA {CHAT_RO_SCHEMA} TO {CHAT_RO_ROLE}",
+    f"REVOKE ALL ON ALL TABLES IN SCHEMA {CHAT_RO_SCHEMA} FROM {CHAT_RO_ROLE}",
     (
         f"ALTER DEFAULT PRIVILEGES IN SCHEMA {CHAT_RO_SCHEMA} "
-        f"GRANT SELECT ON TABLES TO {CHAT_RO_ROLE}"
+        f"REVOKE SELECT ON TABLES FROM {CHAT_RO_ROLE}"
     ),
+    f"GRANT USAGE ON SCHEMA {CHAT_RO_SCHEMA} TO {CHAT_RO_ROLE}",
+    *[f"GRANT SELECT ON {CHAT_RO_SCHEMA}.{name} TO {CHAT_RO_ROLE}" for name in _VIEWS],
 ]
 
 DROP_DDL: list[str] = [f"DROP SCHEMA IF EXISTS {CHAT_RO_SCHEMA} CASCADE"]
 
 
 def upgrade() -> None:
-    op.execute(role_ddl(settings.chat_ro_password))
-    for stmt in [SCHEMA_DDL, *VIEW_DDL, *GRANT_DDL]:
-        op.execute(stmt)
+    # exec_driver_sql: tránh `text()` diễn giải dấu `:` trong literal password.
+    bind = op.get_bind()
+    bind.exec_driver_sql(role_ddl(settings.chat_ro_password))
+    for stmt in ROLE_HARDEN_DDL:
+        bind.exec_driver_sql(stmt)
+    bind.exec_driver_sql(SCHEMA_DDL)
+    for stmt in VIEW_DDL:
+        bind.exec_driver_sql(stmt)
+    for stmt in GRANT_DDL:
+        bind.exec_driver_sql(stmt)
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
     for stmt in DROP_DDL:
-        op.execute(stmt)
-    op.execute(f"DROP ROLE IF EXISTS {CHAT_RO_ROLE}")
+        bind.exec_driver_sql(stmt)
+    bind.exec_driver_sql(f"DROP ROLE IF EXISTS {CHAT_RO_ROLE}")

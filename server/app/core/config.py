@@ -6,22 +6,29 @@ from functools import lru_cache
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Role read-only inventory của Chat Assistant (T3) — tên cố định, dùng chung
+# migration role + suy ra URL pool.
+CHAT_RO_DB_USERNAME = "inventory_chat_ro"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     def effective_chat_ro_database_url(self) -> str:
-        """URL pool chat_ro — override tường minh hoặc suy ra từ `database_url`."""
+        """URL pool chat_ro — override tường minh hoặc suy ra từ `database_url`.
+
+        Dùng SQLAlchemy `make_url` để thay user/password, giữ nguyên mọi thành phần
+        khác (kể cả host IPv6 dạng `[::1]`) và percent-encode password an toàn.
+        """
         if self.chat_ro_database_url:
             return self.chat_ro_database_url
-        from urllib.parse import quote, urlsplit, urlunsplit
+        from sqlalchemy.engine import make_url
 
-        parts = urlsplit(self.database_url)
-        host = parts.hostname or "localhost"
-        netloc = f"inventory_chat_ro:{quote(self.chat_ro_password, safe='')}@{host}"
-        if parts.port:
-            netloc += f":{parts.port}"
-        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+        return (
+            make_url(self.database_url)
+            .set(username=CHAT_RO_DB_USERNAME, password=self.chat_ro_password)
+            .render_as_string(hide_password=False)
+        )
 
     # Môi trường
     app_env: str = "dev"

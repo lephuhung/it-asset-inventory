@@ -1,7 +1,8 @@
 """Task 3 — read-only inventory pool (`inventory_chat_ro`) + minimized views.
 
 Test dùng **role thật** `inventory_chat_ro` (không dùng app pool) theo spec V3-4:
-alias che PII, catalog isolation (validator-enforced), function side-effect, v.v.
+manifest đóng (chỉ 6 view), ranh giới quyền, hardening role, RESET ALL mỗi checkout,
+projection JSONB theo payload thật, EOL parity, password an toàn, suy URL.
 
 Lưu ý spec V3-4: PostgreSQL cấp PUBLIC quyền đọc `pg_catalog`, nên cô lập catalog
 **không** DB-enforced — tuyến chính là validator SQL ở T9. Test dưới đây khẳng định
@@ -19,6 +20,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import pool as sa_pool
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import session as session_module
@@ -62,22 +64,23 @@ def _chat_ro_test_url() -> str:
 async def chat_ro_session(db_engine, monkeypatch):
     """Tạo role + schema + view thật, trỏ `get_chat_ro_session` vào pool chat_ro.
 
-    Tạo bằng superuser (test user `inventory` có CREATEROLE), rồi kết nối lại bằng
-    chính role `inventory_chat_ro` để chứng minh ranh giới quyền.
+    Tạo bằng superuser (test user `inventory` có CREATEROLE), chạy cả hardening, rồi
+    kết nối lại bằng chính role `inventory_chat_ro` để chứng minh ranh giới quyền.
+    Engine test dùng `session_module.create_chat_ro_engine` để có listener RESET ALL.
     """
     mig = _load_migration()
     async with db_engine.begin() as conn:
-        await conn.execute(text(mig.role_ddl(CHAT_RO_TEST_PASSWORD)))
-        await conn.execute(text(mig.SCHEMA_DDL))
+        await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+        for stmt in mig.ROLE_HARDEN_DDL:
+            await conn.exec_driver_sql(stmt)
+        await conn.exec_driver_sql(mig.SCHEMA_DDL)
         for stmt in mig.VIEW_DDL:
-            await conn.execute(text(stmt))
+            await conn.exec_driver_sql(stmt)
         for stmt in mig.GRANT_DDL:
-            await conn.execute(text(stmt))
+            await conn.exec_driver_sql(stmt)
 
-    engine = create_async_engine(
-        _chat_ro_test_url(),
-        poolclass=sa_pool.NullPool,
-        connect_args={"server_settings": {"search_path": "chat_ro_views,pg_catalog"}},
+    engine = session_module.create_chat_ro_engine(
+        _chat_ro_test_url(), poolclass=sa_pool.NullPool
     )
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(session_module, "chat_ro_engine", engine, raising=False)
@@ -85,7 +88,7 @@ async def chat_ro_session(db_engine, monkeypatch):
     yield
     await engine.dispose()
     async with db_engine.begin() as conn:
-        await conn.execute(text("DROP SCHEMA IF EXISTS chat_ro_views CASCADE"))
+        await conn.exec_driver_sql("DROP SCHEMA IF EXISTS chat_ro_views CASCADE")
 
 
 async def _chat_ro_fetch(sql: str, **params):
@@ -96,6 +99,7 @@ async def _chat_ro_fetch(sql: str, **params):
 
 
 async def _seed_machine(db, *, hostname="WS-01", os_name="Windows 10 Pro",
+                        os_version="10.0.19045", os_build=None,
                         status="online", org=None, cpu=None, ram_gb=None, disks=None):
     """Seed org (nếu chưa có) + machine + machine_current. Trả (org, machine)."""
     from datetime import UTC, datetime
@@ -121,7 +125,8 @@ async def _seed_machine(db, *, hostname="WS-01", os_name="Windows 10 Pro",
         machine_id=machine.id,
         collected_at=datetime.now(UTC),
         os_name=os_name,
-        os_version="10.0.19045",
+        os_version=os_version,
+        os_build=os_build,
         cpu=cpu,
         ram_gb=ram_gb,
         disks=disks,
@@ -142,6 +147,26 @@ async def test_chat_ro_role_is_noinherit(chat_ro_session):
         assert row.rolinherit is False
 
 
+async def test_chat_ro_role_hardened(chat_ro_session):
+    """Role không có thuộc tính đặc quyền, không membership, không sở hữu object."""
+    async for s in session_module.get_chat_ro_session():
+        row = (await s.execute(text(
+            "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls "
+            "FROM pg_roles WHERE rolname = current_user"
+        ))).one()
+        assert not any(row)
+        members = (await s.execute(text(
+            "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member "
+            "WHERE r.rolname = current_user"
+        ))).scalar()
+        assert members == 0
+        owned = (await s.execute(text(
+            "SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner "
+            "WHERE r.rolname = current_user"
+        ))).scalar()
+        assert owned == 0
+
+
 async def test_chat_ro_cannot_read_users(chat_ro_session):
     with pytest.raises(Exception) as exc:
         await _chat_ro_fetch("SELECT email FROM public.users LIMIT 1")
@@ -158,6 +183,39 @@ async def test_chat_ro_cannot_read_sensitive_tables(chat_ro_session, table):
 async def test_chat_ro_can_read_approved_view(chat_ro_session):
     rows = await _chat_ro_fetch("SELECT * FROM v_chat_machines")
     assert rows == []  # view đọc được (không lỗi quyền), chưa seed dữ liệu
+
+
+async def test_chat_ro_extra_schema_object_not_readable(db_engine, chat_ro_session):
+    """Critical 1: manifest đóng — object thêm vào schema KHÔNG tự động được đọc."""
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql("CREATE TABLE chat_ro_views.extra_secret(id int)")
+    try:
+        with pytest.raises(Exception) as exc:
+            await _chat_ro_fetch("SELECT * FROM chat_ro_views.extra_secret")
+        assert "permission denied" in str(exc.value).lower()
+    finally:
+        async with db_engine.begin() as conn:
+            await conn.exec_driver_sql("DROP TABLE IF EXISTS chat_ro_views.extra_secret")
+
+
+async def test_chat_ro_checkout_resets_session_state(chat_ro_session):
+    """Important 1: mỗi lần mượn connection phải RESET ALL + đặt lại search_path."""
+    engine = session_module.create_chat_ro_engine(
+        _chat_ro_test_url(), poolclass=sa_pool.AsyncAdaptedQueuePool,
+        pool_size=1, max_overflow=0,
+    )
+    try:
+        async with engine.connect() as c1:
+            await c1.execute(text("SET search_path TO public"))
+            await c1.execute(text("SET statement_timeout = 123456"))
+            assert (await c1.execute(text("SHOW search_path"))).scalar() == "public"
+        async with engine.connect() as c2:
+            sp = (await c2.execute(text("SHOW search_path"))).scalar()
+            st = (await c2.execute(text("SHOW statement_timeout"))).scalar()
+        assert "chat_ro_views" in sp
+        assert st != "123456"
+    finally:
+        await engine.dispose()
 
 
 async def test_chat_ro_catalog_is_readable_and_validator_enforced(chat_ro_session):
@@ -193,7 +251,9 @@ async def test_chat_ro_no_view_exposes_pii(chat_ro_session):
 # ── Views read real data ─────────────────────────────────────────────────────
 
 async def test_chat_ro_machines_view_reads_machine(db, chat_ro_session):
-    org, machine = await _seed_machine(db, hostname="WS-42", os_name="Windows 11 Pro")
+    org, machine = await _seed_machine(
+        db, hostname="WS-42", os_name="Windows 11 Pro", os_version="10.0.26100.1"
+    )
     await db.commit()
 
     rows = await _chat_ro_fetch(
@@ -209,10 +269,15 @@ async def test_chat_ro_machines_view_reads_machine(db, chat_ro_session):
 
 
 async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
-    await _seed_machine(db, hostname="EOL-10", os_name="Windows 10 Pro")
-    await _seed_machine(db, hostname="OK-11", os_name="Windows 11 Pro")
-    await _seed_machine(db, hostname="EOL-2012", os_name="Windows Server 2012 R2")
-    await _seed_machine(db, hostname="UNK", os_name=None)
+    await _seed_machine(db, hostname="EOL-10", os_name="Windows 10 Pro",
+                        os_version="10.0.19045")
+    await _seed_machine(db, hostname="OK-11", os_name="Windows 11 Pro",
+                        os_version="10.0.26100.1")
+    await _seed_machine(db, hostname="EOL-11", os_name="Windows 11 Pro",
+                        os_version="10.0.22621.1")
+    await _seed_machine(db, hostname="EOL-2012", os_name="Windows Server 2012 R2",
+                        os_version="6.3.9600")
+    await _seed_machine(db, hostname="UNK", os_name=None, os_version=None)
     await db.commit()
 
     flags = {
@@ -220,9 +285,22 @@ async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
         for r in await _chat_ro_fetch("SELECT hostname, eol_flag FROM v_chat_machines")
     }
     assert flags["EOL-10"] is True
-    assert flags["OK-11"] is False
+    assert flags["OK-11"] is False       # build 26100 còn hỗ trợ
+    assert flags["EOL-11"] is True       # build 22621 đã hết hỗ trợ
     assert flags["EOL-2012"] is True
     assert flags["UNK"] is None
+
+
+async def test_chat_ro_eol_win11_without_build_is_unknown(db, chat_ro_session):
+    """Không đoán: Windows 11 thiếu build → NULL, không mặc định FALSE."""
+    await _seed_machine(db, hostname="WIN11-NOVER", os_name="Windows 11 Pro",
+                        os_version=None, os_build=None)
+    await db.commit()
+
+    rows = await _chat_ro_fetch(
+        "SELECT eol_flag FROM v_chat_machines WHERE hostname = 'WIN11-NOVER'"
+    )
+    assert rows[0]["eol_flag"] is None
 
 
 async def test_chat_ro_machine_detail_jsonb_extraction(db, chat_ro_session):
@@ -230,7 +308,9 @@ async def test_chat_ro_machine_detail_jsonb_extraction(db, chat_ro_session):
         db, hostname="DETAIL-1",
         cpu={"model": "Intel Xeon Gold", "brand": "Intel", "cores": 8},
         ram_gb=16.0,
-        disks=[{"model": "Samsung", "capacity_gb": 500}, {"capacity_gb": 256}],
+        # payload thật: `size_bytes` (500 GB) + legacy `size` (256 GB) = 756 GB
+        disks=[{"model": "Samsung", "size_bytes": 536870912000},
+               {"size": 274877906944}],
     )
     await db.commit()
 
@@ -242,6 +322,19 @@ async def test_chat_ro_machine_detail_jsonb_extraction(db, chat_ro_session):
     assert row["cpu"] == "Intel Xeon Gold"
     assert row["ram_mb"] == 16384
     assert row["disk_gb"] == 756
+
+
+async def test_chat_ro_disk_gb_from_legacy_size_gb(db, chat_ro_session):
+    """Important 2: legacy `size_gb` vẫn đọc được khi không có trường bytes."""
+    _, machine = await _seed_machine(
+        db, hostname="DETAIL-LEGACY", disks=[{"model": "Old", "size_gb": 100}],
+    )
+    await db.commit()
+
+    rows = await _chat_ro_fetch(
+        "SELECT disk_gb FROM v_chat_machine_detail WHERE id = :id", id=machine.id
+    )
+    assert rows[0]["disk_gb"] == 100
 
 
 async def test_chat_ro_machine_detail_null_jsonb_is_null(db, chat_ro_session):
@@ -256,6 +349,22 @@ async def test_chat_ro_machine_detail_null_jsonb_is_null(db, chat_ro_session):
     assert rows[0]["disk_gb"] is None
 
 
+async def test_chat_ro_cpu_projection_excludes_name(db, chat_ro_session):
+    """Important 4: chỉ `model`/`brand`; `name` không được dùng."""
+    await _seed_machine(db, hostname="CPU-NAME", cpu={"name": "Foo CPU"})
+    await _seed_machine(db, hostname="CPU-BRAND", cpu={"brand": "Intel"})
+    await _seed_machine(db, hostname="CPU-MODEL", cpu={"model": "Xeon"})
+    await db.commit()
+
+    rows = {
+        r["hostname"]: r["cpu"]
+        for r in await _chat_ro_fetch("SELECT hostname, cpu FROM v_chat_machine_detail")
+    }
+    assert rows["CPU-NAME"] is None
+    assert rows["CPU-BRAND"] == "Intel"
+    assert rows["CPU-MODEL"] == "Xeon"
+
+
 async def test_chat_ro_org_stats_aggregates(db, chat_ro_session):
     from app.db.models import Organization, OrgType
 
@@ -263,8 +372,10 @@ async def test_chat_ro_org_stats_aggregates(db, chat_ro_session):
     db.add(org)
     await db.flush()
     await _seed_machine(db, hostname="S-ON", status="online", os_name="Windows 10 Pro", org=org)
-    await _seed_machine(db, hostname="S-OFF", status="offline", os_name="Windows 11 Pro", org=org)
-    await _seed_machine(db, hostname="S-ON2", status="online", os_name="Windows 11 Pro", org=org)
+    await _seed_machine(db, hostname="S-OFF", status="offline", os_name="Windows 11 Pro",
+                        os_version="10.0.26100.1", org=org)
+    await _seed_machine(db, hostname="S-ON2", status="online", os_name="Windows 11 Pro",
+                        os_version="10.0.26100.1", org=org)
     await db.commit()
 
     rows = await _chat_ro_fetch(
@@ -302,7 +413,7 @@ async def test_chat_ro_hardware_view(db, chat_ro_session):
         db, hostname="HW-1",
         cpu={"model": "AMD Ryzen 9"},
         ram_gb=32.0,
-        disks=[{"model": "NVMe", "capacity_gb": 1024}],
+        disks=[{"model": "NVMe", "size_bytes": 1099511627776}],  # 1024 GB
     )
     await db.commit()
 
@@ -343,6 +454,45 @@ async def test_chat_ro_alerts_uses_dfir_alerts_and_maps_resolved(db, chat_ro_ses
     assert rows[0]["status"] == "resolved"
 
 
+# ── Password literal safety ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("value", [
+    "plain", "p$$w", "a'b", "back\\slash", "mix'$\\x", "$$", "", "a:b", "  spaced  ",
+])
+async def test_password_literal_matches_postgres_quote_literal(db_engine, value):
+    mig = _load_migration()
+    async with db_engine.connect() as conn:
+        expected = (
+            await conn.execute(text("SELECT quote_literal(:v)"), {"v": value})
+        ).scalar_one()
+    assert mig._pg_literal(value) == expected
+
+
+async def test_role_password_with_dollar_quotes(db_engine):
+    """Important 5: password chứa `$$`/`'`/`:` vẫn tạo role + đăng nhập được."""
+    mig = _load_migration()
+    weird = "p$$w'ord:?:x\\z"
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql(mig.role_ddl(weird))
+
+    host = os.environ.get("POSTGRES_TEST_HOST", "127.0.0.1")
+    port = os.environ.get("POSTGRES_TEST_PORT", "5432")
+    db = os.environ.get("POSTGRES_TEST_DB", "inventory_test")
+    login_url = make_url(
+        f"postgresql+asyncpg://inventory_chat_ro:pw@{host}:{port}/{db}"
+    ).set(password=weird).render_as_string(hide_password=False)
+
+    engine = create_async_engine(login_url, poolclass=sa_pool.NullPool)
+    try:
+        async with engine.connect() as conn:
+            assert (await conn.execute(text("SELECT 1"))).scalar() == 1
+    finally:
+        await engine.dispose()
+        # Khôi phục password chuẩn cho các test khác.
+        async with db_engine.begin() as conn:
+            await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+
+
 # ── Config URL derivation ────────────────────────────────────────────────────
 
 def test_effective_chat_ro_database_url_derives_from_database_url(monkeypatch):
@@ -366,4 +516,29 @@ def test_effective_chat_ro_database_url_override_wins():
     )
     assert s.effective_chat_ro_database_url().startswith(
         "postgresql+asyncpg://inventory_chat_ro:x@other"
+    )
+
+
+def test_effective_chat_ro_database_url_ipv6_preserves_brackets():
+    """Minor: host IPv6 phải giữ dấu ngoặc vuông."""
+    from app.core.config import Settings
+
+    s = Settings(
+        database_url="postgresql+asyncpg://inventory:pw@[::1]:5433/inventory",
+        chat_ro_password="s3cret",
+    )
+    assert s.effective_chat_ro_database_url() == (
+        "postgresql+asyncpg://inventory_chat_ro:s3cret@[::1]:5433/inventory"
+    )
+
+
+def test_effective_chat_ro_database_url_encodes_special_password():
+    from app.core.config import Settings
+
+    s = Settings(
+        database_url="postgresql+asyncpg://inventory:pw@dbhost:5432/inventory",
+        chat_ro_password="p@ss/w:rd",
+    )
+    assert s.effective_chat_ro_database_url() == (
+        "postgresql+asyncpg://inventory_chat_ro:p%40ss%2Fw%3Ard@dbhost:5432/inventory"
     )
