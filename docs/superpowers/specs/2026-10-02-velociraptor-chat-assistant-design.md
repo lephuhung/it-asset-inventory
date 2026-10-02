@@ -2,13 +2,13 @@
 
 - **Branch:** `research/velociraptor-chat-query`
 - **Ngày:** 2026-10-02
-- **Trạng thái:** design v3 (tiếp thu review GPT-6.1 Sol pass 1 F1–F12 + pass 2 R1–R8, cùng 3 sửa cross-cutting), chờ review
+- **Trạng thái:** design v4 (tiếp thu review GPT-6.1 Sol pass 3 V3-1…V3-7), chờ review
 - **Liên quan:** `docs/llm-dfir/*`, DeepAgent (`deepagent/`), `server/app/services/velociraptor.py`,
   `server/app/core/audit.py`, `server/app/core/security.py`, `server/app/api/routes/machines.py`
 
-> v3 tiếp thu 2 vòng review độc lập `openai-codex/gpt-6.1-sol:high`. Theo quyết định của chủ sản
-> phẩm, v3 **mở rộng phạm vi** gồm 3 sửa cross-cutting (R3 audit/hash + machine deletion, R7
-> private-host validation, R8 budget dùng chung chat + investigation).
+> v4 tiếp thu pass 3 `openai-codex/gpt-6.1-sol:high` (V3-1…V3-7) trên nền v3. Phạm vi vẫn gồm 3
+> sửa cross-cutting đã được chủ sản phẩm duyệt (R3 audit/hash + machine deletion, R7 private-host
+> validation, R8 budget dùng chung chat + investigation).
 
 ## Problem
 
@@ -29,7 +29,7 @@ ngữ cảnh.
 ## Non-goals
 
 - Không side-effect lên endpoint (kill/quarantine/YARA/upload/`collect_file`).
-- Không thay DeepAgent hay luồng điều tra theo lô (trừ phần budget dùng chung ở R8).
+- Không thay logic DeepAgent hay luồng điều tra theo lô; chỉ thêm hook validate private-host và reservation budget chung (R7/R8).
 - Không mở cho vai trò khác ngoài SuperAdmin.
 - Không thay `MachineInvestigationPanel` / `InvestigationPromptModal`.
 - Không hợp nhất BFF proxy buffering; chỉ thêm route streaming riêng.
@@ -38,7 +38,7 @@ ngữ cảnh.
 
 | # | Quyết định |
 |---|---|
-| 1 | Agent là container riêng (`chatagent/`); DeepAgent nguyên vẹn; không nhúng vào backend. |
+| 1 | Agent là container riêng (`chatagent/`); DeepAgent giữ logic, chỉ thêm hook validate private-host (R7); không nhúng vào backend. |
 | 2 | Velociraptor: read-only VQL (validator fail-closed) + read-only collection. |
 | 3 | Inventory: tool có cấu trúc + SQL ad-hoc, **backend thực thi** trên pool least-privilege; agent không giữ DB creds. |
 | 4 | Backend sở hữu hội thoại + turn + audit. |
@@ -54,6 +54,9 @@ ngữ cảnh.
 | 14 | R7 (cross-cutting): thay private-host check substring bằng parse host + kiểm tra IP; có retention/purge. |
 | 15 | R8 (cross-cutting): budget token **reserve/reconcile chung** chat + investigation, crash-safe. |
 | 16 | R4: streaming **non-resumable** trong P1 (recovery qua history + durable completion callback). |
+| 17 | V3-2: intent bind theo `(turn_id, tool_call_id)` + identity đầy đủ; không dùng `tool_call_id` unique toàn cục. |
+| 18 | V3-3: completion dùng **completion token** riêng, idempotent cả khi turn đã terminal. |
+| 19 | V3-5/V3-7: target identity resolve **live** từ Velociraptor; budget dùng **durable reservation** (DB), không chỉ Redis. |
 
 ## Kiến trúc & ranh giới tin cậy
 
@@ -114,8 +117,9 @@ pending ──▶ streaming ──▶ completed
 - **Liveness:** backend lease theo turn (Redis); agent phải ack/stream trong `turn_lease_seconds`, quá
   hạn và không có liveness → `failed(chat_stream_lost)`.
 - **Durable completion:** khi agent kết thúc (kể cả khi SSE tới portal đứt), agent gọi
-  `POST /api/internal/chat/turns/{turn_id}/complete` với nội dung cuối + usage + finish_reason;
-  backend persist `assistant` message **idempotent theo turn_id**. Đây là nguồn chân lý để không mất output.
+  `POST /api/internal/chat/turns/{turn_id}/complete` (service token + `X-Chat-Completion`) với nội dung
+  cuối + usage + finish_reason; backend persist `assistant` message **idempotent theo turn_id**. Đây là
+  nguồn chân lý để không mất output.
 - **Streaming non-resumable (P1):** `id:`/`seq` có nhưng **không có replay endpoint**; client khi
   mất kết nối reload hội thoại để đọc message đã persist. Ghi rõ đây là lựa chọn có chủ đích.
 - **Cancel:** `POST .../cancel` (chỉ `created_by`) → backend gọi agent `POST /v1/chat/{turn_id}/cancel`;
@@ -126,7 +130,7 @@ pending ──▶ streaming ──▶ completed
 
 ## Hợp đồng dữ liệu
 
-5 bảng mới (1 migration) + sửa `audit_log`. Thứ tự tạo: conversations → turns → messages → tool_calls → audit_intents.
+6 bảng mới (1 migration) + sửa `audit_log`. Thứ tự tạo: conversations → turns → messages → tool_calls → audit_intents → token_reservations.
 
 ```sql
 CREATE TABLE chat_conversations (
@@ -150,6 +154,7 @@ CREATE TABLE chat_turns (
   machine_ref     VARCHAR(128),                        -- định danh bất biến (vd client_id/hostname) để audit
   status          VARCHAR(16) NOT NULL DEFAULT 'pending',
   finish_reason   VARCHAR(16),                         -- stop|length|canceled|error
+  completion_token_hash VARCHAR(64),                   -- V3-3: thẩm quyền finalization riêng
   idempotency_key VARCHAR(128),
   request_id      UUID NOT NULL,
   started_at      TIMESTAMPTZ,
@@ -175,8 +180,9 @@ CREATE TABLE chat_messages (
   error_category  VARCHAR(48),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- FK tổ hợp: message phải thuộc cùng conversation với turn của nó
+  -- V3-1: ON DELETE CASCADE (không SET NULL vì sẽ vi phạm NOT NULL/ck_chat_msg_turn)
   CONSTRAINT fk_chat_msg_turn FOREIGN KEY (conversation_id, turn_id)
-    REFERENCES chat_turns (conversation_id, id) ON DELETE SET NULL,
+    REFERENCES chat_turns (conversation_id, id) ON DELETE CASCADE,
   CONSTRAINT ck_chat_msg_turn CHECK (role = 'system' OR turn_id IS NOT NULL)
 );
 CREATE INDEX ix_chat_msg_conv ON chat_messages (conversation_id, created_at, id);
@@ -203,17 +209,20 @@ CREATE INDEX ix_chat_tool_calls_turn ON chat_tool_calls (turn_id);
 -- Bền vững, KHÔNG cascade theo hội thoại (sống sót khi xoá hội thoại/user)
 CREATE TABLE chat_audit_intents (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tool_call_id    VARCHAR(64) NOT NULL UNIQUE,
-  turn_id         UUID NOT NULL,                -- plain UUID, không FK
+  turn_id         UUID NOT NULL,                -- plain UUID, không FK (sống sót khi xoá hội thoại)
+  tool_call_id    VARCHAR(64) NOT NULL,
   conversation_id UUID NOT NULL,                -- plain UUID, không FK
   actor_id        UUID NOT NULL,
   tool            VARCHAR(64) NOT NULL,
   args_digest     VARCHAR(64),
   client_id       VARCHAR(64),
   flow_id         VARCHAR(64),
+  attempts        SMALLINT NOT NULL DEFAULT 0,  -- V3-2: đếm lần thực thi
   outcome         VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending|ok|error|canceled|unknown
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  resolved_at     TIMESTAMPTZ
+  resolved_at     TIMESTAMPTZ,
+  -- V3-2: danh tính intent theo turn + tool call (KHÔNG unique toàn cục)
+  CONSTRAINT uq_chat_audit_intent UNIQUE (turn_id, tool_call_id)
 );
 CREATE INDEX ix_chat_audit_intents_open ON chat_audit_intents (outcome, created_at);
 
@@ -226,6 +235,21 @@ ALTER TABLE audit_log
 ALTER TABLE chat_tool_calls
   ADD CONSTRAINT fk_toolcall_intent  FOREIGN KEY (audit_intent_id)  REFERENCES audit_log(id) ON DELETE SET NULL,
   ADD CONSTRAINT fk_toolcall_outcome FOREIGN KEY (audit_outcome_id) REFERENCES audit_log(id) ON DELETE SET NULL;
+
+-- V3-7: reservation budget bền vững (nguồn sự thật, Redis chỉ cache)
+CREATE TABLE token_reservations (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope        VARCHAR(24) NOT NULL,            -- chat | investigation
+  scope_key    VARCHAR(128) NOT NULL,           -- turn_id | investigation_id
+  budget_date  DATE NOT NULL,
+  reserved     INTEGER NOT NULL,
+  actual       INTEGER,
+  state        VARCHAR(16) NOT NULL DEFAULT 'reserved',  -- reserved|settled|unknown
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at  TIMESTAMPTZ,
+  CONSTRAINT uq_token_reservation UNIQUE (scope, scope_key)
+);
+CREATE INDEX ix_token_reservations_day ON token_reservations (budget_date, state);
 ```
 
 - **R1:** refs audit dùng `INTEGER` khớp `audit_log.id`; `chat_messages` có composite FK đảm bảo
@@ -277,13 +301,14 @@ error_category|null, created_at}`.
 | POST | `/audit/intent` | capability (turn active) | Ghi audit intent trước khi chạy tool Velociraptor |
 | POST | `/audit/outcome` | service token + **intent** (KHÔNG cần capability) | Ghi audit outcome sau khi có kết quả/lỗi |
 | POST | `/audit/reconcile` | service token + intent | Đóng intent mồ côi → `unknown` (actor lấy từ intent) |
-| POST | `/turns/{turn_id}/complete` | capability | Durable completion (idempotent theo turn_id) |
+| POST | `/turns/{turn_id}/complete` | service token + completion token (V3-3) | Durable completion, idempotent kể cả khi turn terminal |
 
 - **R2:** query execution **bắt buộc capability còn hiệu lực**; nhưng outcome/reconcile là **uỷ quyền
   hẹp riêng** dùng service token + bản ghi `chat_audit_intents` (không mở lại quyền chạy truy vấn).
   Actor reconcile **lấy từ intent**, không từ capability đã hết hạn.
-- Intent idempotent theo `tool_call_id`: trùng + cùng `args_digest` → trả bản ghi cũ; khác digest → `409`.
-  Outcome: bản ghi đầu thắng; trùng giá trị → ok; khác → `409`.
+- Intent idempotent theo **`(turn_id, tool_call_id)`**: trùng + cùng identity đầy đủ (`actor_id`, `tool`,
+  `args_digest`, `client_id`) → trả bản ghi cũ; khác bất kỳ trường identity → `409`.  
+  Outcome gửi kèm `attempt` tăng dần; bản ghi terminal đầu thắng; attempt cũ hơn/khác giá trị → `409`.
 - Intent chưa có outcome quá `audit_outcome_deadline` (mặc định 600s) → reconciler ghi `unknown`.
 - Hoàn toàn không suy diễn `ok` khi không chắc.
 
@@ -296,6 +321,12 @@ error_category|null, created_at}`.
   `conversation.created_by == sub`.
 - Revoke theo turn: turn terminal → mọi call cần capability bị từ chối (outcome/reconcile không cần).
 - Nhiều tool call trong 1 turn dùng chung capability là hợp lệ; mỗi call có `tool_call_id` riêng.
+- **V3-3 — thẩm quyền finalization riêng:** backend phát `completion_token` ngẫu nhiên (lưu
+  `completion_token_hash`) trong request dispatch; agent gọi `/turns/{id}/complete` bằng **service token
+  + `X-Chat-Completion`**. Endpoint chấp nhận turn ở mọi trạng thái (kể cả đã terminal) trong
+  `completion_grace_seconds=120`: lần complete đầu thắng; trùng `content_digest` → idempotent; khác →
+  `409` + audit `chat.turn.late_output`, **không** persist/không mở lại execution. Completion **không**
+  phụ thuộc `exp` của capability.
 
 ### Agent API
 
@@ -383,8 +414,16 @@ typed (không free VQL), và **từ chối raw VQL ở mọi seam**. Lựa chọ
   - `v_chat_hardware(machine_id, hostname, component, value)`
   - `v_chat_alerts(id, machine_id, hostname, severity, category, created_at, status)`
   - **Không** PII (không `users.*`, phone/CCCD/email); masking thực hiện **trong view**, không theo tên cột.
-- **Loại trừ DB-enforced:** không grant bảng gốc, `users`, `llm_config`, `velociraptor_config`,
-  `api_keys`, `audit_log`, `chat_*`; `REVOKE ALL ON SCHEMA public/pg_catalog FROM inventory_chat_ro`.
+- **P1 plan task (V3-4):** xác định projection an toàn từ `MachineCurrent`/`MachineSoftware` (CPU/disk là
+  JSONB, RAM là `ram_gb`); EOL hiện ở `portal/lib/eol.ts` (không có field backend) → cần derivation +
+  xử lý `unknown`; alert: chốt nguồn (`AlertEvent` thiếu `status`; `DfirAlert` dùng `resolved`); kèm
+  parity test trước khi viết migration view.
+- **Ranh giới thực thi (V3-4):** PostgreSQL cho `PUBLIC` quyền đọc `pg_catalog`, nên **catalog/function
+  isolation là validator-enforced (tuyến chính)**, không thể chỉ dựa `REVOKE ... FROM inventory_chat_ro`.
+  DB-enforced tối thiểu: role `inventory_chat_ro` `NOINHERIT`, không là member role khác, không sở hữu
+  object, chỉ `USAGE` schema `chat_ro_views` + `SELECT` view; không grant bảng gốc, `users`, `llm_config`,
+  `velociraptor_config`, `api_keys`, `audit_log`, `chat_*`. Deployment **có thể** siết thêm `PUBLIC` nếu
+  tương thích; ghi rõ phần nào DB-enforced vs validator-enforced và test bằng role thật.
 - **Validator-enforced:** một statement `SELECT`/CTE; cấm `INSERT/UPDATE/DELETE/DDL/COPY/CALL/SET`;
   không tham chiếu `pg_catalog`/`information_schema`/`pg_*`; function registry đóng
   (`count,min,max,sum,avg,coalesce,date_trunc,lower,upper,length,now`); resolve tên an toàn.
@@ -402,9 +441,11 @@ typed (không free VQL), và **từ chối raw VQL ở mọi seam**. Lựa chọ
 - **Trần số (enforce):** `chat_collection_max_time_range_hours=24`, `chat_collection_flow_deadline_seconds=240`,
   `chat_collection_max_rows=5000`, `chat_collection_max_outstanding_per_client=1`, `chat_collection_per_machine_per_hour=6`.
   Helper không enforce được bound → fail closed.
-- **Canonical target identity:** resolve `client_id` tại thời điểm bắt đầu turn từ `velociraptor_links`;
-  hostname trùng → ambiguity; giới hạn per-machine key theo **`client_id` + `machine_id`** để không lách.
-  Không tin `velociraptor_sync` newest-duplicate (`velociraptor_sync.py:189-209`).
+- **Canonical target identity (V3-5):** resolve **live** từ Velociraptor (`search_clients`/`get_all_clients`)
+  tại thời điểm bắt đầu turn — `velociraptor_links` chỉ là gợi ý vì sync đã bỏ duplicate và giữ newest
+  (`velociraptor_sync.py:189-209`). Nhiều match hostname → trả **ambiguity list**; 0 match → fail closed
+  (`chat_collection_denied`). Giới hạn per-machine ghi theo **`client_id`** (client-stable), không theo
+  cặp `(client_id, machine_id)`; nếu không xác lập được identity → fail closed.
 - Caller timeout **không** phải flow-level guarantee (`mcp_client.py:38-43`); collection dùng polling
   flow-status với deadline riêng; quá hạn → outcome `unknown`, flow giữ nguyên (không huỷ).
 
@@ -442,10 +483,12 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 - Redaction trước prompt: regex secret `(?i)(api[-_]?key|token|secret|password)\s*[:=]\s*\S+`, CCCD/SĐT;
   không echo `api_client.yaml`.
 - **R7 — private-host validation thay thế:** parse URL bằng `urllib.parse`; resolve host bằng
-  `socket.getaddrinfo`; chỉ chấp nhận IP thuộc loopback/private/link-local/CGNAT qua `ipaddress`
+  `socket.getaddrinfo`; chỉ chấp nhận IP loopback/private/link-local/CGNAT qua `ipaddress`
   (IPv4+IPv6); **pin IP đã resolve** khi kết nối; cấm redirect sang public. Bỏ hẳn substring check
-  trong `llm_dfir.py:114-119`. Khi `allow_cloud=false` và endpoint public → từ chối
-  `chat_upstream_llm`. Áp dụng ở tầng thực thi LLM (`services/llm.py`), không chỉ lúc lưu config.
+  trong `llm_dfir.py:114-119`. Khi `allow_cloud=false` + endpoint public → từ chối `chat_upstream_llm`.
+- **V3-6 — áp ở MỌI executor:** backend `services/llm.py`, **ChatAgent** (validate `llm_runtime.base_url`
+  ngay trước khi gọi LLM), và **DeepAgent** (`analysis_model.py` thêm hook cùng validator). Điều này
+  thu hẹp cam kết 'DeepAgent nguyên vẹn' đúng mức tối thiểu cho an toàn egress.
 - **Retention:** `chat_retention_days=180` cho hội thoại; prompt log (nếu bật) `chat_prompt_log_retention_days=30`;
   job purge hằng ngày; xoá theo yêu cầu user; output canceled/failed chịu cùng policy.
 - Test injection âm: output chứa "ignore instructions" không đổi tool policy.
@@ -466,10 +509,17 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 | `chat_evidence_chars` | 120000 | per turn |
 | `chat_daily_token_budget` | từ `llm_config.daily_token_budget` | dùng chung chat + investigation |
 
-- **R8 — budget chung crash-safe:** reservation qua Redis (`INCRBY` atomic) key theo ngày +
-  reconcile khi xong/lỗi/hủy; **mọi đường investigation** (`dfir_investigation.py:1087,1168,1320-1344,1371-1374`)
-  được đưa vào cùng contract, kể cả nhánh fail. Nếu Redis không khả dụng → **fail closed**
-  (`chat_budget_unavailable`) cho call có budget, không âm thầm bỏ qua.
+- **R8 / V3-7 — reservation bền vững (DB là source of truth, Redis chỉ cache):**
+  - Trước khi chạy: **check-and-reserve atomic** bằng `INSERT ... ON CONFLICT` (unique `(scope, scope_key)`)
+    + kiểm tra tổng `reserved` so với `llm_config.daily_token_budget`; envelope bảo thủ theo model/calls
+    (`chat_reserve_tokens`, mặc định 32k; investigation envelope riêng).
+  - Khi xong/lỗi/hủy: settle = actual usage; **unknown consumption → charge đủ envelope** (bảo thủ),
+    `state=unknown`. Idempotent theo `(scope, scope_key)`.
+  - Rollover theo `budget_date` (UTC). DB không khả dụng → **fail closed** cho execution MỚI
+    (`chat_budget_unavailable`), **không** huỷ kết quả đã hoàn thành.
+  - Áp cho **mọi** đường investigation (`dfir_investigation.py:1087,1168,1320-1344,1371-1374`), kể cả nhánh
+    external fail; DeepAgent callback hiện không báo usage → tính theo envelope. Thêm usage vào callback
+    là enhancement sau (không mở lại DeepAgent trong P1).
 - Trần input/history enforce trước khi gọi LLM (`chat_max_message_chars`, history caps).
 - Vượt trần → `429`/`error` + `retryable` + `Retry-After`; đếm cả model retry và collection ẩn.
 
@@ -499,7 +549,7 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 - Container `chatagent/` (Dockerfile clone `mcp-velociraptor` **pin SHA DeepAgent**
   `9b3c4b3a590029390e88049896a473d7f909c0ce`; xác minh tool surface + bù adapter safeguard nếu cần). Không publish port.
 - Compose `chatagent`: chỉ biến `CHATAGENT_*` (không `env_file: .env`). Cập nhật `.env.example` + `scripts/gen-env-example.py`.
-- Migration 5 bảng + role/pool `chat_ro` + view + `ALTER audit_log` + FK refs (R1).
+- Migration 6 bảng + role/pool `chat_ro` + view + `ALTER audit_log` + FK refs (R1) + `token_reservations` (V3-7).
 - Sửa cross-cutting: `core/audit.py` (advisory lock + version hash + details), `routes/machines.py`
   (giữ mutation không-hash), `services/llm.py` + `routes/llm_dfir.py` (private-host), `services/dfir_investigation.py`
   (budget chung), `main.py` (routers).
@@ -508,8 +558,10 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 ## Kế hoạch triển khai (2 plan, 1 spec)
 
 1. **P1 — Security/integration foundation:** verify bridge, typed tools + mapping, validator VQL,
-   pool/view SQL, env isolation, capability, audit intent/outcome/reconcile + hash version + advisory lock,
-   turn lifecycle + complete callback, private-host, budget chung, admission control, schema API/SSE/error.
+   pool/view SQL + manifest projection, env isolation, capability + completion token (V3-3), audit
+   intent/outcome/reconcile + hash version + advisory lock, turn lifecycle, authoritative candidate
+   resolution (V3-5), private-host validator ở mọi executor, durable reservation budget (V3-7),
+   admission control, schema API/SSE/error.
 2. **P2 — Portal delivery:** proxy SSE, ChatRail, context lifecycle, conversation/cancel UX, full-stack test.
 
 ## Residual risks
@@ -519,6 +571,7 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 - Audit race/mixed-version suy ra từ đọc source; reproduce bằng test ở P1.
 - Collection read-only vẫn tạo flow và tốn tài nguyên endpoint — chấp nhận, không hứa "zero state".
 - Streaming non-resumable: mất kết nối giữa stream chỉ phục hồi được phần đã persist qua completion callback.
+- DB-level catalog isolation không tuyệt đối (PUBLIC) — validator là tuyến chính.
 
 ## Future work
 
