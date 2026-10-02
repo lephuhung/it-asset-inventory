@@ -133,6 +133,33 @@ async def test_llm_config_rejects_max_tokens_below_64000(client, seeded_env):
 
 
 @pytest.mark.asyncio
+async def test_public_llm_endpoint_api_key_rejected_with_categorized_error(client, seeded_env):
+    """R7: allow_cloud=false + endpoint public → 403 kèm category [chat_upstream_llm].
+
+    Lỗi egress phải được dịch thành HTTP detail CÓ phân loại (không bị thay bằng
+    thông báo trung tính), để client phân biệt được loại từ chối.
+    """
+    headers = await _admin_headers(client, seeded_env)
+
+    response = await client.put(
+        "/api/admin/llm-dfir/config",
+        headers=headers,
+        # IP public literal → không cần DNS, tất định trong test.
+        json={"base_url": "http://93.184.216.34/v1", "allow_cloud": False},
+    )
+    assert response.status_code == 200
+
+    response = await client.put(
+        "/api/admin/llm-dfir/config",
+        headers=headers,
+        json={"api_key": "sk-test-public-endpoint"},
+    )
+
+    assert response.status_code == 403
+    assert "[chat_upstream_llm]" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_external_callback_persists_failure_status(
     client, seeded_env, session_factory, monkeypatch
 ):

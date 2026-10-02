@@ -19,7 +19,7 @@ from app.api.deps import get_db, require_super_admin
 from app.core.audit import append_audit
 from app.core.client_ip import get_client_ip
 from app.core.config import settings
-from app.core.egress import EgressError, resolve_private_host
+from app.core.egress import EGRESS_CATEGORY, EgressError, resolve_private_host
 from app.core.security import decrypt_aes_gcm, encrypt_aes_gcm
 from app.db.models import (
     DfirInvestigation,
@@ -206,10 +206,13 @@ async def update_llm_config(
                 try:
                     resolve_private_host(cfg.base_url)
                 except EgressError as exc:
+                    # Giữ category trong HTTP detail: client phải nhận được
+                    # `[chat_upstream_llm]` thay vì lỗi không phân loại.
                     raise HTTPException(
                         403,
-                        "Không thể đặt API key cho endpoint public khi allow_cloud=false. "
-                        "Bật allow_cloud=true trước hoặc dùng LLM nội bộ.",
+                        f"[{EGRESS_CATEGORY}] Không thể đặt API key cho endpoint "
+                        "public khi allow_cloud=false. Bật allow_cloud=true trước "
+                        f"hoặc dùng LLM nội bộ. Chi tiết: {exc}",
                     ) from exc
             cfg.api_key_encrypted = encrypt_aes_gcm(body.api_key.strip())
             changes["api_key"] = "set"

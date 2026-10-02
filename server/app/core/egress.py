@@ -59,6 +59,29 @@ def _resolve_addresses(host: str, port: int) -> list[str]:
     return addrs
 
 
+def _parse_http_url(url: str) -> tuple[str, str]:
+    """Parse ``url`` thành ``(host, port)``; mọi lỗi parse → ``EgressError``.
+
+    ``urlparse`` và ``parsed.port`` có thể ném ``ValueError`` (IPv6 thiếu ``]``,
+    port không phải số, port ngoài 0–65535) hoặc ``AttributeError``. Các lỗi này
+    phải đi qua taxonomy ``[chat_upstream_llm]`` thay vì rò rỉ exception thô.
+    """
+    try:
+        parsed = urlparse(url)
+        scheme = parsed.scheme
+        host = parsed.hostname
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except (ValueError, AttributeError) as exc:
+        raise EgressError(
+            f"[{EGRESS_CATEGORY}] URL không hợp lệ: {url!r} ({exc})"
+        ) from exc
+    if scheme not in ("http", "https"):
+        raise EgressError(f"[{EGRESS_CATEGORY}] scheme không hợp lệ: {scheme!r}")
+    if not host:
+        raise EgressError(f"[{EGRESS_CATEGORY}] URL thiếu host: {url!r}")
+    return host, port
+
+
 def resolve_private_host(url: str, *, allow_cloud: bool = False) -> tuple[str, str]:
     """Phân giải ``url`` và trả ``(host, pinned_ip)``.
 
@@ -66,13 +89,7 @@ def resolve_private_host(url: str, *, allow_cloud: bool = False) -> tuple[str, s
     ``allow_cloud=False``. ``allow_cloud=True`` bỏ qua kiểm tra nhưng vẫn ghi log
     host public (spec: "bypass but still records it").
     """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise EgressError(f"[{EGRESS_CATEGORY}] scheme không hợp lệ: {parsed.scheme!r}")
-    host = parsed.hostname
-    if not host:
-        raise EgressError(f"[{EGRESS_CATEGORY}] URL thiếu host: {url!r}")
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host, port = _parse_http_url(url)
     addrs = _resolve_addresses(host, port)
     public = [addr for addr in addrs if not _is_allowed_ip(addr)]
     if public and not allow_cloud:
@@ -97,7 +114,12 @@ def assert_redirect_allowed(request_url: str, location: str, allow_cloud: bool) 
     ``location`` có thể là URL tuyệt đối hoặc đường dẫn tương đối; resolve theo
     ``request_url`` rồi áp cùng policy egress.
     """
-    target = urljoin(request_url, location)
+    try:
+        target = urljoin(request_url, location)
+    except ValueError as exc:
+        raise EgressError(
+            f"[{EGRESS_CATEGORY}] redirect URL không hợp lệ: {location!r} ({exc})"
+        ) from exc
     resolve_private_host(target, allow_cloud=allow_cloud)
 
 

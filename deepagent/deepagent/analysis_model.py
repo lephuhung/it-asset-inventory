@@ -5,11 +5,16 @@ from hashlib import sha256
 from time import perf_counter
 from typing import Any, Protocol
 
+import httpx
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from deepagent.catalog import BASELINE_TOOLS, catalog_prompt, tool_policies_for
-from deepagent.egress import assert_llm_egress
+from deepagent.egress import (
+    build_pinned_async_client,
+    build_pinned_sync_client,
+    resolve_private_host,
+)
 from deepagent.models import (
     MAX_TIER2_STEPS,
     Assessment,
@@ -64,8 +69,22 @@ class AnalysisModel(Protocol):
 class OpenAIAnalysisModel:
     def __init__(self, runtime: LlmRuntime):
         # V3-6/R7: DeepAgent là một executor — validate egress của endpoint LLM
-        # (private host) trước khi tạo client; allow_cloud do backend truyền sang.
-        assert_llm_egress(runtime.base_url, runtime.allow_cloud)
+        # (loopback/private/link-local/CGNAT) và GHIM IP đã resolve vào transport.
+        # Chỉ assert rồi để client tự tra DNS ở thời điểm connect sẽ hở DNS rebinding;
+        # transport ghim nên request luôn đi tới IP đã duyệt. allow_cloud do backend truyền sang.
+        _host, pinned_ip = resolve_private_host(
+            runtime.base_url, allow_cloud=runtime.allow_cloud
+        )
+        self._pinned_ip = pinned_ip
+        # follow_redirects=False: không theo redirect sang host public.
+        # trust_env=False: không để HTTP_PROXY/ALL_PROXY từ env chuyển hướng egress.
+        http_timeout = httpx.Timeout(runtime.timeout_seconds, connect=10.0)
+        self._sync_client = build_pinned_sync_client(
+            runtime.base_url, pinned_ip, timeout=http_timeout
+        )
+        self._async_client = build_pinned_async_client(
+            runtime.base_url, pinned_ip, timeout=http_timeout
+        )
         self.model_name = runtime.model
         configured = runtime.system_prompt.strip() if runtime.system_prompt else ""
         self._operator_prompt = configured or DEFAULT_DFIR_PLAYBOOK
@@ -76,6 +95,8 @@ class OpenAIAnalysisModel:
             temperature=runtime.temperature, timeout=runtime.timeout_seconds,
             max_tokens=runtime.max_tokens,
             max_retries=0,
+            http_client=self._sync_client,
+            http_async_client=self._async_client,
         )
 
     def _messages(self, task: str) -> list[BaseMessage]:

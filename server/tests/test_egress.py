@@ -5,7 +5,12 @@ thuộc DNS thật); các test IP literal không cần DNS.
 """
 from __future__ import annotations
 
+import asyncio
+import http.server
+import json
 import socket
+import threading
+from typing import ClassVar
 
 import pytest
 
@@ -271,3 +276,194 @@ def test_llm_client_redirect_guard_allows_relative(resolve_hosts):
     req = httpx.Request("GET", "http://10.0.0.5:11434/v1/models")
     resp = httpx.Response(307, headers={"location": "/v1/other"}, request=req)
     c._guard_redirect(resp)  # không raise
+
+
+# ── URL dị dạng → EgressError có category (không rò ValueError thô) ──
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::1/v1",  # IPv6 thiếu ] — urlparse ném ValueError
+        "http://10.0.0.5:bad/v1",  # port không phải số
+        "http://10.0.0.5:65536/v1",  # port ngoài 0–65535
+        "http://[::1]:99999/v1",
+    ],
+)
+def test_malformed_url_raises_categorized_egress_error(url):
+    with pytest.raises(EgressError) as exc:
+        resolve_private_host(url)
+    assert f"[{EGRESS_CATEGORY}]" in str(exc.value)
+
+
+def test_malformed_redirect_location_raises_categorized_egress_error():
+    with pytest.raises(EgressError) as exc:
+        assert_redirect_allowed("http://10.0.0.5/v1", "http://[::1/v1", False)
+    assert f"[{EGRESS_CATEGORY}]" in str(exc.value)
+
+
+def test_malformed_url_in_llm_client_raises_egress_error():
+    from app.services.llm import LlmClient
+
+    with pytest.raises(EgressError):
+        LlmClient("http://10.0.0.5:bad/v1", "k", "m")
+
+
+# ── Thực thi ở tầng transport: client không đọc proxy env, không theo redirect ──
+
+
+async def _client_settings(base_url="http://10.0.0.5:11434/v1", **kwargs):
+    from app.services.llm import LlmClient
+
+    llm = LlmClient(base_url, "k", "m", **kwargs)
+    async with llm:
+        return {
+            "trust_env": llm._client.trust_env,
+            "follow_redirects": llm._client.follow_redirects,
+        }
+
+
+def test_llm_client_disables_env_proxy_and_redirect_following():
+    s = asyncio.run(_client_settings())
+    assert s["trust_env"] is False
+    assert s["follow_redirects"] is False
+
+
+class _RecordingHandler(http.server.BaseHTTPRequestHandler):
+    """Server nội bộ: ghi lại Host + path, trả JSON OpenAI-compatible cho /models."""
+
+    requests: ClassVar[list[dict]] = []
+
+    def _record(self):
+        type(self).requests.append(
+            {"path": self.path, "host": self.headers.get("Host")}
+        )
+
+    def do_GET(self):
+        self._record()
+        if self.path.endswith("/models"):
+            body = json.dumps({"data": [{"id": "local-model"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, *_a):  # im lặng
+        pass
+
+
+@pytest.fixture
+def local_http_server():
+    handler = type("Handler", (_RecordingHandler,), {"requests": []})
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = srv.server_address[1]
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield srv, port, handler.requests
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=2)
+
+
+def test_llm_client_pins_ip_against_dns_rebinding(local_http_server, monkeypatch):
+    """Sau khi validate, DNS đổi sang IP public — request vẫn tới IP đã ghim."""
+    from app.services.llm import LlmClient
+
+    _srv, port, requests = local_http_server
+    real_gai = socket.getaddrinfo
+
+    def _private(host, port_, *a, **k):
+        if host == "llm.internal":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port_))]
+        return real_gai(host, port_, *a, **k)
+
+    monkeypatch.setattr("app.core.egress.socket.getaddrinfo", _private)
+    llm = LlmClient(f"http://llm.internal:{port}/v1", "k", "m")
+
+    # DNS đổi hướng công khai SAU khi validate/ghim.
+    def _public(host, port_, *a, **k):
+        if host == "llm.internal":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port_))]
+        return real_gai(host, port_, *a, **k)
+
+    monkeypatch.setattr("app.core.egress.socket.getaddrinfo", _public)
+
+    async def _call():
+        async with llm:
+            return await llm.list_models()
+
+    assert asyncio.run(_call()) == ["local-model"]
+    assert requests and requests[0]["host"] == f"llm.internal:{port}"
+    assert requests[0]["path"].endswith("/models")
+
+
+def test_llm_client_ignores_environment_proxy(local_http_server, monkeypatch):
+    """HTTP_PROXY/ALL_PROXY trong env không được nhận request (trust_env=False)."""
+    from app.services.llm import LlmClient
+
+    _srv, port, requests = local_http_server
+    proxy_hits: list[str] = []
+
+    class _ProxyHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            proxy_hits.append(self.path)
+            self.send_response(502)
+            self.end_headers()
+
+        def do_CONNECT(self):
+            proxy_hits.append("CONNECT " + self.path)
+            self.send_response(502)
+            self.end_headers()
+
+        def log_message(self, *_a):
+            pass
+
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ProxyHandler)
+    proxy_port = proxy.server_address[1]
+    pthread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    pthread.start()
+    monkeypatch.setenv("ALL_PROXY", f"http://127.0.0.1:{proxy_port}")
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy_port}")
+    try:
+        llm = LlmClient(f"http://127.0.0.1:{port}/v1", "k", "m")
+
+        async def _call():
+            async with llm:
+                return await llm.list_models()
+
+        assert asyncio.run(_call()) == ["local-model"]
+        assert proxy_hits == []
+        assert requests and requests[0]["host"] == f"127.0.0.1:{port}"
+    finally:
+        proxy.shutdown()
+        proxy.server_close()
+        pthread.join(timeout=2)
+
+
+def test_llm_client_does_not_follow_redirect(local_http_server, monkeypatch):
+    """3xx tới host public: client không tự đi theo (follow_redirects=False)."""
+    from app.services.llm import LlmClient
+
+    srv, port, _requests = local_http_server
+    # Server tạm trả 302 sang public cho mọi request.
+    srv.RequestHandlerClass.do_GET = lambda self: (
+        self.send_response(302),
+        self.send_header("Location", "https://api.openai.com/v1/models"),
+        self.end_headers(),
+    )
+
+    llm = LlmClient(f"http://127.0.0.1:{port}/v1", "k", "m", allow_cloud=False)
+
+    async def _call():
+        async with llm:
+            return await llm.list_models()
+
+    # Không follow → response 302 chạm hook redirect và bị chặn (EgressError).
+    with pytest.raises(EgressError):
+        asyncio.run(_call())

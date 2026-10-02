@@ -142,6 +142,11 @@ class LlmClient:
             timeout=httpx.Timeout(self.timeout, connect=10.0),
             verify=self.verify_ssl,
             headers=headers,
+            # R7: không theo redirect (fail-closed — mọi 3xx bị hook dưới đây kiểm tra).
+            follow_redirects=False,
+            # R7: không để HTTP_PROXY/ALL_PROXY từ env định tuyến lại egress tới proxy
+            # công khai — đích kết nối phải luôn là IP đã ghim.
+            trust_env=False,
             event_hooks={"response": [self._guard_redirect_hook]},
         )
         return self
