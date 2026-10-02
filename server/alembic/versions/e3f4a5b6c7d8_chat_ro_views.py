@@ -12,8 +12,8 @@ Ranh giới quyền (fail-closed):
   động mở quyền cho object tương lai — phá manifest đóng).
 - Nhánh role đã tồn tại: siết thuộc tính, thu hồi membership + mọi quyền
   relation-level **và column-level** trên schema `public`, và **fail closed** nếu
-  role còn sở hữu object (mọi catalog: relation/schema/database/function/type/…) hoặc
-  thuộc tính đặc quyền.
+  role còn sở hữu object (`pg_shdepend` — phủ MỌI catalog, gồm `pg_largeobject` và
+  `pg_tablespace`) hoặc còn ACL trên shared object, hoặc thuộc tính đặc quyền.
 - `search_path` đặt khi tạo connection **và** reset lại mỗi lần checkout ở engine
   (`app/db/session.py`).
 - Catalog/function isolation **không** DB-enforced (PostgreSQL cấp PUBLIC đọc
@@ -146,35 +146,32 @@ BEGIN
   END LOOP;
 END {_HARDEN_TAG}"""
 
-# 4) Fail closed nếu role còn SỞ HỮU object thuộc bất kỳ catalog nào (chủ sở hữu có
-# quyền DROP/ALTER → leo thang). Không chỉ `pg_class`.
+# 4) Fail closed nếu role còn SỞ HỮU object (chủ sở hữu có quyền DROP/ALTER → leo thang).
+# Dùng `pg_shdepend` — nguồn chuẩn của PostgreSQL ghi quan hệ phụ thuộc tới shared
+# object — thay vì liệt kê catalog thủ công: enumeration 12-query bỏ sót
+# `pg_largeobject` (deptype='o') và `pg_tablespace` (deptype='o'), cùng mọi catalog
+# thêm sau này. `pg_shdepend` phủ mọi object có owner (class/namespace/proc/type/
+# largeobject/tablespace/database/…) nên không còn "whack-a-mole".
+#   - `deptype='o'`            = object ĐƯỢC role sở hữu (mọi catalog, local + shared).
+#   - `deptype='a' AND dbid=0` = ACL trên SHARED object (vd `GRANT CONNECT ON DATABASE`).
+#     KHÔNG tính ACL cục bộ (`dbid<>0`): chính migration này cấp USAGE/SELECT trên
+#     `chat_ro_views` (local, deptype='a', dbid<>0) — nếu tính sẽ fail closed khi chạy
+#     lại (mất idempotency).
+# `pg_class.relowner` là backstop tường minh cho quan hệ cục bộ; UNION để không đếm trùng.
 OWNERSHIP_CHECK_DDL = f"""DO {_HARDEN_TAG}
 DECLARE offenders integer;
 BEGIN
   SELECT count(*) INTO offenders FROM (
-    SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_type t JOIN pg_roles r ON r.oid = t.typowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_language l JOIN pg_roles r ON r.oid = l.lanowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_collation co JOIN pg_roles r ON r.oid = co.collowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_conversion cv JOIN pg_roles r ON r.oid = cv.conowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_operator o JOIN pg_roles r ON r.oid = o.oprowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_opclass oc JOIN pg_roles r ON r.oid = oc.opcowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_opfamily of2 JOIN pg_roles r ON r.oid = of2.opfowner WHERE r.rolname = '{CHAT_RO_ROLE}'
-    UNION ALL
-    SELECT 1 FROM pg_extension e JOIN pg_roles r ON r.oid = e.extowner WHERE r.rolname = '{CHAT_RO_ROLE}'
+    SELECT d.classid AS classid, d.objid AS objid
+    FROM pg_shdepend d
+    WHERE d.refclassid = 'pg_authid'::regclass
+      AND d.refobjid = (SELECT oid FROM pg_roles WHERE rolname = '{CHAT_RO_ROLE}')
+      AND (d.deptype = 'o' OR (d.deptype = 'a' AND d.dbid = 0))
+    UNION
+    SELECT 'pg_class'::regclass AS classid, c.oid AS objid
+    FROM pg_class c
+    JOIN pg_roles r ON r.oid = c.relowner
+    WHERE r.rolname = '{CHAT_RO_ROLE}'
   ) AS owned;
   IF offenders > 0 THEN
     RAISE EXCEPTION 'chat_ro role {CHAT_RO_ROLE} owns % object(s); refusing to continue', offenders;

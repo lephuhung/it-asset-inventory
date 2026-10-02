@@ -41,12 +41,16 @@ SENSITIVE_TABLES = [
 ]
 
 
-def _expected_win11_eol(build: int | None) -> bool | None:
-    """Kỳ vọng EOL Windows 11 tính từ hằng số migration → không phụ thuộc ngày chạy."""
-    from datetime import UTC, date, datetime
+def _expected_win11_eol(build: int | None, today) -> bool | None:
+    """Kỳ vọng EOL Windows 11 tính từ hằng số migration + `today` = DB `CURRENT_DATE`.
+
+    `today` lấy từ `SELECT CURRENT_DATE` của **chính DB session** (timezone server),
+    không phải `datetime.now(UTC)`: biểu thức SQL dùng `CURRENT_DATE` session-local nên
+    nếu server không ở UTC hai giá trị có thể lệch quanh ngày hết hạn (boundary).
+    """
+    from datetime import date
 
     mig = _load_migration()
-    today = datetime.now(UTC).date()
     if build is None:
         return None
     if build in (mig.WIN11_21H2_BUILD, mig.WIN11_22H2_BUILD, mig.WIN11_23H2_BUILD):
@@ -112,6 +116,13 @@ async def _chat_ro_fetch(sql: str, **params):
     async for s in session_module.get_chat_ro_session():
         result = await s.execute(text(sql), params)
         return result.mappings().all()
+    raise AssertionError("chat_ro session did not yield")
+
+
+async def _chat_ro_scalar(sql: str):
+    """Trả 1 giá trị vô hướng từ session chat_ro (vd `SELECT CURRENT_DATE`)."""
+    async for s in session_module.get_chat_ro_session():
+        return (await s.execute(text(sql))).scalar()
     raise AssertionError("chat_ro session did not yield")
 
 
@@ -324,6 +335,111 @@ async def test_chat_ro_ownership_fails_closed(db_engine, kind):
             await conn.exec_driver_sql("DROP FUNCTION IF EXISTS public.chatro_fn()")
 
 
+async def test_chat_ro_ownership_fails_closed_largeobject_tablespace(db_engine):
+    """Critical 2 (R3): role sở hữu `pg_largeobject` + `pg_tablespace` (+ thuộc tính
+    đặc quyền) → harden fail closed.
+
+    Hai catalog này bị enumeration 12-query trước đây bỏ sót; `pg_shdepend` (deptype='o')
+    phủ cả local (`pg_largeobject`, dbid<>0) lẫn shared (`pg_tablespace`, dbid=0).
+    """
+    mig = _load_migration()
+    role = mig.CHAT_RO_ROLE
+    ts_name = "chatro_owned_ts"
+    ts_dir = "/tmp/chatro_owned_ts_dir"
+
+    async with db_engine.connect() as conn:
+        su = bool(await conn.scalar(
+            text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+        ))
+    if not su:
+        pytest.skip("CREATE TABLESPACE requires superuser")
+
+    loid = None
+
+    async def _autocommit(sql: str):
+        async with db_engine.connect() as c:
+            c2 = await c.execution_options(isolation_level="AUTOCOMMIT")
+            await c2.exec_driver_sql(sql)
+
+    # Dọn trạng thái sót của lần chạy trước (role/tablespace tồn tại ở tầm cluster).
+    await _autocommit(f"DROP TABLESPACE IF EXISTS {ts_name}")
+    await _autocommit(
+        f"COPY (SELECT '') TO PROGRAM 'rm -rf {ts_dir}'"
+    )
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+        await conn.exec_driver_sql(f"DROP OWNED BY {role} CASCADE")
+        # Pre-seed role KHÔNG an toàn: thuộc tính đặc quyền.
+        await conn.exec_driver_sql(f"ALTER ROLE {role} SUPERUSER CREATEDB")
+
+    try:
+        # 1) large object sở hữu bởi role (local, deptype='o', dbid<>0).
+        async with db_engine.begin() as conn:
+            loid = await conn.scalar(text("SELECT lo_create(0)"))
+            await conn.exec_driver_sql(f"ALTER LARGE OBJECT {loid} OWNER TO {role}")
+
+        # 2) tablespace sở hữu bởi role (shared, deptype='o', dbid=0). Thư mục tạo bằng
+        #    `COPY TO PROGRAM` (chạy trong tiến trình PG) → tự chứa, không cần docker CLI.
+        await _autocommit(
+            f"COPY (SELECT '') TO PROGRAM "
+            f"'rm -rf {ts_dir} && mkdir -p {ts_dir} && chmod 700 {ts_dir}'"
+        )
+        await _autocommit(f"CREATE TABLESPACE {ts_name} LOCATION '{ts_dir}'")
+        await _autocommit(f"ALTER TABLESPACE {ts_name} OWNER TO {role}")
+
+        # 3) Chạy hardening như migration → phải fail closed trước khi hoàn tất.
+        with pytest.raises(Exception) as exc:
+            async with db_engine.begin() as conn:
+                await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+                for stmt in mig.ROLE_HARDEN_DDL:
+                    await conn.exec_driver_sql(stmt)
+        assert "owns" in str(exc.value).lower()
+    finally:
+        await _autocommit(f"DROP TABLESPACE IF EXISTS {ts_name}")
+        await _autocommit(f"COPY (SELECT '') TO PROGRAM 'rm -rf {ts_dir}'")
+        async with db_engine.begin() as conn:
+            if loid is not None:
+                await conn.execute(text("SELECT lo_unlink(:oid)"), {"oid": loid})
+            await conn.exec_driver_sql(
+                f"ALTER ROLE {role} NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                f"NOREPLICATION NOBYPASSRLS NOINHERIT"
+            )
+            await conn.exec_driver_sql(f"DROP OWNED BY {role} CASCADE")
+
+
+async def test_chat_ro_ownership_check_ignores_own_local_grants(db_engine):
+    """R3 idempotency: `pg_shdepend` deptype='a' cục bộ (USAGE/SELECT chính migration cấp)
+    KHÔNG được kích hoạt fail-closed — nếu không migration không chạy lại được."""
+    mig = _load_migration()
+    role = mig.CHAT_RO_ROLE
+    async with db_engine.begin() as conn:
+        await conn.exec_driver_sql(mig.role_ddl(CHAT_RO_TEST_PASSWORD))
+        await conn.exec_driver_sql(f"DROP OWNED BY {role} CASCADE")
+        await conn.exec_driver_sql(mig.SCHEMA_DDL)
+        await conn.exec_driver_sql(
+            f"CREATE TABLE IF NOT EXISTS {mig.CHAT_RO_SCHEMA}.chatro_local_t(id int)"
+        )
+        await conn.exec_driver_sql(
+            f"GRANT USAGE ON SCHEMA {mig.CHAT_RO_SCHEMA} TO {role}"
+        )
+        await conn.exec_driver_sql(
+            f"GRANT SELECT ON {mig.CHAT_RO_SCHEMA}.chatro_local_t TO {role}"
+        )
+    try:
+        async with db_engine.begin() as conn:
+            await conn.exec_driver_sql(mig.OWNERSHIP_CHECK_DDL)  # không raise
+    finally:
+        async with db_engine.begin() as conn:
+            await conn.exec_driver_sql(
+                f"DROP TABLE IF EXISTS {mig.CHAT_RO_SCHEMA}.chatro_local_t"
+            )
+            await conn.exec_driver_sql(f"REVOKE ALL ON SCHEMA {mig.CHAT_RO_SCHEMA} FROM {role}")
+            await conn.exec_driver_sql(f"DROP OWNED BY {role} CASCADE")
+            await conn.exec_driver_sql(
+                f"DROP SCHEMA IF EXISTS {mig.CHAT_RO_SCHEMA} CASCADE"
+            )
+
+
 async def test_chat_ro_catalog_is_readable_and_validator_enforced(chat_ro_session):
     """Spec V3-4: PUBLIC đọc `pg_catalog`; cô lập catalog do validator T9, không DB."""
     rows = await _chat_ro_fetch("SELECT 1 AS one FROM pg_catalog.pg_user LIMIT 1")
@@ -371,7 +487,8 @@ async def test_chat_ro_machines_view_reads_machine(db, chat_ro_session):
     assert row["org_name"] == org.name
     assert row["os_name"] == "Windows 11 Pro"
     assert row["status"] == "online"
-    assert row["eol_flag"] == _expected_win11_eol(26100)
+    today = await _chat_ro_scalar("SELECT CURRENT_DATE")
+    assert row["eol_flag"] == _expected_win11_eol(26100, today)
 
 
 async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
@@ -391,7 +508,8 @@ async def test_chat_ro_eol_flag_heuristic(db, chat_ro_session):
         for r in await _chat_ro_fetch("SELECT hostname, eol_flag FROM v_chat_machines")
     }
     assert flags["EOL-10"] is True
-    assert flags["OK-11"] == _expected_win11_eol(26100)   # build 26100: theo ngày tham chiếu
+    today = await _chat_ro_scalar("SELECT CURRENT_DATE")
+    assert flags["OK-11"] == _expected_win11_eol(26100, today)  # build 26100: theo ngày tham chiếu
     assert flags["EOL-11"] is True       # build 22621 đã hết hỗ trợ
     assert flags["EOL-2012"] is True
     assert flags["UNK"] is None
@@ -444,7 +562,8 @@ async def test_chat_ro_build_expr_takes_first_component_and_validates(db, chat_r
     rows = await _chat_ro_fetch(
         "SELECT eol_flag FROM v_chat_machines WHERE hostname = 'B-DOTTED'"
     )
-    assert rows[0]["eol_flag"] == _expected_win11_eol(26100)
+    today = await _chat_ro_scalar("SELECT CURRENT_DATE")
+    assert rows[0]["eol_flag"] == _expected_win11_eol(26100, today)
 
 
 async def test_chat_ro_machine_detail_jsonb_extraction(db, chat_ro_session):
