@@ -45,8 +45,9 @@ async def _insert_legacy_v1(session) -> AuditLog:
         ts=ts,
         prev_hash="0" * 64,
         content_hash=_content_hash_v1("legacy.first", "t", "a", ts),
-        hash_version=1,
     )
+    # hash_version omitted on purpose: legacy rows carry the model default (1),
+    # so the test exercises the same path real legacy rows took.
     session.add(row)
     await session.flush()
     return row
