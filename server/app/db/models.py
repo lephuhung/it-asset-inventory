@@ -15,6 +15,7 @@ from sqlalchemy import (
     Date,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     SmallInteger,
@@ -1559,3 +1560,193 @@ class RefreshToken(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     replaced_by: Mapped[uuid.UUID | None] = mapped_column(nullable=True)  # id token mới sau rotate
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.now(UTC))
+
+
+# ── Chat Assistant (P1) ──────────────────────────────────────────────────────
+# Schema theo spec §"Hợp đồng dữ liệu". Thứ tự khai báo: conversations → turns →
+# messages → tool_calls → audit_intents → token_reservations.
+# `chat_audit_intents` cố ý KHÔNG có FK tới bảng chat: intent phải sống sót khi
+# hội thoại/user bị xoá (R2) để reconcile mồ côi còn chạy được.
+
+
+class ChatConversation(Base):
+    """Hội thoại chat — ngữ cảnh máy mặc định (soft), sở hữu bởi `created_by`."""
+
+    __tablename__ = "chat_conversations"
+    __table_args__ = (
+        Index("ix_chat_conv_owner", "created_by", text("last_message_at DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("machines.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+
+
+class ChatTurn(Base):
+    """Một lượt hỏi–đáp. Chỉ 1 turn active/hội thoại (partial unique index)."""
+
+    __tablename__ = "chat_turns"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "idempotency_key", name="uq_chat_turn_idem"),
+        # Đích cho composite FK của chat_messages (conversation_id, id).
+        UniqueConstraint("conversation_id", "id", name="uq_chat_turn_conv_id"),
+        Index(
+            "uq_chat_turn_active",
+            "conversation_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending','streaming')"),
+        ),
+        Index("ix_chat_turn_status", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    # Snapshot actor — plain UUID, không FK: intent/audit phải sống sót theo vết.
+    actor_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    # Snapshot per-turn (mutable lookup, KHÔNG nằm trong hash).
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # Định danh bất biến (client_id/hostname) — được đưa vào hash audit.
+    machine_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    finish_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    completion_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completion_committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+
+
+class ChatMessage(Base):
+    """Tin nhắn user/assistant/system. Composite FK buộc turn thuộc đúng hội thoại."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["conversation_id", "turn_id"],
+            ["chat_turns.conversation_id", "chat_turns.id"],
+            name="fk_chat_msg_turn",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("role = 'system' OR turn_id IS NOT NULL", name="ck_chat_msg_turn"),
+        Index("ix_chat_msg_conv", "conversation_id", "created_at", "id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    turn_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Snapshot ngữ cảnh lượt — không hash.
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+
+
+class ChatToolCall(Base):
+    """Vết tool call trong 1 turn; `audit_*_id` là INTEGER khớp `audit_log.id`."""
+
+    __tablename__ = "chat_tool_calls"
+    __table_args__ = (
+        UniqueConstraint("turn_id", "tool_call_id", name="uq_chat_tool_call"),
+        Index("ix_chat_tool_calls_turn", "turn_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    turn_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("chat_turns.id", ondelete="CASCADE"), nullable=False
+    )
+    tool_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    byte_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    audit_intent_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("audit_log.id", ondelete="SET NULL"), nullable=True
+    )
+    audit_outcome_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("audit_log.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+
+
+class ChatAuditIntent(Base):
+    """Audit intent bền vững — KHÔNG FK tới bảng chat (sống sót khi xoá hội thoại)."""
+
+    __tablename__ = "chat_audit_intents"
+    __table_args__ = (
+        UniqueConstraint("turn_id", "tool_call_id", name="uq_chat_audit_intent"),
+        Index("ix_chat_audit_intents_open", "outcome", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    turn_id: Mapped[uuid.UUID] = mapped_column(nullable=False)  # plain UUID
+    tool_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(nullable=False)  # plain UUID
+    actor_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    tool: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    flow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TokenReservation(Base):
+    """Reservation budget bền vững (nguồn sự thật; Redis chỉ cache)."""
+
+    __tablename__ = "token_reservations"
+    __table_args__ = (
+        UniqueConstraint("scope", "operation_id", name="uq_token_reservation"),
+        Index("ix_token_reservations_day", "budget_date", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(24), nullable=False)
+    operation_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
+    association_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    budget_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reserved: Mapped[int] = mapped_column(Integer, nullable=False)
+    actual: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
