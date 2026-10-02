@@ -671,7 +671,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         "time_range": {"from": time_from.isoformat(), "to": now.isoformat()},
         "suspicious_activity": inv.custom_instructions
         or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
-        "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt},
+        "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt, "allow_cloud": llm_cfg.allow_cloud},
         "velociraptor_api_client_yaml": api_client_yaml,
         "custom_artifacts": await _load_custom_artifact_refs(db, target_platform),
     }
