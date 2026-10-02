@@ -10,10 +10,15 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AuditLog
+
+# Khóa advisory toàn cục cho chuỗi audit: serialize get_last_hash + insert để
+# nhiều writer đồng thời không tạo nhánh rồi cùng trỏ về một prev_hash.
+# Giá trị cố định 0x61756469746368 ("auditch") — không đổi giữa các phiên bản.
+_AUDIT_LOCK_KEY = 0x61756469746368
 
 
 def _fmt_ts(ts: datetime) -> str:
@@ -29,9 +34,44 @@ def _fmt_ts(ts: datetime) -> str:
     return t.strftime("%Y-%m-%dT%H:%M:%S.%f")
 
 
-def _content_hash(action: str, target: str | None, actor: str | None, ts: datetime) -> str:
+def _content_hash_v1(action: str, target: str | None, actor: str | None, ts: datetime) -> str:
+    """Công thức hash legacy (hash_version=1) — giữ nguyên byte để hàng cũ verify được."""
     payload = json.dumps(
         {"action": action, "target": target, "actor": actor, "ts": _fmt_ts(ts)},
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _machine_ref(details: dict | None) -> str:
+    return str((details or {}).get("machine_ref") or "")
+
+
+def _content_hash_v2(
+    action: str,
+    target: str | None,
+    actor: str | None,
+    ts: datetime,
+    request_id: str | None,
+    details: dict | None,
+) -> str:
+    """Công thức hash v2 — ràng buộc request_id + machine_ref + details có cấu trúc.
+
+    `machine_id` KHÔNG nằm trong hash (lookup mutable, route xoá máy được phép
+    SET NULL). `machine_ref` bất biến được lấy từ `details` và hash-bound.
+    """
+    payload = json.dumps(
+        {
+            "v": 2,
+            "action": action,
+            "target": target,
+            "actor": actor,
+            "ts": _fmt_ts(ts),
+            "request_id": request_id,
+            "machine_ref": _machine_ref(details),
+            "details": details or {},
+        },
         sort_keys=True,
         ensure_ascii=False,
     )
@@ -54,11 +94,18 @@ async def append_audit(
     ip: str | None = None,
     request_id: str | None = None,
     machine_id: uuid.UUID | None = None,
+    details: dict | None = None,
 ) -> AuditLog:
-    """Append 1 dòng audit log, tự nối hash chain."""
+    """Append 1 dòng audit log, tự nối hash chain.
+
+    Lấy `pg_advisory_xact_lock` trong cùng transaction với insert để serialize
+    `get_last_hash` + ghi; khóa tự nhả khi transaction kết thúc. Caller vẫn sở
+    hữu transaction (route phải commit).
+    """
+    await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_LOCK_KEY})
     ts = datetime.now(UTC)
     prev = await get_last_hash(db)
-    ch = _content_hash(action, target, actor, ts)
+    ch = _content_hash_v2(action, target, actor, ts, request_id, details)
     entry = AuditLog(
         actor=actor,
         action=action,
@@ -69,6 +116,8 @@ async def append_audit(
         content_hash=ch,
         request_id=request_id,
         machine_id=machine_id,
+        details=details,
+        hash_version=2,
     )
     db.add(entry)
     await db.flush()
@@ -85,7 +134,14 @@ async def verify_chain(db: AsyncSession) -> tuple[bool, int | None]:
     )
     prev = "0" * 64
     for i, row in enumerate(rows):
-        ch = _content_hash(row.action, row.target, row.actor, row.ts)
+        if row.hash_version == 1:
+            ch = _content_hash_v1(row.action, row.target, row.actor, row.ts)
+        elif row.hash_version == 2:
+            ch = _content_hash_v2(
+                row.action, row.target, row.actor, row.ts, row.request_id, row.details
+            )
+        else:
+            return False, i
         if row.prev_hash != prev or row.content_hash != ch:
             return False, i
         prev = row.content_hash

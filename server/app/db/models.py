@@ -427,6 +427,10 @@ class AuditLog(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # hash nội dung dòng này
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     machine_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("machines.id"), nullable=True)
+    # Metadata có cấu trúc, hash-bound ở hash_version=2 (vd machine_ref bất biến).
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 1 = công thức hash legacy; 2 = hash(action, target, actor, ts, request_id, machine_ref, details).
+    hash_version: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
 
 
 class ComplianceNotice(Base):
