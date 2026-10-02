@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     chat_ro_database_url: str | None = None
     chat_ro_password: str = "CHANGE_ME_CHAT_RO"
 
+    # Chat Assistant — capability HS256 ký bởi backend (T4). TÁCH BIỆT với
+    # `secret_key` (JWT người dùng): lộ một khoá không kéo theo khoá kia. Chỉ
+    # backend giữ; agent chỉ mang token, không bao giờ thấy secret này.
+    chat_context_secret: str = Field(
+        default="CHANGE_ME_CHAT_CONTEXT_SECRET_000000", min_length=32
+    )
+    # Cửa sổ ân hạn cho completion đến muộn sau khi turn đã terminal (T8).
+    chat_completion_grace_seconds: int = 120
+    # Khoảng retry bounded khi resolve client_id từ Velociraptor (T7).
+    resolver_consistency_window_seconds: int = 5
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     # online_ttl: None → tự tính = 2 × (heartbeat_interval + jitter) (mục 5.2: online = heartbeat ≤ 2× chu kỳ)
