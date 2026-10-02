@@ -21,6 +21,10 @@ from app.db.models import AuditLog
 _AUDIT_LOCK_KEY = 0x61756469746368
 
 
+class AuditValidationError(ValueError):
+    """`details` của audit không JSON-serializable hoặc chứa số không hữu hạn."""
+
+
 def _fmt_ts(ts: datetime) -> str:
     """Chuẩn hóa timestamp thành chuỗi ổn định cho mục đích hash.
 
@@ -60,6 +64,10 @@ def _content_hash_v2(
 
     `machine_id` KHÔNG nằm trong hash (lookup mutable, route xoá máy được phép
     SET NULL). `machine_ref` bất biến được lấy từ `details` và hash-bound.
+
+    `details` PHẢI là dạng canonical do `_canonicalize_details` trả về (đã round-trip
+    qua `jsonb`). Hash thẳng dict Python thô sẽ lệch với giá trị đọc lại từ DB ở
+    các biểu diễn số mà `jsonb` viết lại (`1e20`, `-0.0`).
     """
     payload = json.dumps(
         {
@@ -76,6 +84,33 @@ def _content_hash_v2(
         ensure_ascii=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _canonicalize_details(db: AsyncSession, details: dict | None) -> dict | None:
+    """Chuẩn hóa `details` qua `jsonb` của PostgreSQL trước khi hash và ghi.
+
+    `jsonb` viết lại biểu diễn số (`1e20` → `100000000000000000000`, `-0.0` → `0.0`)
+    và sắp xếp key. Nếu hash thẳng dict Python thì hash lúc ghi sẽ khác hash lúc
+    verify — `verify_chain` đọc lại `row.details` từ `jsonb` — và chuỗi đứt giả tạo
+    dù hàng hoàn toàn nguyên vẹn.
+
+    Round-trip qua `jsonb` đúng MỘT lần ở đây, rồi hash và ghi chính dạng canonical;
+    lúc verify dùng nguyên `row.details` (đã canonical) nên khớp byte-for-byte.
+    `details` phải JSON-serializable (không UUID/Decimal/datetime) và hữu hạn
+    (không NaN/Infinity); nếu không, raise `AuditValidationError`.
+    """
+    if details is None:
+        return None
+    try:
+        raw = json.dumps(details, sort_keys=True, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise AuditValidationError(
+            f"audit details must be JSON-serializable with finite numbers: {exc}"
+        ) from exc
+    canonical_text = (
+        await db.execute(text("SELECT CAST(:d AS jsonb)::text"), {"d": raw})
+    ).scalar_one()
+    return json.loads(canonical_text)
 
 
 async def get_last_hash(db: AsyncSession) -> str:
@@ -104,8 +139,11 @@ async def append_audit(
     """
     await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _AUDIT_LOCK_KEY})
     ts = datetime.now(UTC)
+    # Canonical hóa TRƯỚC khi hash để hash-time == write-time == verify-time
+    # (tránh JSONB viết lại số làm đứt chuỗi giả tạo).
+    canonical_details = await _canonicalize_details(db, details)
     prev = await get_last_hash(db)
-    ch = _content_hash_v2(action, target, actor, ts, request_id, details)
+    ch = _content_hash_v2(action, target, actor, ts, request_id, canonical_details)
     entry = AuditLog(
         actor=actor,
         action=action,
@@ -116,7 +154,7 @@ async def append_audit(
         content_hash=ch,
         request_id=request_id,
         machine_id=machine_id,
-        details=details,
+        details=canonical_details,
         hash_version=2,
     )
     db.add(entry)
