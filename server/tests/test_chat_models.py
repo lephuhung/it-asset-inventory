@@ -6,14 +6,16 @@ Chạy trên schema do `Base.metadata.create_all` dựng trong `db_engine` fixtu
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from app.core.audit import append_audit
 from app.db.models import (
     AuditLog,
     ChatAuditIntent,
@@ -139,6 +141,12 @@ async def test_terminal_turn_then_new_active_turn_allowed(session_factory, make_
 
 
 async def test_turn_idempotency_key_unique_per_conversation(session_factory, make_conversation):
+    """uq_chat_turn_idem: cùng (conversation_id, idempotency_key) bị từ chối.
+
+    Cả hai turn ở trạng thái terminal ('completed') để lỗi chắc chắn đến từ
+    constraint idempotency — nếu cả hai là 'pending', lỗi có thể đến từ index
+    `uq_chat_turn_active` (1 active turn/hội thoại) và test sẽ pass sai lý do.
+    """
     conv = await make_conversation()
     key = f"dup-{uuid4()}"
     async with session_factory() as s:
@@ -147,6 +155,7 @@ async def test_turn_idempotency_key_unique_per_conversation(session_factory, mak
                 conversation_id=conv.id,
                 actor_id=conv.created_by,
                 request_id=uuid4(),
+                status="completed",
                 idempotency_key=key,
             )
         )
@@ -157,11 +166,13 @@ async def test_turn_idempotency_key_unique_per_conversation(session_factory, mak
                 conversation_id=conv.id,
                 actor_id=conv.created_by,
                 request_id=uuid4(),
+                status="completed",
                 idempotency_key=key,
             )
         )
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError) as exc:
             await s.commit()
+        assert "uq_chat_turn_idem" in str(exc.value.orig)
         await s.rollback()
 
 
@@ -277,18 +288,12 @@ async def test_tool_call_audit_intent_ref_is_integer_fk_to_audit_log(session_fac
 
 
 async def test_tool_call_audit_intent_ref_accepts_real_audit_row(session_factory):
+    """audit_intent_id nhận id của hàng audit_log thật do append_audit sinh."""
     _, _, turn_id = await _seed_conversation(session_factory)
     async with session_factory() as s:
-        audit = AuditLog(
-            actor="u",
-            action="chat.query.velociraptor",
-            target="t",
-            ts=datetime.now(UTC),
-            prev_hash="0" * 64,
-            content_hash="a" * 64,
+        audit = await append_audit(
+            s, action="chat.query.velociraptor", actor="u", target="t"
         )
-        s.add(audit)
-        await s.flush()
         s.add(
             ChatToolCall(
                 turn_id=turn_id,
@@ -302,11 +307,13 @@ async def test_tool_call_audit_intent_ref_accepts_real_audit_row(session_factory
 
 
 async def test_audit_intent_id_column_type_is_integer(session_factory):
-    from sqlalchemy import Integer
+    from sqlalchemy import BigInteger, Integer
 
-    assert isinstance(ChatToolCall.__table__.c.audit_intent_id.type, Integer)
-    assert isinstance(ChatToolCall.__table__.c.audit_outcome_id.type, Integer)
-    assert isinstance(AuditLog.__table__.c.id.type, Integer)
+    assert type(ChatToolCall.__table__.c.audit_intent_id.type) is Integer
+    assert type(ChatToolCall.__table__.c.audit_outcome_id.type) is Integer
+    assert type(AuditLog.__table__.c.id.type) is Integer
+    # BigInteger là subclass của Integer — khẳng định loại trừ rõ ràng.
+    assert not isinstance(ChatToolCall.__table__.c.audit_intent_id.type, BigInteger)
 
 
 # ── chat_audit_intents: bền vững, KHÔNG cascade theo hội thoại ────────────────
@@ -431,3 +438,122 @@ async def test_conversation_created_by_required(session_factory):
         with pytest.raises(IntegrityError):
             await s.commit()
         await s.rollback()
+
+
+async def test_uuid_primary_keys_have_db_server_default(session_factory):
+    """Finding 2: mọi PK chat dùng DEFAULT gen_random_uuid() ở tầng DB.
+
+    Chèn thẳng bằng SQL, KHÔNG truyền `id`, để chứng minh server default của
+    PostgreSQL sinh id — không phải Python default của ORM.
+    """
+    conv_id, user_id = await _seed_owner_and_conversation(session_factory)
+
+    async with session_factory() as s:
+        await s.execute(
+            text("INSERT INTO chat_conversations (created_by) VALUES (:u)"),
+            {"u": user_id},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO chat_turns (conversation_id, actor_id, request_id) "
+                "VALUES (:c, :a, :r)"
+            ),
+            {"c": conv_id, "a": user_id, "r": uuid4()},
+        )
+        await s.flush()
+        turn_id = (await s.execute(text("SELECT id FROM chat_turns LIMIT 1"))).scalar_one()
+        await s.execute(
+            text(
+                "INSERT INTO chat_messages (conversation_id, role, content) "
+                "VALUES (:c, 'system', 'x')"
+            ),
+            {"c": conv_id},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO chat_tool_calls (turn_id, tool_call_id, tool) "
+                "VALUES (:t, 'raw-1', 'run_vql')"
+            ),
+            {"t": turn_id},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO chat_audit_intents "
+                "(turn_id, tool_call_id, conversation_id, actor_id, tool) "
+                "VALUES (:t, 'raw-intent-1', :c, :a, 'run_vql')"
+            ),
+            {"t": turn_id, "c": conv_id, "a": user_id},
+        )
+        await s.execute(
+            text(
+                "INSERT INTO token_reservations "
+                "(scope, operation_id, budget_date, reserved) "
+                "VALUES ('chat_turn', :op, CURRENT_DATE, 5)"
+            ),
+            {"op": uuid4()},
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        for table in (
+            "chat_conversations",
+            "chat_turns",
+            "chat_messages",
+            "chat_tool_calls",
+            "chat_audit_intents",
+            "token_reservations",
+        ):
+            generated = (await s.execute(text(f"SELECT id FROM {table}"))).scalars().all()
+            assert generated, f"{table}: không có hàng nào"
+            for value in generated:
+                assert value is not None, f"{table}: id NULL"
+                assert isinstance(value, UUID), f"{table}: id không phải UUID ({value!r})"
+
+
+async def test_created_at_default_is_fresh_per_insert(session_factory):
+    """Finding 1: default timestamp phải là callable — mỗi insert một mốc mới.
+
+    Nếu dùng `default=datetime.now(UTC)` (không phải lambda), giá trị bị đóng
+    băng ngay lúc import module: mọi insert dùng CÙNG một mốc và mốc đó nhỏ hơn
+    `before` của test này.
+    """
+
+    async def _new_conversation() -> tuple[UUID, datetime]:
+        async with session_factory() as s:
+            org = Organization(name=f"Org {uuid4()}", type=OrgType.ROOT.value)
+            s.add(org)
+            await s.flush()
+            user = User(
+                org_id=org.id,
+                full_name="ts",
+                email=f"ts-{uuid4()}@example.com",
+                role=UserRole.SUPER_ADMIN.value,
+                password_hash="x",
+            )
+            s.add(user)
+            await s.flush()
+            conv = ChatConversation(created_by=user.id, title="ts")
+            s.add(conv)
+            await s.commit()
+            return conv.id, conv.created_at
+
+    before = datetime.now(UTC)
+    conv_a, created_a = await _new_conversation()
+    await asyncio.sleep(0.002)
+    conv_b, created_b = await _new_conversation()
+    after = datetime.now(UTC)
+
+    # Mỗi insert một mốc mới — không đóng băng tại thời điểm import.
+    assert before <= created_a <= after
+    assert before <= created_b <= after
+    assert created_a < created_b
+
+    async with session_factory() as s:
+        row_a = await s.get(ChatConversation, conv_a)
+        row_b = await s.get(ChatConversation, conv_b)
+        assert row_a.created_at is not None and row_b.created_at is not None
+        assert before <= row_a.created_at <= after
+        assert before <= row_b.created_at <= after
+        assert row_a.created_at < row_b.created_at
+        assert before <= row_a.updated_at <= after
+        assert before <= row_b.updated_at <= after

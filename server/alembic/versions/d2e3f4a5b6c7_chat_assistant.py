@@ -33,7 +33,12 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "chat_conversations",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("title", sa.String(length=200), nullable=True),
         sa.Column(
             "machine_id",
@@ -71,7 +76,12 @@ def upgrade() -> None:
 
     op.create_table(
         "chat_turns",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column(
             "conversation_id",
             postgresql.UUID(as_uuid=True),
@@ -114,7 +124,12 @@ def upgrade() -> None:
 
     op.create_table(
         "chat_messages",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column(
             "conversation_id",
             postgresql.UUID(as_uuid=True),
@@ -148,7 +163,12 @@ def upgrade() -> None:
 
     op.create_table(
         "chat_tool_calls",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column(
             "turn_id",
             postgresql.UUID(as_uuid=True),
@@ -189,7 +209,12 @@ def upgrade() -> None:
     # Bền vững, KHÔNG FK tới bảng chat (sống sót khi xoá hội thoại/user).
     op.create_table(
         "chat_audit_intents",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("turn_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("tool_call_id", sa.String(length=64), nullable=False),
         sa.Column("conversation_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -214,7 +239,12 @@ def upgrade() -> None:
 
     op.create_table(
         "token_reservations",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column("scope", sa.String(length=24), nullable=False),
         sa.Column("operation_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("association_id", postgresql.UUID(as_uuid=True), nullable=True),

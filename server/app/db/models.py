@@ -1577,7 +1577,9 @@ class ChatConversation(Base):
         Index("ix_chat_conv_owner", "created_by", text("last_message_at DESC")),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     machine_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("machines.id", ondelete="SET NULL"), nullable=True
@@ -1585,14 +1587,24 @@ class ChatConversation(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    message_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
 
 
@@ -1613,7 +1625,9 @@ class ChatTurn(Base):
         Index("ix_chat_turn_status", "status", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -1623,7 +1637,9 @@ class ChatTurn(Base):
     machine_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     # Định danh bất biến (client_id/hostname) — được đưa vào hash audit.
     machine_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
     finish_reason: Mapped[str | None] = mapped_column(String(16), nullable=True)
     completion_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     completion_committed_at: Mapped[datetime | None] = mapped_column(
@@ -1635,7 +1651,10 @@ class ChatTurn(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
 
 
@@ -1654,7 +1673,9 @@ class ChatMessage(Base):
         Index("ix_chat_msg_conv", "conversation_id", "created_at", "id"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -1667,7 +1688,10 @@ class ChatMessage(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_category: Mapped[str | None] = mapped_column(String(48), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
 
 
@@ -1680,7 +1704,9 @@ class ChatToolCall(Base):
         Index("ix_chat_tool_calls_turn", "turn_id"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     turn_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("chat_turns.id", ondelete="CASCADE"), nullable=False
     )
@@ -1700,7 +1726,10 @@ class ChatToolCall(Base):
         Integer, ForeignKey("audit_log.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
 
 
@@ -1713,7 +1742,9 @@ class ChatAuditIntent(Base):
         Index("ix_chat_audit_intents_open", "outcome", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     turn_id: Mapped[uuid.UUID] = mapped_column(nullable=False)  # plain UUID
     tool_call_id: Mapped[str] = mapped_column(String(64), nullable=False)
     conversation_id: Mapped[uuid.UUID] = mapped_column(nullable=False)  # plain UUID
@@ -1722,9 +1753,14 @@ class ChatAuditIntent(Base):
     args_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
     client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     flow_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    outcome: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -1738,15 +1774,22 @@ class TokenReservation(Base):
         Index("ix_token_reservations_day", "budget_date", "state"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
     scope: Mapped[str] = mapped_column(String(24), nullable=False)
     operation_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     association_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     budget_date: Mapped[date] = mapped_column(Date, nullable=False)
     reserved: Mapped[int] = mapped_column(Integer, nullable=False)
     actual: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="reserved", server_default="reserved"
+    )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.now(UTC)
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+        server_default=text("now()"),
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
