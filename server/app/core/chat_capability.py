@@ -46,6 +46,22 @@ class CapabilityError(ValueError):
     """Capability không hợp lệ (chữ ký/claim/hết hạn). Route map sang `[chat_authz]`."""
 
 
+def _to_uuid(value: object, claim_name: str) -> uuid.UUID:
+    """Parse claim thành UUID; mọi kiểu/giá trị sai → `CapabilityError` (không rò AttributeError)."""
+    try:
+        return uuid.UUID(value)  # type: ignore[arg-type]
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise CapabilityError(f"[chat_authz] malformed capability claim {claim_name}") from exc
+
+
+def _to_int(value: object, claim_name: str) -> int:
+    """Parse claim số; giá trị không chuyển được sang int → `CapabilityError`."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise CapabilityError(f"[chat_authz] malformed capability claim {claim_name}") from exc
+
+
 class CapabilityClaims(BaseModel):
     """Danh tính đã verify từ capability. UUID đã parse, sẵn dùng cho ownership check."""
 
@@ -64,7 +80,15 @@ def sign_capability(
     request_id: uuid.UUID | str,
     ttl: int = DEFAULT_TTL_SECONDS,
 ) -> str:
-    """Ký capability turn-scoped. `ttl` giây (âm = đã hết hạn, dùng cho test)."""
+    """Ký capability turn-scoped. `ttl` giây (âm = đã hết hạn, dùng cho test).
+
+    Trần cứng `DEFAULT_TTL_SECONDS` (300s): TTL vượt trần bị từ chối ngay khi ký
+    (không có capability sống lâu hơn spec cho phép).
+    """
+    if ttl > DEFAULT_TTL_SECONDS:
+        raise CapabilityError(
+            f"[chat_authz] capability ttl {ttl}s exceeds {DEFAULT_TTL_SECONDS}s maximum"
+        )
     now = int(datetime.now(UTC).timestamp())
     payload = {
         "iss": ISS,
@@ -91,20 +115,32 @@ def verify_capability(token: str) -> CapabilityClaims:
             leeway=LEEWAY_SECONDS,
             options={"require": _REQUIRED_CLAIMS},
         )
-    except jwt.InvalidTokenError as exc:
+    except (jwt.InvalidTokenError, ValueError, TypeError, AttributeError) as exc:
+        # PyJWT chỉ bắt ValueError cho numeric claim; iat/exp kiểu sai có thể ném
+        # TypeError/AttributeError ra ngoài → chuẩn hoá hết về CapabilityError.
         raise CapabilityError(f"[chat_authz] invalid capability: {exc}") from exc
 
-    try:
-        return CapabilityClaims(
-            actor_id=uuid.UUID(payload["sub"]),
-            conversation_id=uuid.UUID(payload["cid"]),
-            turn_id=uuid.UUID(payload["tid"]),
-            request_id=uuid.UUID(payload["rid"]),
-            iat=int(payload["iat"]),
-            exp=int(payload["exp"]),
+    actor_id = _to_uuid(payload.get("sub"), "sub")
+    conversation_id = _to_uuid(payload.get("cid"), "cid")
+    turn_id = _to_uuid(payload.get("tid"), "tid")
+    request_id = _to_uuid(payload.get("rid"), "rid")
+    iat = _to_int(payload.get("iat"), "iat")
+    exp = _to_int(payload.get("exp"), "exp")
+
+    # Phòng thủ theo chiều sâu: token ký bởi bản cũ (không có trần) vẫn bị từ chối.
+    if exp - iat > DEFAULT_TTL_SECONDS:
+        raise CapabilityError(
+            f"[chat_authz] capability lifetime exceeds {DEFAULT_TTL_SECONDS}s maximum"
         )
-    except (KeyError, ValueError, TypeError) as exc:
-        raise CapabilityError("[chat_authz] malformed capability claims") from exc
+
+    return CapabilityClaims(
+        actor_id=actor_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        request_id=request_id,
+        iat=iat,
+        exp=exp,
+    )
 
 
 def new_completion_token() -> str:

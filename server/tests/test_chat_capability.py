@@ -7,6 +7,7 @@ turn còn active / chủ sở hữu hội thoại nằm ở route dependency (T1
 from __future__ import annotations
 
 import base64
+import hashlib
 import string
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -65,6 +66,31 @@ def test_default_ttl_is_300_seconds():
     tok = sign_capability(uuid4(), uuid4(), uuid4(), uuid4())
     claims = verify_capability(tok)
     assert claims.exp - claims.iat == 300
+
+
+def test_ttl_at_maximum_allowed():
+    tok = sign_capability(uuid4(), uuid4(), uuid4(), uuid4(), ttl=300)
+    claims = verify_capability(tok)
+    assert claims.exp - claims.iat == 300
+
+
+def test_ttl_above_maximum_rejected_on_sign():
+    with pytest.raises(CapabilityError) as exc:
+        sign_capability(uuid4(), uuid4(), uuid4(), uuid4(), ttl=301)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_overlong_token_rejected_on_verify():
+    # Token ký độc lập với lifetime 3600s (như bản cũ không có trần) phải bị từ chối
+    # ngay cả khi chữ ký hợp lệ.
+    now = datetime.now(UTC)
+    tok = _mint(
+        iat=int(now.timestamp()),
+        exp=int((now + timedelta(seconds=3600)).timestamp()),
+    )
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert "lifetime" in str(exc.value)
 
 
 def test_claims_are_strings_on_the_wire():
@@ -143,6 +169,29 @@ def test_malformed_uuid_claim_rejected():
         verify_capability(tok)
 
 
+def test_malformed_uuid_claim_type_rejected():
+    # `tid=123` (int) khiến `uuid.UUID(123)` ném AttributeError ở bản cũ.
+    tok = _mint(tid=123)
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_malformed_iat_type_rejected():
+    # `iat=[]` khiến PyJWT ném TypeError ngoài InvalidTokenError.
+    tok = _mint(iat=[])
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_malformed_exp_value_rejected():
+    tok = _mint(exp="not_a_number")
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
 # ── Signature integrity ───────────────────────────────────────────
 
 
@@ -213,11 +262,14 @@ def test_completion_token_distinct_hashes():
 
 def test_completion_token_is_url_safe():
     tok = new_completion_token()
-    assert len(tok) >= 40
+    # token_urlsafe(32) → 43 ký tự base64url; không được ngắn hơn.
+    assert len(tok) >= 43
     assert set(tok) <= set(string.ascii_letters + string.digits + "-_")
 
 
 def test_completion_token_hash_of_unicode_is_stable():
-    # token sinh từ secrets luôn ASCII, nhưng hash phải ổn định với mọi input.
-    assert hash_completion_token("a") == hash_completion_token("a")
-    assert len(hash_completion_token("a")) == 64
+    # Input không ASCII — hash phải tính trên UTF-8 bytes, khớp sha256 độc lập.
+    text = "tiếng việt có dấu 🔐"
+    expected = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert hash_completion_token(text) == expected
+    assert len(expected) == 64
