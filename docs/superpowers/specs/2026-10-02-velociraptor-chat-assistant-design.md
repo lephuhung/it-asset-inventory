@@ -2,13 +2,13 @@
 
 - **Branch:** `research/velociraptor-chat-query`
 - **Ngày:** 2026-10-02
-- **Trạng thái:** design v5 (tiếp thu review GPT-6.1 Sol pass 4), chờ review
+- **Trạng thái:** design v6 (tiếp thu review GPT-6.1 Sol pass 5), chờ review
 - **Liên quan:** `docs/llm-dfir/*`, DeepAgent (`deepagent/`), `server/app/services/velociraptor.py`,
   `server/app/core/audit.py`, `server/app/core/security.py`, `server/app/api/routes/machines.py`
 
-> v5 tiếp thu pass 4 `openai-codex/gpt-6.1-sol:high` (5 blocker: admission atomic, operation identity,
-> intent/execution, completion race, candidate completeness) trên nền v4. Phạm vi vẫn gồm 3 sửa
-> cross-cutting đã được duyệt (R3 audit/hash + machine deletion, R7 private-host, R8 budget chung).
+> v6 tiếp thu pass 5 `openai-codex/gpt-6.1-sol:high` (M1: client-store completeness; M2: `error`→`failed`).
+> Phạm vi vẫn gồm 3 sửa cross-cutting đã được duyệt (R3 audit/hash + machine deletion, R7 private-host,
+> R8 budget chung).
 
 ## Problem
 
@@ -59,7 +59,8 @@ ngữ cảnh.
 | 19 | V3-5/V3-7: target identity resolve **live** từ Velociraptor; budget dùng **durable reservation** (DB), không chỉ Redis. |
 | 20 | V5: intent = danh tính thực thi; trùng `tool_call_id` **không** cho chạy lại; re-execution dùng id mới. |
 | 21 | V5: completion winner atomic qua `completion_committed_at`; grace tính từ `ended_at`. |
-| 22 | V5: resolution completeness bằng VQL exact-match; budget serialize bằng advisory lock toàn cục. |
+| 22 | V5: resolution completeness qua API `SearchClients` phân trang đầy đủ; budget serialize bằng advisory lock toàn cục. |
+| 23 | V6: `finish_reason=error → failed`; resolution dùng client store authoritative + fail-closed khi không đủ. |
 
 ## Kiến trúc & ranh giới tin cậy
 
@@ -332,9 +333,10 @@ error_category|null, created_at}`.
   `completion_token_hash`) trong dispatch; agent gọi `/turns/{id}/complete` bằng **service token +
   `X-Chat-Completion`**; completion không phụ thuộc `exp` của capability.
 - **V5 — winner & grace atomic (một UPDATE có điều kiện, CAS trên `completion_committed_at`):**
-  - Turn `pending|streaming`: completion **luôn** được nhận; winner set status theo `finish_reason`
-    (`stop|length`→`completed`; `canceled`→`canceled`), persist message, set `completion_committed_at`,
-    audit + settle budget — trong 1 transaction.
+  - Turn `pending|streaming`: completion **luôn** được nhận; winner set status theo `finish_reason`:
+    `stop|length`→`completed`; `canceled`→`canceled`; **`error`→`failed`** kèm `error_category` (phải
+    thuộc taxonomy). Persist message (kể cả partial) + usage, set `completion_committed_at`, audit +
+    settle budget — trong 1 transaction.
   - Turn **đã terminal**: grace tính từ `ended_at` (mốc terminal), không từ dispatch.
     - Chưa có `completion_committed_at` và trong grace → winner đầu tiên persist assistant message
       (đánh dấu `error_category=chat_late_output` nếu turn `canceled|failed`), **giữ nguyên status**
@@ -459,16 +461,22 @@ typed (không free VQL), và **từ chối raw VQL ở mọi seam**. Lựa chọ
 - **Trần số (enforce):** `chat_collection_max_time_range_hours=24`, `chat_collection_flow_deadline_seconds=240`,
   `chat_collection_max_rows=5000`, `chat_collection_max_outstanding_per_client=1`, `chat_collection_per_machine_per_hour=6`.
   Helper không enforce được bound → fail closed.
-- **Canonical target identity (V3-5/V5):** resolve **live** bằng VQL server-side exact-match trên
-  `clients()` (không dùng `search_clients`/`get_all_clients` — chúng bounded/pagination và **không** chứng
-  minh đủ ứng viên: `velociraptor.py:589-636`). Chuẩn hoá hostname (lowercase, trim, tùy chọn bỏ FQDN)
-  và `client_id`; trả **tối đa 2** `client_id` phân biệt.
-  - ≥2 phân biệt → **ambiguity**, fail closed kèm danh sách.
+- **Canonical target identity (V3-5/V5/V6):** KHÔNG dùng VQL `clients()` (tài liệu
+  `velociraptor.py:591-597` ghi nó đọc datastore khác và **có thể thiếu client mới enroll** → một kết quả
+  vẫn có thể là ambiguity giả). Resolve bằng **API `SearchClients`** (client store authoritative) với
+  filter hostname exact:
+  - Gọi từng trang theo `offset` tới khi đã nhận đủ `total`; **không** được bỏ qua `total`/`offset`.
+  - Chuẩn hoá hostname hai phía (lowercase, trim, tùy chọn bỏ FQDN) và `client_id`.
+  - ≥2 `client_id` phân biệt → **ambiguity**, fail closed kèm danh sách.
   - 0 match → fail closed (`chat_collection_denied`).
-  - Chạm cap/không đầy đủ/timeout → fail closed (không tự chọn).
+  - `total`/pagination không xác định, response không đầy đủ, chạm cap, hoặc timeout → **fail closed**
+    (không tự chọn). Nếu client mới enroll có thể chưa visible → retry bounded trong
+    `resolver_consistency_window_seconds` (mặc định 5s), quá hạn → fail closed.
+  - **Prerequisite P1:** ghi rõ phiên bản/điều kiện consistency của client store + test với **client mới
+    enroll trùng hostname**.
   - `velociraptor_links` chỉ là gợi ý (sync đã bỏ duplicate, `velociraptor_sync.py:189-209`).
-  - Giới hạn per-machine ghi theo **`client_id`** (client-stable); không xác lập được identity → fail closed.
-  - Velociraptor không sẵn sàng chỉ chặn tool Velociraptor, không chặn tool inventory-only.
+  - Per-machine limit ghi theo **`client_id`** (client-stable); không xác lập được identity → fail closed.
+  - Velociraptor không sẵn sàng chỉ chặn tool Velociraptor, không chặn inventory-only.
 - Caller timeout **không** phải flow-level guarantee (`mcp_client.py:38-43`); collection dùng polling
   flow-status với deadline riêng; quá hạn → outcome `unknown`, flow giữ nguyên (không huỷ).
 
