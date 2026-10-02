@@ -110,6 +110,9 @@ async def db_engine() -> AsyncEngine:
     # AsyncSessionLocal) rồi test sau mượn lại connection từ pool của loop cũ.
     engine = create_async_engine(TEST_DB, poolclass=sa_pool.NullPool)
     async with engine.begin() as conn:
+        # Chat Assistant read-only views (T3) phụ thuộc bảng gốc → phải bỏ trước
+        # drop_all, nếu không `DROP TABLE machines` sẽ vướng dependency.
+        await conn.execute(text("DROP SCHEMA IF EXISTS chat_ro_views CASCADE"))
         # Fresh schema mỗi test
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

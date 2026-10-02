@@ -10,6 +10,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    def effective_chat_ro_database_url(self) -> str:
+        """URL pool chat_ro — override tường minh hoặc suy ra từ `database_url`."""
+        if self.chat_ro_database_url:
+            return self.chat_ro_database_url
+        from urllib.parse import quote, urlsplit, urlunsplit
+
+        parts = urlsplit(self.database_url)
+        host = parts.hostname or "localhost"
+        netloc = f"inventory_chat_ro:{quote(self.chat_ro_password, safe='')}@{host}"
+        if parts.port:
+            netloc += f":{parts.port}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
     # Môi trường
     app_env: str = "dev"
     debug: bool = True
@@ -19,6 +32,13 @@ class Settings(BaseSettings):
     # DB — PostgreSQL (asyncpg)
     database_url: str = "postgresql+asyncpg://inventory:inventory@localhost:5432/inventory"
     db_echo: bool = False
+
+    # Chat Assistant — pool read-only inventory (T3). Role `inventory_chat_ro`
+    # chỉ có SELECT trên view `chat_ro_views`. Nếu `chat_ro_database_url` trống,
+    # suy ra từ `database_url` (thay user/password). Password dùng cho migration
+    # tạo role (không truyền vào app runtime nếu đã có URL đầy đủ).
+    chat_ro_database_url: str | None = None
+    chat_ro_password: str = "CHANGE_ME_CHAT_RO"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
