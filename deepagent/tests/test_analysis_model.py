@@ -73,6 +73,23 @@ def test_empty_database_prompt_uses_default_playbook_fingerprint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_aclose_closes_owned_clients() -> None:
+    """aclose() phải đóng CẢ sync lẫn async client do model sở hữu.
+
+    LangChain cấp client mặc định có wrapper tự đóng; khi ta truyền client riêng để
+    ghim IP, model phải đóng tường minh (``api._execute`` gọi sau mỗi job).
+    """
+    model = OpenAIAnalysisModel(_runtime("PLAYBOOK"))
+    assert model._sync_client.is_closed is False
+    assert model._async_client.is_closed is False
+
+    await model.aclose()
+
+    assert model._sync_client.is_closed is True
+    assert model._async_client.is_closed is True
+
+
+@pytest.mark.asyncio
 async def test_tier2_planner_returns_two_structured_triggered_steps() -> None:
     """The model adapter must preserve two independent Tier 2 selections."""
 

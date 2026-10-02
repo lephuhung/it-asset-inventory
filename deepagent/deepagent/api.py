@@ -60,6 +60,7 @@ async def _execute(request: InvestigationRequest, job_id: str, settings: Setting
             callback = BackendCallbackClient(settings)
             api_client_path: str | None = None
             runner: InvestigationRunner | None = None
+            analysis_model: OpenAIAnalysisModel | None = None
             started_at = perf_counter()
             try:
                 with tempfile.NamedTemporaryFile(
@@ -70,10 +71,13 @@ async def _execute(request: InvestigationRequest, job_id: str, settings: Setting
                 mcp_env = settings.mcp_env()
                 mcp_env["VELOCIRAPTOR_API_CONFIG"] = api_client_path
                 job_settings = settings.model_copy(update={"mcp_env_json": json.dumps(mcp_env)})
+                # T5/R7: model tự dựng + sở hữu các httpx client đã ghim IP; phải đóng
+                # tường minh ở finally (success/failure/cancel) để không rò keep-alive pool.
+                analysis_model = OpenAIAnalysisModel(request.llm_runtime)
                 runner = InvestigationRunner(
                     settings=job_settings,
                     mcp=VelociraptorMCP(job_settings),
-                    model=OpenAIAnalysisModel(request.llm_runtime),
+                    model=analysis_model,
                     callback=callback,
                 )
                 await runner.run(request, job_id)
@@ -128,6 +132,15 @@ async def _execute(request: InvestigationRequest, job_id: str, settings: Setting
                         os.unlink(api_client_path)
                     except FileNotFoundError:
                         pass
+                if analysis_model is not None:
+                    try:
+                        await analysis_model.aclose()
+                    except Exception as cleanup_exc:  # noqa: BLE001 - không che lỗi chính
+                        log_event(
+                            phase="analysis_model_cleanup",
+                            outcome="failed",
+                            error=cleanup_exc,
+                        )
                 job.completed_at = datetime.now(UTC)
 
 

@@ -99,6 +99,18 @@ class OpenAIAnalysisModel:
             http_async_client=self._async_client,
         )
 
+    async def aclose(self) -> None:
+        """Đóng hai httpx client do model sở hữu.
+
+        LangChain cấp client mặc định có wrapper ``__del__`` tự đóng (và cache theo
+        ``base_url`` — ``_client_utils.py``), nhưng khi ta TRUYỀN client riêng để ghim
+        IP thì model trở thành chủ sở hữu và phải đóng tường minh. Không đóng sẽ để
+        lại keep-alive pool tích tụ theo từng job (mỗi job dựng một model mới trong
+        ``api._execute``).
+        """
+        self._sync_client.close()
+        await self._async_client.aclose()
+
     def _messages(self, task: str) -> list[BaseMessage]:
         # Ghép INVARIANT_BOUNDARY và operator_prompt thành một SystemMessage duy nhất.
         # Một số OpenAI-compatible backend (đặc biệt là Qwen3 strict-mode chat

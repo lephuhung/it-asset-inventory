@@ -468,3 +468,133 @@ async def test_execute_limits_concurrency_and_releases_next_job(monkeypatch, cap
         for event in releases.values():
             event.set()
         await asyncio.wait_for(asyncio.gather(*tasks), 2)
+
+
+# ── T5/R7: model tự sở hữu httpx client đã ghim IP → phải đóng sau mỗi job ──
+
+
+def _lifecycle_request() -> InvestigationRequest:
+    from uuid import UUID
+
+    return InvestigationRequest(
+        investigation_id=UUID(int=9001),
+        client_id="C.test",
+        hostname="TEST",
+        target_platform="windows",
+        time_range={"from": "2026-01-01T00:00:00Z", "to": "2026-01-01T01:00:00Z"},
+        suspicious_activity="test",
+        llm_runtime=LlmRuntime(base_url="http://127.0.0.1:11434/v1", api_key="k", model="m"),
+        velociraptor_api_client_yaml="ca_certificate: t\nclient_cert: t\n",
+    )
+
+
+class _FakeAnalysisModel:
+    def __init__(self, runtime):
+        self.runtime = runtime
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeCallback:
+    def __init__(self, settings):
+        pass
+
+    async def submit(self, *args, **kwargs):
+        return None
+
+
+def _install_execute_doubles(monkeypatch, created, runner_cls):
+    def _factory(runtime):
+        model = _FakeAnalysisModel(runtime)
+        created.append(model)
+        return model
+
+    monkeypatch.setattr(api, "OpenAIAnalysisModel", _factory)
+    monkeypatch.setattr(api, "InvestigationRunner", runner_cls)
+    monkeypatch.setattr(api, "VelociraptorMCP", lambda settings: None)
+    monkeypatch.setattr(api, "BackendCallbackClient", _FakeCallback)
+    monkeypatch.setattr(api, "_semaphore", None)
+    monkeypatch.setattr(api, "_jobs", {})
+    return Settings(service_token="t")
+
+
+def _seed_job(request, job_id):
+    api._jobs[job_id] = JobStatus(
+        job_id=job_id,
+        investigation_id=request.investigation_id,
+        status="queued",
+        created_at=datetime.now(UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_closes_owned_model_on_success(monkeypatch):
+    """Job thành công: client httpx của model phải được đóng tường minh."""
+
+    class _OkRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, request, job_id):
+            return None
+
+    created: list[_FakeAnalysisModel] = []
+    settings = _install_execute_doubles(monkeypatch, created, _OkRunner)
+    request = _lifecycle_request()
+    _seed_job(request, "job-success")
+
+    await api._execute(request, "job-success", settings)
+
+    assert api._jobs["job-success"].status == "completed"
+    assert len(created) == 1 and created[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_closes_owned_model_on_failure(monkeypatch):
+    """Job lỗi: client httpx vẫn phải được đóng trong finally."""
+
+    class _FailRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, request, job_id):
+            raise RuntimeError("boom")
+
+    created: list[_FakeAnalysisModel] = []
+    settings = _install_execute_doubles(monkeypatch, created, _FailRunner)
+    request = _lifecycle_request()
+    _seed_job(request, "job-fail")
+
+    await api._execute(request, "job-fail", settings)
+
+    assert api._jobs["job-fail"].status == "failed"
+    assert len(created) == 1 and created[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_closes_owned_model_on_cancellation(monkeypatch):
+    """Task bị huỷ: finally vẫn đóng client của model."""
+    started = asyncio.Event()
+
+    class _BlockingRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, request, job_id):
+            started.set()
+            await asyncio.sleep(3600)
+
+    created: list[_FakeAnalysisModel] = []
+    settings = _install_execute_doubles(monkeypatch, created, _BlockingRunner)
+    request = _lifecycle_request()
+    _seed_job(request, "job-cancel")
+
+    task = asyncio.create_task(api._execute(request, "job-cancel", settings))
+    await asyncio.wait_for(started.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(created) == 1 and created[0].closed is True

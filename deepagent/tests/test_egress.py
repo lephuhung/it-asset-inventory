@@ -345,6 +345,10 @@ def test_pinned_async_client_does_not_follow_public_redirect(monkeypatch):
 
 
 def test_pinned_async_client_ignores_environment_proxy(monkeypatch):
+    # NO_PROXY/no_proxy kế thừa từ môi trường có thể MIỄN trừ loopback khỏi proxy,
+    # khiến test pass dù trust_env bị bật lại. Xoá trước để phép đo cô lập.
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
     srv, port, requests, thread = _serve(_JsonHandler)
     proxy_hits: list[str] = []
 

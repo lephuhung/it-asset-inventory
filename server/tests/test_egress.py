@@ -407,6 +407,10 @@ def test_llm_client_ignores_environment_proxy(local_http_server, monkeypatch):
     """HTTP_PROXY/ALL_PROXY trong env không được nhận request (trust_env=False)."""
     from app.services.llm import LlmClient
 
+    # NO_PROXY/no_proxy kế thừa có thể MIỄN trừ loopback khỏi proxy → test pass
+    # giả dù trust_env bị bật lại. Xoá trước để phép đo cô lập.
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
     _srv, port, requests = local_http_server
     proxy_hits: list[str] = []
 
@@ -449,6 +453,14 @@ def test_llm_client_ignores_environment_proxy(local_http_server, monkeypatch):
 def test_llm_client_does_not_follow_redirect(local_http_server, monkeypatch):
     """3xx tới host public: client không tự đi theo (follow_redirects=False)."""
     from app.services.llm import LlmClient
+
+    # Ghim DNS của api.openai.com về IP public biết trước: test chỉ còn raise khi
+    # guard redirect chặn host public, KHÔNG phụ thuộc DNS thật (DNS lỗi cũng sẽ
+    # ném EgressError và làm test pass nhầm).
+    monkeypatch.setattr(
+        "app.core.egress.socket.getaddrinfo",
+        lambda host, port_, *a, **k: _addr_infos(_PUBLIC_IP),
+    )
 
     srv, port, _requests = local_http_server
     # Server tạm trả 302 sang public cho mọi request.
