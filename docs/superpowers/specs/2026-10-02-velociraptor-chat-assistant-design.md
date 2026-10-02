@@ -2,13 +2,13 @@
 
 - **Branch:** `research/velociraptor-chat-query`
 - **Ngày:** 2026-10-02
-- **Trạng thái:** design v4 (tiếp thu review GPT-6.1 Sol pass 3 V3-1…V3-7), chờ review
+- **Trạng thái:** design v5 (tiếp thu review GPT-6.1 Sol pass 4), chờ review
 - **Liên quan:** `docs/llm-dfir/*`, DeepAgent (`deepagent/`), `server/app/services/velociraptor.py`,
   `server/app/core/audit.py`, `server/app/core/security.py`, `server/app/api/routes/machines.py`
 
-> v4 tiếp thu pass 3 `openai-codex/gpt-6.1-sol:high` (V3-1…V3-7) trên nền v3. Phạm vi vẫn gồm 3
-> sửa cross-cutting đã được chủ sản phẩm duyệt (R3 audit/hash + machine deletion, R7 private-host
-> validation, R8 budget dùng chung chat + investigation).
+> v5 tiếp thu pass 4 `openai-codex/gpt-6.1-sol:high` (5 blocker: admission atomic, operation identity,
+> intent/execution, completion race, candidate completeness) trên nền v4. Phạm vi vẫn gồm 3 sửa
+> cross-cutting đã được duyệt (R3 audit/hash + machine deletion, R7 private-host, R8 budget chung).
 
 ## Problem
 
@@ -57,6 +57,9 @@ ngữ cảnh.
 | 17 | V3-2: intent bind theo `(turn_id, tool_call_id)` + identity đầy đủ; không dùng `tool_call_id` unique toàn cục. |
 | 18 | V3-3: completion dùng **completion token** riêng, idempotent cả khi turn đã terminal. |
 | 19 | V3-5/V3-7: target identity resolve **live** từ Velociraptor; budget dùng **durable reservation** (DB), không chỉ Redis. |
+| 20 | V5: intent = danh tính thực thi; trùng `tool_call_id` **không** cho chạy lại; re-execution dùng id mới. |
+| 21 | V5: completion winner atomic qua `completion_committed_at`; grace tính từ `ended_at`. |
+| 22 | V5: resolution completeness bằng VQL exact-match; budget serialize bằng advisory lock toàn cục. |
 
 ## Kiến trúc & ranh giới tin cậy
 
@@ -155,6 +158,7 @@ CREATE TABLE chat_turns (
   status          VARCHAR(16) NOT NULL DEFAULT 'pending',
   finish_reason   VARCHAR(16),                         -- stop|length|canceled|error
   completion_token_hash VARCHAR(64),                   -- V3-3: thẩm quyền finalization riêng
+  completion_committed_at TIMESTAMPTZ,                 -- V5: mốc winner + anchor grace
   idempotency_key VARCHAR(128),
   request_id      UUID NOT NULL,
   started_at      TIMESTAMPTZ,
@@ -217,7 +221,6 @@ CREATE TABLE chat_audit_intents (
   args_digest     VARCHAR(64),
   client_id       VARCHAR(64),
   flow_id         VARCHAR(64),
-  attempts        SMALLINT NOT NULL DEFAULT 0,  -- V3-2: đếm lần thực thi
   outcome         VARCHAR(16) NOT NULL DEFAULT 'pending',  -- pending|ok|error|canceled|unknown
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at     TIMESTAMPTZ,
@@ -239,15 +242,16 @@ ALTER TABLE chat_tool_calls
 -- V3-7: reservation budget bền vững (nguồn sự thật, Redis chỉ cache)
 CREATE TABLE token_reservations (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  scope        VARCHAR(24) NOT NULL,            -- chat | investigation
-  scope_key    VARCHAR(128) NOT NULL,           -- turn_id | investigation_id
+  scope        VARCHAR(24) NOT NULL,            -- chat_turn | investigation_analysis | investigation_chat
+  operation_id UUID NOT NULL,                   -- V5: định danh MỘT thao tác tính phí (không dùng investigation_id)
+  association_id UUID,                          -- turn_id | investigation_id (liên kết, không phải key)
   budget_date  DATE NOT NULL,
   reserved     INTEGER NOT NULL,
   actual       INTEGER,
   state        VARCHAR(16) NOT NULL DEFAULT 'reserved',  -- reserved|settled|unknown
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at  TIMESTAMPTZ,
-  CONSTRAINT uq_token_reservation UNIQUE (scope, scope_key)
+  CONSTRAINT uq_token_reservation UNIQUE (scope, operation_id)
 );
 CREATE INDEX ix_token_reservations_day ON token_reservations (budget_date, state);
 ```
@@ -306,9 +310,12 @@ error_category|null, created_at}`.
 - **R2:** query execution **bắt buộc capability còn hiệu lực**; nhưng outcome/reconcile là **uỷ quyền
   hẹp riêng** dùng service token + bản ghi `chat_audit_intents` (không mở lại quyền chạy truy vấn).
   Actor reconcile **lấy từ intent**, không từ capability đã hết hạn.
-- Intent idempotent theo **`(turn_id, tool_call_id)`**: trùng + cùng identity đầy đủ (`actor_id`, `tool`,
-  `args_digest`, `client_id`) → trả bản ghi cũ; khác bất kỳ trường identity → `409`.  
-  Outcome gửi kèm `attempt` tăng dần; bản ghi terminal đầu thắng; attempt cũ hơn/khác giá trị → `409`.
+- **V5 — intent = danh tính thực thi:** `(turn_id, tool_call_id)` định danh MỘT lần thực thi.
+  - Trùng + cùng identity đầy đủ (`actor_id`, `tool`, `args_digest`, `client_id`) → trả bản ghi cũ và
+    **KHÔNG cho chạy lại** (agent không thực thi tiếp — chỉ retry/lost-response).
+  - Muốn thực thi lại thật → phải dùng `tool_call_id` **mới**.
+  - Khác bất kỳ trường identity → `409`.
+  - Outcome idempotent theo `(turn_id, tool_call_id)`: bản ghi terminal đầu thắng; trùng giá trị → ok; khác → `409`.
 - Intent chưa có outcome quá `audit_outcome_deadline` (mặc định 600s) → reconciler ghi `unknown`.
 - Hoàn toàn không suy diễn `ok` khi không chắc.
 
@@ -321,12 +328,22 @@ error_category|null, created_at}`.
   `conversation.created_by == sub`.
 - Revoke theo turn: turn terminal → mọi call cần capability bị từ chối (outcome/reconcile không cần).
 - Nhiều tool call trong 1 turn dùng chung capability là hợp lệ; mỗi call có `tool_call_id` riêng.
-- **V3-3 — thẩm quyền finalization riêng:** backend phát `completion_token` ngẫu nhiên (lưu
-  `completion_token_hash`) trong request dispatch; agent gọi `/turns/{id}/complete` bằng **service token
-  + `X-Chat-Completion`**. Endpoint chấp nhận turn ở mọi trạng thái (kể cả đã terminal) trong
-  `completion_grace_seconds=120`: lần complete đầu thắng; trùng `content_digest` → idempotent; khác →
-  `409` + audit `chat.turn.late_output`, **không** persist/không mở lại execution. Completion **không**
-  phụ thuộc `exp` của capability.
+- **V3-3/V5 — thẩm quyền finalization riêng:** backend phát `completion_token` ngẫu nhiên (lưu
+  `completion_token_hash`) trong dispatch; agent gọi `/turns/{id}/complete` bằng **service token +
+  `X-Chat-Completion`**; completion không phụ thuộc `exp` của capability.
+- **V5 — winner & grace atomic (một UPDATE có điều kiện, CAS trên `completion_committed_at`):**
+  - Turn `pending|streaming`: completion **luôn** được nhận; winner set status theo `finish_reason`
+    (`stop|length`→`completed`; `canceled`→`canceled`), persist message, set `completion_committed_at`,
+    audit + settle budget — trong 1 transaction.
+  - Turn **đã terminal**: grace tính từ `ended_at` (mốc terminal), không từ dispatch.
+    - Chưa có `completion_committed_at` và trong grace → winner đầu tiên persist assistant message
+      (đánh dấu `error_category=chat_late_output` nếu turn `canceled|failed`), **giữ nguyên status**
+      terminal, settle theo usage thật.
+    - Đã có `completion_committed_at`: trùng `content_digest` → `200` idempotent; khác → `409` + audit
+      `chat.turn.late_output`, không persist.
+    - Ngoài grace → `409` + audit `chat.turn.late_output_expired`, không persist.
+  - Precedence: completion commit trước cancel/lease-fail → `completed`; cancel/lease-fail trước →
+    `canceled`/`failed` giữ nguyên dù completion đến sau (trong grace).
 
 ### Agent API
 
@@ -343,6 +360,7 @@ error_category|null, created_at}`.
                    "timeout_seconds": 120, "max_tokens": 4096, "allow_cloud": false,
                    "system_prompt": "…" },
   "velociraptor_api_client_yaml": "…",
+  "completion_token": "…",
   "limits": { "max_tool_calls": 12, "max_evidence_chars": 120000, "wall_clock_seconds": 300 }
 }
 ```
@@ -441,11 +459,16 @@ typed (không free VQL), và **từ chối raw VQL ở mọi seam**. Lựa chọ
 - **Trần số (enforce):** `chat_collection_max_time_range_hours=24`, `chat_collection_flow_deadline_seconds=240`,
   `chat_collection_max_rows=5000`, `chat_collection_max_outstanding_per_client=1`, `chat_collection_per_machine_per_hour=6`.
   Helper không enforce được bound → fail closed.
-- **Canonical target identity (V3-5):** resolve **live** từ Velociraptor (`search_clients`/`get_all_clients`)
-  tại thời điểm bắt đầu turn — `velociraptor_links` chỉ là gợi ý vì sync đã bỏ duplicate và giữ newest
-  (`velociraptor_sync.py:189-209`). Nhiều match hostname → trả **ambiguity list**; 0 match → fail closed
-  (`chat_collection_denied`). Giới hạn per-machine ghi theo **`client_id`** (client-stable), không theo
-  cặp `(client_id, machine_id)`; nếu không xác lập được identity → fail closed.
+- **Canonical target identity (V3-5/V5):** resolve **live** bằng VQL server-side exact-match trên
+  `clients()` (không dùng `search_clients`/`get_all_clients` — chúng bounded/pagination và **không** chứng
+  minh đủ ứng viên: `velociraptor.py:589-636`). Chuẩn hoá hostname (lowercase, trim, tùy chọn bỏ FQDN)
+  và `client_id`; trả **tối đa 2** `client_id` phân biệt.
+  - ≥2 phân biệt → **ambiguity**, fail closed kèm danh sách.
+  - 0 match → fail closed (`chat_collection_denied`).
+  - Chạm cap/không đầy đủ/timeout → fail closed (không tự chọn).
+  - `velociraptor_links` chỉ là gợi ý (sync đã bỏ duplicate, `velociraptor_sync.py:189-209`).
+  - Giới hạn per-machine ghi theo **`client_id`** (client-stable); không xác lập được identity → fail closed.
+  - Velociraptor không sẵn sàng chỉ chặn tool Velociraptor, không chặn tool inventory-only.
 - Caller timeout **không** phải flow-level guarantee (`mcp_client.py:38-43`); collection dùng polling
   flow-status với deadline riêng; quá hạn → outcome `unknown`, flow giữ nguyên (không huỷ).
 
@@ -509,17 +532,22 @@ Intent fail → **không chạy tool**. Outcome/reconcile chạy được cả k
 | `chat_evidence_chars` | 120000 | per turn |
 | `chat_daily_token_budget` | từ `llm_config.daily_token_budget` | dùng chung chat + investigation |
 
-- **R8 / V3-7 — reservation bền vững (DB là source of truth, Redis chỉ cache):**
-  - Trước khi chạy: **check-and-reserve atomic** bằng `INSERT ... ON CONFLICT` (unique `(scope, scope_key)`)
-    + kiểm tra tổng `reserved` so với `llm_config.daily_token_budget`; envelope bảo thủ theo model/calls
-    (`chat_reserve_tokens`, mặc định 32k; investigation envelope riêng).
-  - Khi xong/lỗi/hủy: settle = actual usage; **unknown consumption → charge đủ envelope** (bảo thủ),
-    `state=unknown`. Idempotent theo `(scope, scope_key)`.
+- **R8 / V3-7 / V5 — reservation bền vững + admission atomic toàn cục (DB là source of truth):**
+  - **Identity:** mỗi thao tác tính phí có `operation_id` riêng. Chat = `turn_id`;
+    `investigation_analysis` = lần chạy phân tích (run id); **mỗi** `investigation_chat` (Q&A) = một
+    `operation_id` mới (`dfir_investigation.py:1120-1169`, route `llm_dfir.py:697-699`). `association_id`
+    chỉ để liên kết. Retry **cùng** thao tác dùng lại `operation_id`; thao tác mới → id mới.
+  - **Serialization toàn cục:** mọi check-and-reserve/settle lấy
+    `pg_advisory_xact_lock(hash('budget:'||budget_date))` trước khi tính `charged` và ghi. `INSERT ...
+    ON CONFLICT (scope, operation_id)` chỉ để idempotent, **không** thay lock.
+  - **Bất biến charged:** `charged = Σ reserved(state=reserved) + Σ actual(state=settled) +
+    Σ reserved(state=unknown)` cho `budget_date`. Admission chỉ commit nếu `charged + envelope ≤ budget`.
+  - **Settle:** actual usage; **unknown → charge đủ envelope** (`state=unknown`); idempotent theo
+    `(scope, operation_id)`; chỉ một winner settle.
   - Rollover theo `budget_date` (UTC). DB không khả dụng → **fail closed** cho execution MỚI
     (`chat_budget_unavailable`), **không** huỷ kết quả đã hoàn thành.
-  - Áp cho **mọi** đường investigation (`dfir_investigation.py:1087,1168,1320-1344,1371-1374`), kể cả nhánh
-    external fail; DeepAgent callback hiện không báo usage → tính theo envelope. Thêm usage vào callback
-    là enhancement sau (không mở lại DeepAgent trong P1).
+  - Áp cho **mọi** đường investigation (`dfir_investigation.py:1087,1168,1320-1344,1371-1374`); DeepAgent
+    callback không báo usage → envelope. Thêm usage vào callback là enhancement sau.
 - Trần input/history enforce trước khi gọi LLM (`chat_max_message_chars`, history caps).
 - Vượt trần → `429`/`error` + `retryable` + `Retry-After`; đếm cả model retry và collection ẩn.
 
