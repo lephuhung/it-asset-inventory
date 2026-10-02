@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import string
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -187,6 +188,30 @@ def test_malformed_iat_type_rejected():
 
 def test_malformed_exp_value_rejected():
     tok = _mint(exp="not_a_number")
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_overflowing_exp_rejected_as_capability_error():
+    # JSON `1e400` → float `inf`; PyJWT `int(payload["exp"])` ném OverflowError.
+    # Phải chuẩn hoá về CapabilityError, không rò OverflowError ra route.
+    tok = _mint(exp=1e400)
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_overflowing_iat_rejected_as_capability_error():
+    tok = _mint(iat=1e400)
+    with pytest.raises(CapabilityError) as exc:
+        verify_capability(tok)
+    assert str(exc.value).startswith("[chat_authz]")
+
+
+def test_infinite_exp_rejected_as_capability_error():
+    # `math.inf` cũng không chuyển được sang int → OverflowError.
+    tok = _mint(exp=math.inf)
     with pytest.raises(CapabilityError) as exc:
         verify_capability(tok)
     assert str(exc.value).startswith("[chat_authz]")

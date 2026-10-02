@@ -55,10 +55,14 @@ def _to_uuid(value: object, claim_name: str) -> uuid.UUID:
 
 
 def _to_int(value: object, claim_name: str) -> int:
-    """Parse claim số; giá trị không chuyển được sang int → `CapabilityError`."""
+    """Parse claim số; giá trị không chuyển được sang int → `CapabilityError`.
+
+    Bắt cả `OverflowError`: JSON cho phép số vượt dải float (vd `1e400` → `inf`),
+    và `int(inf)` ném `OverflowError` — không được rò ra ngoài contract.
+    """
     try:
         return int(value)  # type: ignore[arg-type]
-    except (ValueError, TypeError, AttributeError) as exc:
+    except (ValueError, TypeError, AttributeError, OverflowError) as exc:
         raise CapabilityError(f"[chat_authz] malformed capability claim {claim_name}") from exc
 
 
@@ -115,9 +119,11 @@ def verify_capability(token: str) -> CapabilityClaims:
             leeway=LEEWAY_SECONDS,
             options={"require": _REQUIRED_CLAIMS},
         )
-    except (jwt.InvalidTokenError, ValueError, TypeError, AttributeError) as exc:
+    except (jwt.InvalidTokenError, ValueError, TypeError, AttributeError, OverflowError) as exc:
         # PyJWT chỉ bắt ValueError cho numeric claim; iat/exp kiểu sai có thể ném
-        # TypeError/AttributeError ra ngoài → chuẩn hoá hết về CapabilityError.
+        # TypeError/AttributeError ra ngoài, còn giá trị vượt dải float (vd `1e400`)
+        # ném OverflowError ngay trong validator của PyJWT → chuẩn hoá hết về
+        # CapabilityError để route không bao giờ thấy exception lạ.
         raise CapabilityError(f"[chat_authz] invalid capability: {exc}") from exc
 
     actor_id = _to_uuid(payload.get("sub"), "sub")
