@@ -46,11 +46,30 @@ import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 
+from app.core.config import settings
+
 logger = logging.getLogger("velociraptor")
+
+# Trần phân trang + nhịp retry cho `search_clients_exact` (spec V3-5/V5/V6).
+# Đặt ở module để test monkeypatch được mà không cần thêm tham số public.
+SEARCH_CLIENTS_PAGE_SIZE = 1000
+SEARCH_CLIENTS_MAX_PAGES = 100
+SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS = 0.25
+
+#: Danh mục lỗi Chat Assistant khi resolve client thất bại (spec §Error taxonomy).
+COLLECTION_DENIED_CATEGORY = "chat_collection_denied"
 
 
 class VelociraptorError(Exception):
-    """Lỗi khi gọi Velociraptor API."""
+    """Lỗi khi gọi Velociraptor API.
+
+    `category` (tuỳ chọn) gắn taxonomy lỗi Chat Assistant (spec §Error taxonomy)
+    để route map sang SSE/HTTP; mặc định None cho caller cũ.
+    """
+
+    def __init__(self, message: str = "", *, category: str | None = None) -> None:
+        super().__init__(message)
+        self.category = category
 
 
 class VelociraptorClient:
@@ -625,6 +644,165 @@ class VelociraptorClient:
         r.raise_for_status()
         data = r.json() if r.content else {}
         return data.get("items", [])
+
+    async def _search_clients_page_exact(
+        self, *, query: str, limit: int, offset: int
+    ) -> tuple[list[dict], int | None]:
+        """Một trang `SearchClients` — trả `(items, total)`.
+
+        `total=None` khi response thiếu trường `total` (caller phải fail closed).
+        """
+        client = self._check_client()
+        params = {
+            "query": query,
+            "limit": int(limit),
+            "offset": int(offset),
+            "name_only": "false",
+        }
+        try:
+            r = await client.get("/SearchClients", params=params)
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise VelociraptorError(
+                f"[{COLLECTION_DENIED_CATEGORY}] SearchClients HTTP {e.response.status_code}",
+                category=COLLECTION_DENIED_CATEGORY,
+            ) from e
+        except httpx.RequestError as e:
+            raise VelociraptorError(
+                f"[{COLLECTION_DENIED_CATEGORY}] không kết nối Velociraptor: {e}",
+                category=COLLECTION_DENIED_CATEGORY,
+            ) from e
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise VelociraptorError(
+                f"[{COLLECTION_DENIED_CATEGORY}] SearchClients response thiếu items",
+                category=COLLECTION_DENIED_CATEGORY,
+            )
+        raw_total = data.get("total")
+        total: int | None
+        try:
+            total = int(raw_total) if raw_total is not None else None
+        except (TypeError, ValueError):
+            total = None
+        return list(data["items"]), total
+
+    async def _search_clients_paginated_exact(self, target: str) -> set[str]:
+        """Duyệt đủ trang tới `total`; trả tập `client_id` khớp hostname chính xác.
+
+        Dùng filter `host:` của SearchClients (client store authoritative) rồi so
+        khớp exact phía client sau khi chuẩn hoá — KHÔNG dùng VQL `clients()`
+        (đọc datastore khác, có thể thiếu client mới enroll). Fail closed
+        (`VelociraptorError`) khi `total` thiếu/không ổn định, trang rỗng sớm,
+        response vượt page size, hoặc vượt cap số trang.
+        """
+        found: set[str] = set()
+        offset = 0
+        total: int | None = None
+        pages = 0
+        while True:
+            items, page_total = await self._search_clients_page_exact(
+                query=f"host:{target}",
+                limit=SEARCH_CLIENTS_PAGE_SIZE,
+                offset=offset,
+            )
+            if page_total is None:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] SearchClients thiếu total — "
+                    "không xác định được phân trang",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            if total is None:
+                total = page_total
+            elif page_total != total:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] total thay đổi giữa các trang "
+                    f"({total} → {page_total})",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            if total == 0 and items:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] total=0 nhưng items không rỗng",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            if not items:
+                if offset < total:
+                    raise VelociraptorError(
+                        f"[{COLLECTION_DENIED_CATEGORY}] trang rỗng sớm tại offset "
+                        f"{offset}/{total}",
+                        category=COLLECTION_DENIED_CATEGORY,
+                    )
+                break
+            if len(items) > SEARCH_CLIENTS_PAGE_SIZE:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] server trả vượt page size",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if normalize_hostname(hostname_from_velociraptor_client(it)) != target:
+                    continue
+                cid = str(it.get("client_id") or "").strip()
+                if not cid:
+                    raise VelociraptorError(
+                        f"[{COLLECTION_DENIED_CATEGORY}] client khớp hostname "
+                        f"{target!r} thiếu client_id (không xác lập được identity)",
+                        category=COLLECTION_DENIED_CATEGORY,
+                    )
+                found.add(cid)
+            offset += len(items)
+            pages += 1
+            if pages > SEARCH_CLIENTS_MAX_PAGES:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] vượt cap "
+                    f"{SEARCH_CLIENTS_MAX_PAGES} trang",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            if offset >= total:
+                break
+        return found
+
+    async def search_clients_exact(self, hostname: str) -> list[str]:
+        """Resolve hostname → đúng một `client_id` (spec V3-5/V5/V6).
+
+        Fail closed (`VelociraptorError`, category `chat_collection_denied`) khi:
+        hostname rỗng, total/phân trang không xác định, response không đầy đủ,
+        vượt cap, ≥2 `client_id` khớp (ambiguity), hoặc 0 `client_id` khớp sau cửa
+        sổ retry `settings.resolver_consistency_window_seconds` (client mới enroll
+        có thể chưa visible ngay). KHÔNG bao giờ tự chọn khi mơ hồ.
+
+        Trả `[client_id]` khi khớp đúng một.
+        """
+        target = normalize_hostname(hostname)
+        if not target:
+            raise VelociraptorError(
+                f"[{COLLECTION_DENIED_CATEGORY}] hostname rỗng/không hợp lệ",
+                category=COLLECTION_DENIED_CATEGORY,
+            )
+
+        deadline = time.monotonic() + max(
+            0, settings.resolver_consistency_window_seconds
+        )
+        while True:
+            found = await self._search_clients_paginated_exact(target)
+            if len(found) > 1:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] hostname {target!r} khớp nhiều "
+                    f"client_id: {sorted(found)}",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            if len(found) == 1:
+                return list(found)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise VelociraptorError(
+                    f"[{COLLECTION_DENIED_CATEGORY}] không tìm thấy client cho "
+                    f"hostname {target!r}",
+                    category=COLLECTION_DENIED_CATEGORY,
+                )
+            await asyncio.sleep(
+                min(SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS, remaining)
+            )
 
     async def get_all_clients(self, page_size: int = 1000) -> list[dict]:
         """Lấy TOÀN BỘ clients (cho sync hostname mỗi 5 phút).
