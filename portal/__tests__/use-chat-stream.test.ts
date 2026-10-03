@@ -336,3 +336,20 @@ describe("ChatSseEvent typing", () => {
     expect(types).toHaveLength(7);
   });
 });
+describe("seq khởi đầu bằng 0 (contract mở, spec chỉ yêu cầu đơn điệu)", () => {
+  it("nhận event đầu tiên có seq = 0", () => {
+    const s = reduceEvent(initialStreamState(), { v: 1, seq: 0, type: "token", text: "A" });
+    expect(s.content).toBe("A");
+  });
+
+  it("vẫn loại event lặp sau đó khi bắt đầu từ 0", () => {
+    let s = reduceEvent(initialStreamState(), { v: 1, seq: 0, type: "token", text: "A" });
+    s = reduceEvent(s, { v: 1, seq: 0, type: "token", text: "A-again" });
+    expect(s.content).toBe("A");
+  });
+
+  it("nhận event đầu tiên có seq = 1", () => {
+    const s = reduceEvent(initialStreamState(), { v: 1, seq: 1, type: "token", text: "A" });
+    expect(s.content).toBe("A");
+  });
+});

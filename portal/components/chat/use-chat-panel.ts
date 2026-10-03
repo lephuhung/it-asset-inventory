@@ -77,8 +77,21 @@ export interface UseChatPanelResult {
   /** Ngữ cảnh máy áp dụng cho lượt kế tiếp (ghi đè mềm). */
   pendingMachineId: string | null;
   setPendingMachineId(id: string | null): void;
-  /** Bỏ ghi đè mềm → quay về machine_id của trang đang mở. */
+  /**
+   * Bỏ ghi đè mềm → quay về `machine_id` đã lưu của hội thoại.
+   * Khác `setPendingMachineId(null)`: lệnh này **chặn** luôn ngữ cảnh của trang,
+   * nên bấm “Gỡ” thật sự gỡ được (trước đây null bị hiểu là “lùi về máy của URL”).
+   */
   clearPendingMachineId(): void;
+}
+
+/** Trạng thái ghi đè ngữ cảnh: có chủ ý gỡ hay không. */
+interface ContextOverride {
+  pathname: string;
+  /** Ghi đè tường minh (vd chọn máy khác). */
+  machineId: string | null;
+  /** Người dùng đã bấm “Gỡ” → phải chặn ngữ cảnh của trang. */
+  cleared: boolean;
 }
 
 export function useChatPanel(): UseChatPanelResult {
@@ -94,26 +107,30 @@ export function useChatPanel(): UseChatPanelResult {
     () => false,
   );
 
-  // Ghi đè của người dùng gắn với pathname đã sinh ra nó: điều hướng sang máy
-  // khác thì ghi đè tự rụng, tránh hỏi nhầm về một máy không còn mở.
-  const [override, setOverride] = useState<{ pathname: string; machineId: string | null }>({
+  // Ghi đè gắn với pathname đã sinh ra nó: điều hướng sang máy khác thì ghi đè
+  // tự rụng, tránh hỏi nhầm về một máy không còn mở.
+  const [override, setOverride] = useState<ContextOverride>({
     pathname,
     machineId: null,
+    cleared: false,
   });
 
-  const pendingMachineId = override.pathname === pathname && override.machineId !== null
-    ? override.machineId
+  const overrideIsCurrent = override.pathname === pathname;
+  const pendingMachineId = overrideIsCurrent
+    ? override.cleared
+      ? null
+      : (override.machineId ?? machineId)
     : machineId;
 
   const setOpen = useCallback((next: boolean) => setStoredOpen(next), []);
   const toggle = useCallback(() => setStoredOpen(!readStoredOpen(window.localStorage)), []);
 
   const setPendingMachineId = useCallback(
-    (id: string | null) => setOverride({ pathname, machineId: id }),
+    (id: string | null) => setOverride({ pathname, machineId: id, cleared: id === null }),
     [pathname],
   );
   const clearPendingMachineId = useCallback(
-    () => setOverride({ pathname, machineId: null }),
+    () => setOverride({ pathname, machineId: null, cleared: true }),
     [pathname],
   );
 

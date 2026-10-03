@@ -86,6 +86,20 @@ describe("chat stream proxy", () => {
     expect(JSON.parse(init.body)).toEqual({ content: "hi" });
   });
 
+  it("strips client-supplied fields out of machine_context (D2)", async () => {
+    await POST(
+      clientRequest({
+        conversation_id: "c1",
+        content: "kiểm tra",
+        // Client tự khai client_id — backend phải tự resolve, không tin client.
+        machine_context: { machine_id: "m1", hostname: "WS-01", client_id: "C.SPOOF", evil: "x" },
+      }),
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body).machine_context).toEqual({ machine_id: "m1", hostname: "WS-01" });
+  });
+
   it("forwards the soft machine context per turn", async () => {
     await POST(
       clientRequest({
@@ -131,6 +145,31 @@ describe("chat stream proxy", () => {
     expect(fetchMock.mock.calls[1][1].headers.authorization).toBe("Bearer tok2");
     expect(setSessionTokens).toHaveBeenCalledTimes(1);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  it("sets refreshed cookies even when the retry fetch throws", async () => {
+    vi.mocked(refreshTokens).mockResolvedValueOnce({ access: "tok2", refresh: "ref2" });
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockRejectedValueOnce(new Error("socket hang up"));
+
+    const res = await POST(clientRequest({ conversation_id: "c1", content: "hi" }));
+
+    expect(res.status).toBe(502);
+    // Không có thì browser giữ token cũ đã bị thu hồi (rotation) → 401 vĩnh viễn.
+    expect(setSessionTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets refreshed cookies on a 502 with no upstream body", async () => {
+    vi.mocked(refreshTokens).mockResolvedValueOnce({ access: "tok2", refresh: "ref2" });
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { "content-type": "text/event-stream" } }));
+
+    const res = await POST(clientRequest({ conversation_id: "c1", content: "hi" }));
+
+    expect(res.status).toBe(502);
+    expect(setSessionTokens).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry more than once when the refresh token is also rejected", async () => {

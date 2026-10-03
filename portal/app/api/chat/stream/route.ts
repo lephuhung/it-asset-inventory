@@ -40,11 +40,21 @@ function errorBody(category: string, hint: string, httpStatus?: number) {
   return { category, hint, ...(httpStatus ? { http_status: httpStatus } : {}) };
 }
 
-function jsonError(status: number, category: string, hint: string, httpStatus?: number) {
-  return new NextResponse(JSON.stringify(errorBody(category, hint, httpStatus)), {
+async function jsonError(
+  status: number,
+  category: string,
+  hint: string,
+  httpStatus?: number,
+  newPair?: { access: string; refresh: string } | null,
+) {
+  const response = new NextResponse(JSON.stringify(errorBody(category, hint, httpStatus)), {
     status,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
+  // Token đã refresh xong mà response này vẫn phải mang cookie mới, nếu không
+  // browser giữ token cũ đã bị thu hồi (rotation) → mọi request sau đều 401.
+  if (newPair) setSessionTokens(response, newPair.access, newPair.refresh);
+  return response;
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -101,10 +111,17 @@ export async function POST(request: Request) {
     return jsonError(400, "chat_validation", "idempotency_key phải là chuỗi.");
   }
 
-  // conversation_id chỉ dùng để dựng path; `Idempotency-Key` đi qua header (D1).
-  // `client_id` không bao giờ do client khai — backend tự resolve.
+  // `conversation_id` chỉ dùng để dựng path; `Idempotency-Key` đi qua header (D1).
+  // D2: chỉ chuyển tiếp `machine_id` + `hostname`; bỏ mọi trường lạ (vd `client_id`
+  // do client tự khai) vì đó là việc của backend phải tự resolve.
   const upstreamBody: Record<string, unknown> = { content: payload.content };
-  if (payload.machine_context) upstreamBody.machine_context = payload.machine_context;
+  if (payload.machine_context) {
+    const ctx = payload.machine_context as { machine_id: string; hostname?: unknown };
+    upstreamBody.machine_context = {
+      machine_id: ctx.machine_id,
+      ...(typeof ctx.hostname === "string" ? { hostname: ctx.hostname } : {}),
+    };
+  }
   const body = JSON.stringify(upstreamBody);
 
   const idempotencyKey = isNonEmptyString(payload.idempotency_key) ? payload.idempotency_key : null;
@@ -139,7 +156,7 @@ export async function POST(request: Request) {
           signal,
         });
       } catch {
-        return jsonError(502, "chat_upstream_llm", "Không kết nối được tới dịch vụ chat.", 502);
+        return jsonError(502, "chat_upstream_llm", "Không kết nối được tới dịch vụ chat.", 502, newPair);
       }
     }
   }
@@ -161,7 +178,7 @@ export async function POST(request: Request) {
   }
 
   if (!res.body) {
-    return jsonError(502, "chat_internal", "Dịch vụ chat không trả về nội dung stream.", 502);
+    return jsonError(502, "chat_internal", "Dịch vụ chat không trả về nội dung stream.", 502, newPair);
   }
 
   const response = new NextResponse(res.body, {

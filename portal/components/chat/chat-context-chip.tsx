@@ -19,7 +19,8 @@ export interface ChatContextChipProps {
   /** Đã lưu vào hội thoại chưa. */
   pinned?: boolean;
   onClear(): void;
-  onPin(machineId: string): void;
+  /** Trả về promise để chip biết khi nào xong (để tắt trạng thái chờ). */
+  onPin(machineId: string): void | Promise<void>;
 }
 
 export function ChatContextChip({
@@ -49,8 +50,9 @@ export function ChatContextChip({
             type="button"
             disabled={pinning}
             onClick={() => {
+              // Chờ xong mới bỏ trạng thái chờ — nếu PATCH lỗi thì nút phải dùng lại được.
               setPinning(true);
-              onPin(machineId);
+              void Promise.resolve(onPin(machineId)).finally(() => setPinning(false));
             }}
             aria-label={`Ghim ngữ cảnh ${label} vào hội thoại`}
             className="flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-slate-500 hover:bg-white hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50"

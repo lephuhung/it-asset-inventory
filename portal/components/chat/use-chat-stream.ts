@@ -12,7 +12,7 @@
  * môi trường node, không cần jsdom.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chatApi } from "@/lib/chat";
 import type {
   ChatErrorCategory,
@@ -53,7 +53,9 @@ export function initialStreamState(): ChatStreamState {
     finishReason: null,
     usage: null,
     error: null,
-    seq: 0,
+    // Spec chỉ yêu cầu `seq` đơn điệu, KHÔNG nói bắt đầu từ 1. Mốc -Infinity
+    // để event đầu tiên dù seq 0 hay 1 đều được nhận; không đoán trước quy ước.
+    seq: Number.NEGATIVE_INFINITY,
   };
 }
 
@@ -199,6 +201,12 @@ export interface RunChatStreamArgs {
   fetchImpl?: typeof fetch;
 }
 
+/** Người dùng bấm Dừng (abort có chủ ý) ≠ mất kết nối. */
+function isAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
 const FRAME_SEPARATOR = /\r?\n\r?\n/;
 
 function uuid(): string {
@@ -239,7 +247,14 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
   let res: Response;
   try {
     res = await doFetch("/api/chat/stream", init);
-  } catch {
+  } catch (error) {
+    // Bấm Dừng trước khi có header ⇒ fetch reject AbortError. Đây KHÔNG phải
+    // lỗi mạng — báo "canceled" để không dọi người dùng gọi cứu.
+    if (isAbort(error, args.signal)) {
+      const canceled: ChatStreamState = { ...initialStreamState(), status: "canceled" };
+      args.onState?.(canceled);
+      return canceled;
+    }
     const failed: ChatStreamState = {
       ...initialStreamState(),
       status: "error",
@@ -256,19 +271,30 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
   // Lỗi TRƯỚC khi stream bắt đầu: backend trả JSON kèm `category`.
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.ok || !contentType.includes("text/event-stream")) {
+    // Đọc `hint`/`retryable` nếu backend có gửi (spec error format). Nếu không
+    // thì fallback sang câu chữ mặc định — không đoán bừa.
     let category: ChatErrorCategory = "chat_internal";
-    let hint = `Dịch vụ chat trả về lỗi ${res.status}.`;
+    let hint = "";
+    let retryable = res.status >= 500;
     try {
-      const data = (await res.json()) as { category?: string; detail?: string };
+      const data = (await res.json()) as {
+        category?: string;
+        detail?: string;
+        hint?: string;
+        retryable?: boolean;
+      };
       if (typeof data.category === "string") category = data.category as ChatErrorCategory;
+      if (typeof data.hint === "string") hint = data.hint;
       else if (typeof data.detail === "string") hint = data.detail;
+      if (typeof data.retryable === "boolean") retryable = data.retryable;
     } catch {
-      // không phải JSON → giữ hint mặc định
+      // không phải JSON → giữ giá trị mặc định
     }
+    if (!hint) hint = `Dịch vụ chat trả về lỗi ${res.status}.`;
     const failed: ChatStreamState = {
       ...initialStreamState(),
       status: "error",
-      error: { category, hint, retryable: res.status >= 500, httpStatus: res.status },
+      error: { category, hint, retryable, httpStatus: res.status },
     };
     args.onState?.(failed);
     return failed;
@@ -314,8 +340,15 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
     }
     // Frame cuối có thể không kịp nhận dòng trống phía sau.
     if (buffer.trim()) dispatch(buffer);
-  } catch {
-    // Mất kết nối giữa chừng: giữ phần text đã nhận, báo mất stream.
+  } catch (error) {
+    // Bấm Dừng giữa chừng ⇒ reader.read() ném AbortError. Giữ nguyên phần text đã
+    // nhận và báo "canceled" — không phải mất kết nối.
+    if (isAbort(error, args.signal)) {
+      const canceled: ChatStreamState = { ...state, status: "canceled", error: null };
+      args.onState?.(canceled);
+      return canceled;
+    }
+    // Mất kết nối thật: giữ phần text đã nhận, báo mất stream.
     const interrupted: ChatStreamState = {
       ...state,
       status: "error",
@@ -355,49 +388,116 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
 export interface UseChatStreamResult {
   state: ChatStreamState;
   streaming: boolean;
-  send(content: string, machineContext?: ChatMachineContext | null): Promise<void>;
+  /** Turn đang chạy ở SERVER (mở lại hội thoại cũ) — chưa từng stream cục bộ. */
+  serverActiveTurnId: string | null;
+  setServerActiveTurnId(turnId: string | null): void;
+  /** Có turn nào đang chạy (cục bộ hoặc server) không → khoá nút Gửi. */
+  hasActiveTurn: boolean;
+  send(
+    content: string,
+    options?: { machineContext?: ChatMachineContext | null; conversationId?: string | null },
+  ): Promise<void>;
   cancel(): Promise<void>;
   reset(): void;
 }
 
+/**
+ * `generation` tăng mỗi lần bắt đầu stream MỚI hoặc `reset()`.
+ *
+ * Mọi callback của một request cũ đều so với generation đã chụp; lệch ⇒ request
+ * đó đã bị thay thế ⇒ im lặng bỏ qua. Đây là chốt chặn race: nếu không có nó,
+ * stream của hội thoại A abort về sau có thể hồi sinh nội dung đè lên B.
+ */
 export function useChatStream(conversationId: string | null): UseChatStreamResult {
   const [state, setState] = useState<ChatStreamState>(initialStreamState);
+  const [serverActiveTurnId, setServerActiveTurnId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const generationRef = useRef(0);
+  const mountedRef = useRef(true);
+  // Ref (không state) để cancel luôn đọc được turn hiện tại: đọc qua state sẽ
+  // kẹt closure cũ nếu setServerActiveTurnId vừa xong chưa kịp render lại.
+  const serverTurnRef = useRef<string | null>(null);
+  serverTurnRef.current = serverActiveTurnId;
 
-  const reset = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setState(initialStreamState());
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Unmount: vô hiệu hoá mọi callback đang bay + huỷ request.
+      generationRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
   }, []);
 
-  const send = useCallback(async (content: string, machineContext?: ChatMachineContext | null) => {
-    if (!conversationId || !content.trim()) return;
-
+  const reset = useCallback(() => {
+    generationRef.current += 1;
     abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    abortRef.current = null;
+    if (mountedRef.current) setState(initialStreamState());
+  }, []);
 
-    setState({ ...initialStreamState(), status: "streaming" });
-    await runChatStream({
-      conversationId,
-      content,
-      machineContext,
-      signal: controller.signal,
-      onState: setState,
-    });
-    if (abortRef.current === controller) abortRef.current = null;
-  }, [conversationId]);
+  const send = useCallback(
+    async (
+      content: string,
+      options?: { machineContext?: ChatMachineContext | null; conversationId?: string | null },
+    ) => {
+      // `conversationId` truyền vào thắng biến đã chụp: khi rail vừa tạo hội
+      // thoại mới, callback của render cũ vẫn giữ `null` và sẽ âm thầm bỏ câu hỏi.
+      const target = options?.conversationId ?? conversationId;
+      if (!target || !content.trim()) return;
+
+      generationRef.current += 1;
+      const generation = generationRef.current;
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setState({ ...initialStreamState(), status: "streaming" });
+      await runChatStream({
+        conversationId: target,
+        content,
+        machineContext: options?.machineContext ?? null,
+        signal: controller.signal,
+        onState: (next) => {
+          // Request đã bị thay thế / component unmount → bỏ qua im lặng.
+          if (generationRef.current !== generation || !mountedRef.current) return;
+          setState(next);
+        },
+      });
+      if (abortRef.current === controller) abortRef.current = null;
+    },
+    [conversationId],
+  );
 
   const cancel = useCallback(async () => {
+    generationRef.current += 1;
+    const generation = generationRef.current;
     abortRef.current?.abort();
-    // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
-    if (conversationId && state.turnId) {
-      await chatApi.cancelTurn(conversationId, state.turnId).catch(() => undefined);
+    abortRef.current = null;
+
+    // Ưu tiên turn từ stream cục bộ, không có thì dùng turn server đang báo.
+    const turnId = state.turnId ?? serverTurnRef.current;
+    if (conversationId && turnId) {
+      // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
+      await chatApi.cancelTurn(conversationId, turnId).catch(() => undefined);
     }
+    // Trong lúc chờ, người dùng có thể đã gửi câu mới → không ghi đè state đó.
+    if (generationRef.current !== generation || !mountedRef.current) return;
     setState((prev) => ({ ...prev, status: "canceled", error: null }));
+    setServerActiveTurnId(null);
   }, [conversationId, state.turnId]);
 
-  return { state, streaming: state.status === "streaming", send, cancel, reset };
+  return {
+    state,
+    streaming: state.status === "streaming",
+    serverActiveTurnId,
+    setServerActiveTurnId,
+    hasActiveTurn: state.status === "streaming" || serverActiveTurnId !== null,
+    send,
+    cancel,
+    reset,
+  };
 }
 
 export type { ChatSseEvent, ChatToolCall };
