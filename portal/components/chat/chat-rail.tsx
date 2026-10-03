@@ -372,8 +372,11 @@ const openConversation = useCallback(async (id: string) => {
   const pendingVisible =
     pendingQuestion !== null && messages.length <= pendingQuestion.baselineCount;
   // Lỗi đã hiển thị ở banner bên dưới → không cần render lại trong khối stream.
+  // Chỉ hiện bong bóng khi THẬT SỰ có nội dung (chữ hoặc chip tool). `send()`
+  // bật `status: "streaming"` ngay lập tức, nên nếu kéo `streaming` vào điều kiện
+  // này thì suốt lúc model suy nghĩ sẽ có một bong bóng assistant rỗng.
   const showStreamed =
-    !streamedAlreadyPersisted && (streaming || state.content !== "" || state.tools.length > 0);
+    !streamedAlreadyPersisted && (state.content !== "" || state.tools.length > 0);
   // Chờ token đầu tiên: báo đang xử lý thay vì để khung trống lơ lửng.
   // Có 2 mốc chờ khác nhau và độ trễ thật đo được ~5s (suy nghĩ) rồi ~20s
   // (chạy xong tool, chờ token) — dùng chữ khác nhau cho từng mốc.

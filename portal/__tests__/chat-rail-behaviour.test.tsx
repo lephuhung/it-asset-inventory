@@ -1011,3 +1011,85 @@ describe("Chỉ báo trong lúc chờ — phải nói đúng đang làm gì", ()
     expect(screen.getByText("inventory_software")).toBeTruthy();
   });
 });
+
+describe("Không được hiện bong bóng rỗng khi chưa có chữ", () => {
+  it("đang suy nghĩ thì KHÔNG có bong bóng trợ lý rỗng", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(thinkingStreamForTest()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+
+    await waitFor(() => expect(screen.getByText(/Đang suy nghĩ/)).toBeTruthy());
+    // Chỉ có chỉ báo, KHÔNG có bong bóng trợ lý nào cả (kể cả bong bóng rỗng).
+    expect(document.querySelectorAll('[data-role="assistant"]').length).toBe(0);
+    // Câu hỏi của người dùng thì đã hiện.
+    expect(document.querySelectorAll('[data-role="user"]').length).toBe(1);
+  });
+
+  it("token đầu tiên về thì bong bóng mới xuất hiện, kèm chữ", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    let release!: (v: Response) => void;
+    const pending = new Promise<Response>((res) => {
+      release = res;
+    });
+    vi.stubGlobal("fetch", vi.fn(() => pending) as unknown as typeof fetch);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+    await waitFor(() => expect(screen.getByText(/Đang suy nghĩ/)).toBeTruthy());
+    expect(document.querySelectorAll('[data-role="assistant"]').length).toBe(0);
+
+    // Token đầu tiên đến.
+    await act(async () => {
+      release(okStream("Câu trả lời"));
+      await pending;
+    });
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-role="assistant"]').length).toBe(1);
+    });
+    expect(screen.getByText(/Câu trả lời/)).toBeTruthy();
+    expect(screen.queryByText(/Đang suy nghĩ/)).toBeNull();
+  });
+
+  it("bong bóng rỗng cũng không xuất hiện khi stream lỗi trước khi có chữ", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ category: "chat_upstream_llm", hint: "Mô hình đang bận.", retryable: true }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector("p.bg-red-50")).toBeTruthy();
+    });
+    // Lỗi thì hiện banner, KHÔNG hiện bong bóng trợ lý rỗng.
+    expect(document.querySelectorAll('[data-role="assistant"]').length).toBe(0);
+  });
+});

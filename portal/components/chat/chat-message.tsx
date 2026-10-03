@@ -72,7 +72,12 @@ export function ChatMessage({
   const isUser = role === "user";
 
   return (
-    <div className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}>
+    // `data-role` để test/đọc màn hình xác định được bong bóng nào thuộc vai
+    // trò nào — nhãn hiển thị có kèm giờ nên không assert được bằng text thô.
+    <div
+      data-role={role}
+      className={`flex flex-col gap-1 ${isUser ? "items-end" : "items-start"}`}
+    >
       <div
         className={
           isUser
