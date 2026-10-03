@@ -17,6 +17,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from app.api.routes import chat as chat_routes
 from app.core.security import hash_password
 from app.db.models import (
     ChatTurn,
@@ -28,6 +29,33 @@ from app.db.models import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+# Nội dung tất định mà fake ChatAgent trả về (thay container thật trong test T11).
+FAKE_AGENT_ANSWER = "Phản hồi kiểm thử từ ChatAgent."
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fake_chatagent(monkeypatch):
+    """Thay seam `_stream_agent` bằng stream SSE tất định (không cần container).
+
+    Mô phỏng đúng chuỗi event `chat.sse/1` của ChatAgent: start → token → usage →
+    done. Backend T11 là bên persist assistant message trong test này (agent thật
+    tự gọi completion, idempotent).
+    """
+
+    async def _fake_stream(body):
+        events = [
+            {"v": "chat.sse/1", "seq": 0, "type": "start", "turn_id": body.get("turn_id"), "message_id": None},
+            {"v": "chat.sse/1", "seq": 1, "type": "token", "text": FAKE_AGENT_ANSWER},
+            {"v": "chat.sse/1", "seq": 2, "type": "usage", "input_tokens": 3, "output_tokens": 7},
+            {"v": "chat.sse/1", "seq": 3, "type": "done", "message_id": None, "finish_reason": "stop"},
+        ]
+        for ev in events:
+            yield f"event: {ev['type']}"
+            yield f"data: {json.dumps(ev)}"
+            yield ""
+
+    monkeypatch.setattr(chat_routes, "_stream_agent", _fake_stream)
 
 
 async def _login(client, email: str, password: str) -> str:
@@ -446,3 +474,37 @@ async def test_cancel_turn_not_in_conversation_404(api, session_factory):
         headers=api["owner_h"],
     )
     assert r.status_code == 404
+
+
+async def test_agent_unreachable_emits_error_and_audits_gateway(api, monkeypatch):
+    """Finding 1: agent không kết nối được → event `error`, turn `failed`,
+    audit `chat.turn.gateway` (backend disconnect path)."""
+    from app.api.routes import chat as chat_routes
+    from app.db.models import AuditLog
+
+    async def _boom(body):
+        raise RuntimeError("chatagent down")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(chat_routes, "_stream_agent", _boom)
+
+    conv = await _create_conv(api)
+    r = await api["client"].post(
+        f"/api/chat/conversations/{conv['id']}/messages",
+        json={"content": "hi"},
+        headers=api["owner_h"],
+    )
+    assert r.status_code == 200, r.text
+    events = _parse_sse(r.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["category"] == "chat_stream_lost"
+
+    async with api["session_factory"]() as s:
+        turn = (
+            await s.execute(
+                select(ChatTurn).where(ChatTurn.conversation_id == uuid.UUID(conv["id"]))
+            )
+        ).scalar_one()
+        assert turn.status == "failed"
+        actions = (await s.execute(select(AuditLog.action))).scalars().all()
+    assert "chat.turn.gateway" in actions

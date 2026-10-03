@@ -276,6 +276,24 @@ def _tokenize(query: str) -> list[_Tok]:
     return toks
 
 
+def _qualified_path(toks: list[_Tok], idx: int) -> list[str]:
+    """Tên gọi đầy đủ (dotted) quanh `toks[idx]` — ident đứng ngay trước `(`.
+
+    Đi ngược qua chuỗi `ident ('.' ident)*`. Nếu token ngay trước dấu `.` không
+    phải ident (chuỗi/ngoặc/literal) thì chèn marker `<expr>` để đường dẫn vẫn
+    được coi là qualified (fail closed). Trả về `[tên]` khi là gọi trần.
+    """
+    parts = [toks[idx].text]
+    i = idx
+    while i - 2 >= 0 and toks[i - 1].kind == "punct" and toks[i - 1].text == ".":
+        if toks[i - 2].kind != "ident":
+            parts.insert(0, "<expr>")
+            break
+        parts.insert(0, toks[i - 2].text)
+        i -= 2
+    return parts
+
+
 def validate_vql(query: str) -> None:
     """Fail-closed: raise `VqlPolicyError` nếu `query` không chứng minh được an toàn.
 
@@ -339,6 +357,17 @@ def validate_vql(query: str) -> None:
         )
         if not is_call:
             continue
+
+        # Một callable đi qua dấu `.` (ví dụ `Artifact.Custom.clients()`) là một
+        # callable KHÁC với tên trần `clients` trong allowlist. Allowlist chỉ chứa
+        # tên trần, nên mọi lời gọi có định danh đầy đủ (qualified) đều bị từ chối.
+        # Điều này bịt bypass khi ident cuối khớp allowlist nhưng định danh đầy đủ thì
+        # không (spec F1 item 3/4).
+        qualified = _qualified_path(toks, idx)
+        if len(qualified) > 1:
+            raise VqlPolicyError(
+                f"cấm gọi định danh đầy đủ (qualified callable): {'.'.join(qualified)}"
+            )
 
         if low in SIDE_EFFECT_FUNCTIONS:
             raise VqlPolicyError(f"cấm hàm side-effect/dynamic: {t.text}")

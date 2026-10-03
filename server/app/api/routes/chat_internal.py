@@ -88,15 +88,24 @@ async def require_capability(
     return claims
 
 
-async def _load_intent(
+async def _load_intent_locked(
     db: AsyncSession, turn_id: uuid.UUID, tool_call_id: str
 ) -> ChatAuditIntent:
+    """Khóa hàng intent (`SELECT ... FOR UPDATE`) khi outcome/reconcile.
+
+    Bắt buộc cho `outcome`/`reconcile`: hai request song song (outcome thật +
+    reconciler, hoặc 2 outcome khác giá trị) phải được tuần tự hóa để
+    "bản ghi terminal đầu thắng" là atomic — nếu không, cả hai cùng đọc
+    `outcome='pending'` rồi cùng ghi.
+    """
     intent = (
         await db.execute(
-            select(ChatAuditIntent).where(
+            select(ChatAuditIntent)
+            .where(
                 ChatAuditIntent.turn_id == turn_id,
                 ChatAuditIntent.tool_call_id == tool_call_id,
             )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if intent is None:
@@ -377,7 +386,7 @@ async def audit_outcome(
     if body.outcome not in OUTCOME_VALUES:
         raise _err(400, "chat_validation", f"outcome không hợp lệ: {body.outcome!r}")
 
-    intent = await _load_intent(db, body.turn_id, body.tool_call_id)
+    intent = await _load_intent_locked(db, body.turn_id, body.tool_call_id)
     if intent.outcome != "pending":
         if intent.outcome == body.outcome:
             return OutcomeOut(outcome=intent.outcome, audit_id=0, idempotent=True)
@@ -421,7 +430,7 @@ async def audit_reconcile(
     db: AsyncSession = Depends(get_db),
 ) -> ReconcileOut:
     """Đóng intent mồ côi quá `audit_outcome_deadline` → `unknown` (actor từ intent)."""
-    intent = await _load_intent(db, body.turn_id, body.tool_call_id)
+    intent = await _load_intent_locked(db, body.turn_id, body.tool_call_id)
     if intent.outcome != "pending":
         return ReconcileOut(outcome=intent.outcome, reconciled=False)
 

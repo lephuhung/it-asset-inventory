@@ -13,19 +13,29 @@ SSE schema `chat.sse/1`: `start|token|usage|done`; lỗi trong stream → event 
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_super_admin
 from app.core.audit import append_audit
+from app.core.chat_capability import (
+    hash_completion_token,
+    new_completion_token,
+    sign_capability,
+)
 from app.core.config import settings
+from app.core.security import decrypt_aes_gcm
 from app.db.models import (
     ChatConversation,
     ChatMessage,
@@ -47,7 +57,7 @@ from app.schemas.chat import (
     MessageOut,
     SendMessageIn,
 )
-from app.services.budget import reserve
+from app.services.budget import BudgetUnavailable, reserve
 from app.services.chat_turns import (
     ACTIVE_STATUSES,
     ActiveTurnExists,
@@ -63,12 +73,9 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 SSE_SCHEMA_VERSION = "chat.sse/1"
 
-# P1 stub: chatagent (T12–T15) chưa nối. Nội dung mẫu để kiểm tra luồng SSE +
-# persist assistant message. Thay bằng stream thật khi chatagent sẵn sàng.
-STUB_ASSISTANT_CONTENT = (
-    "[chat P1] Trợ lý chưa được nối (chatagent T12–T15). "
-    "Đây là phản hồi mẫu để kiểm tra luồng SSE và lưu trữ."
-)
+# Timeout gọi ChatAgent: connect ngắn, read dài (stream turn).
+_AGENT_CONNECT_TIMEOUT = 5.0
+_AGENT_READ_TIMEOUT = 300.0
 
 
 def _err(status: int, category: str, hint: str) -> HTTPException:
@@ -130,19 +137,35 @@ async def _reserve_budget(db: AsyncSession, turn_id: uuid.UUID) -> None:
     """Reserve ngân sách token cho turn (F11/R8) — fail closed nếu vượt.
 
     Không cấu hình `daily_token_budget` → không giới hạn (không reserve).
+
+    Dịch mọi lỗi hạ tầng ngân sách thành `503 [chat_budget_unavailable]`
+    (spec F11/R8): DB ngân sách không khả dụng phải fail closed cho execution MỚI,
+    không được rò rỉ `SQLAlchemyError` thô ra HTTP.
     """
-    cfg = await db.get(LlmConfig, 1)
-    if cfg is None or cfg.daily_token_budget is None:
-        return
-    reservation = await reserve(
-        db,
-        scope="chat_turn",
-        operation_id=turn_id,
-        association_id=turn_id,
-        envelope=cfg.max_tokens,
-        budget=cfg.daily_token_budget,
-    )
+    try:
+        cfg = await db.get(LlmConfig, 1)
+        if cfg is None or cfg.daily_token_budget is None:
+            return
+        reservation = await reserve(
+            db,
+            scope="chat_turn",
+            operation_id=turn_id,
+            association_id=turn_id,
+            envelope=cfg.max_tokens,
+            budget=cfg.daily_token_budget,
+        )
+    except BudgetUnavailable as exc:
+        await db.rollback()
+        raise _err(
+            503, "chat_budget_unavailable", "dịch vụ ngân sách tạm thời không khả dụng"
+        ) from exc
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        raise _err(
+            503, "chat_budget_unavailable", "không truy cập được dữ liệu ngân sách"
+        ) from exc
     if reservation is None:
+        await db.rollback()
         raise _err(429, "chat_budget_exceeded", "vượt ngân sách token hôm nay")
 
 
@@ -184,7 +207,11 @@ async def create_conversation(
         actor=str(user.id),
         target=str(conv.id),
         machine_id=conv.machine_id,
-        details={"title": conv.title, "machine_id": str(conv.machine_id) if conv.machine_id else None},
+        # `machine_id` KHÔNG được nằm trong `details`: nó là lookup mutable và bị
+        # `_content_hash_v2` hash nếu lọt vào details, phá vỡ quy tắc R3 (chỉ
+        # `machine_ref` bất biến mới hash-bound). Nó đã được truyền riêng qua kwarg
+        # `machine_id=` ở trên.
+        details={"title": conv.title},
     )
     await db.commit()
     await db.refresh(conv)
@@ -269,7 +296,9 @@ async def patch_conversation(
         if body.machine_id is not None and (await db.get(Machine, body.machine_id)) is None:
             raise _err(404, "chat_not_found", "máy không tồn tại")
         conv.machine_id = body.machine_id
-        changed["machine_id"] = str(body.machine_id) if body.machine_id else None
+        # `machine_id` KHÔNG vào `details` (bị hash v2) — chỉ báo cờ đã đổi; giá trị
+        # thật truyền qua kwarg `machine_id=` bên dưới (R3).
+        changed["machine_id_changed"] = True
     conv.updated_at = datetime.now(UTC)
     await db.flush()
     await append_audit(
@@ -307,71 +336,291 @@ async def delete_conversation(
 # ── Send + SSE ───────────────────────────────────────────────────────────────
 
 
-async def _stream_stub(
-    db: AsyncSession, turn: ChatTurn, assistant_content: str
-):
-    """SSE stub: start → token* → usage → complete → done (P1)."""
-    seq = 0
+async def _stream_agent(body: dict) -> AsyncIterator[str]:
+    """Seam gọi `chatagent POST /v1/chat` và yield từng dòng SSE thô (T11).
+
+    Là điểm duy nhất mở kết nối tới container chatagent — test patch seam này để
+    chạy không cần container thật.
+    """
+    headers = {
+        "X-Service-Token": settings.chat_service_token,
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    timeout = httpx.Timeout(
+        connect=_AGENT_CONNECT_TIMEOUT, read=_AGENT_READ_TIMEOUT, write=30.0, pool=5.0
+    )
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client, client.stream(
+        "POST", f"{settings.chat_agent_url}/v1/chat", json=body, headers=headers
+    ) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            yield line
+
+
+async def _build_agent_request(
+    db: AsyncSession,
+    *,
+    conv: ChatConversation,
+    turn: ChatTurn,
+    actor_id: uuid.UUID,
+    machine_id: uuid.UUID | None,
+    machine_ref: str | None,
+) -> dict:
+    """Dựng body `chat.agent.request/1.0` (spec §"Agent API") + cấp completion token.
+
+    Cấp `chat_context` (capability HS256 turn-scoped) và `completion_token`; lưu
+    hash của completion token vào turn để route `/turns/{id}/complete` xác thực.
+    """
+    completion_token = new_completion_token()
+    turn.completion_token_hash = hash_completion_token(completion_token)
+    await db.flush()
+
+    capability = sign_capability(
+        actor_id, conv.id, turn.id, turn.request_id, ttl=300
+    )
+
+    history = (
+        await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conv.id)
+            .order_by(ChatMessage.created_at, ChatMessage.id)
+            .limit(settings.chat_max_history_messages)
+        )
+    ).scalars().all()
+    messages = [
+        {"role": m.role, "content": m.content}
+        for m in history
+        if m.role in ("user", "assistant")
+    ]
+
+    machine_context = None
+    if machine_id is not None:
+        machine_context = {
+            "machine_id": str(machine_id),
+            "client_id": None,
+            "hostname": machine_ref,
+        }
+
+    llm_runtime = await _agent_llm_runtime(db)
+
+    return {
+        "schema_version": "chat.agent.request/1.0",
+        "conversation_id": str(conv.id),
+        "turn_id": str(turn.id),
+        "request_id": str(turn.request_id),
+        "machine_context": machine_context,
+        "messages": messages,
+        "chat_context": capability,
+        "llm_runtime": llm_runtime,
+        "velociraptor_api_client_yaml": None,
+        "completion_token": completion_token,
+        "limits": {
+            "max_tool_calls": settings.chat_max_tool_calls_per_turn,
+            "max_evidence_chars": settings.chat_evidence_chars,
+            "wall_clock_seconds": settings.chat_wall_clock_seconds,
+        },
+    }
+
+
+async def _agent_llm_runtime(db: AsyncSession) -> dict:
+    """Lấy `llm_runtime` từ `LlmConfig` cho request gửi ChatAgent."""
+    cfg = await db.get(LlmConfig, 1)
+    if cfg is None:
+        return {
+            "base_url": "",
+            "api_key": "",
+            "model": "",
+            "temperature": 0.2,
+            "timeout_seconds": 120,
+            "max_tokens": 4096,
+            "allow_cloud": False,
+            "system_prompt": "",
+        }
+    api_key = ""
+    if cfg.api_key_encrypted:
+        try:
+            api_key = decrypt_aes_gcm(cfg.api_key_encrypted)
+        except Exception:  # noqa: BLE001
+            logger.warning("Giải mã LLM api_key thất bại khi dispatch ChatAgent")
+    return {
+        "base_url": cfg.base_url,
+        "api_key": api_key,
+        "model": cfg.model,
+        "temperature": float(cfg.temperature) if cfg.temperature is not None else 0.2,
+        "timeout_seconds": cfg.request_timeout,
+        "max_tokens": cfg.max_tokens,
+        "allow_cloud": cfg.allow_cloud,
+        "system_prompt": cfg.system_prompt or "",
+    }
+
+
+def _parse_agent_event(data_lines: list[str]) -> dict | None:
+    """Gộp các dòng `data:` thành 1 payload JSON; bỏ qua block rỗng."""
+    if not data_lines:
+        return None
     try:
-        await claim_turn(db, turn.id)
+        return json.loads("\n".join(data_lines))
+    except ValueError:
+        return None
+
+
+async def _stream_from_agent(
+    db: AsyncSession,
+    *,
+    conv: ChatConversation,
+    turn: ChatTurn,
+    actor_id: uuid.UUID,
+    machine_id: uuid.UUID | None,
+    machine_ref: str | None,
+):
+    """Proxy SSE thật từ ChatAgent `/v1/chat` (T11) — relay + persist winner.
+
+    Claim turn → dựng request → gọi agent → relay từng event `chat.sse/1`. Trên
+    `done`/`error` (hoặc agent không kết nối được), gọi `complete_turn` để đảm bảo
+    assistant message được persist (idempotent với durable completion của agent).
+    """
+    seq = 0
+    answer_parts: list[str] = []
+    usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    finish_reason = "stop"
+    error_category: str | None = None
+    error_event: dict | None = None
+    # Chụp trước mọi commit/rollback: ORM object có thể bị expire sau rollback
+    # (MissingGreenlet nếu đọc `turn.id` trong nhánh lỗi).
+    turn_id = turn.id
+
+    try:
+        await claim_turn(db, turn_id)
         await db.commit()
         yield _sse(
             {
                 "v": SSE_SCHEMA_VERSION,
                 "seq": seq,
                 "type": "start",
-                "turn_id": str(turn.id),
+                "turn_id": str(turn_id),
                 "message_id": None,
             }
         )
         seq += 1
-        for chunk in _chunk_text(assistant_content):
-            yield _sse(
-                {"v": SSE_SCHEMA_VERSION, "seq": seq, "type": "token", "text": chunk}
-            )
-            seq += 1
 
-        result = await complete_turn(
+        body = await _build_agent_request(
             db,
-            turn.id,
-            content=assistant_content,
-            finish_reason="stop",
-            usage={"input_tokens": 0, "output_tokens": 0},
+            conv=conv,
+            turn=turn,
+            actor_id=actor_id,
+            machine_id=machine_id,
+            machine_ref=machine_ref,
         )
         await db.commit()
 
-        yield _sse(
-            {
-                "v": SSE_SCHEMA_VERSION,
-                "seq": seq,
-                "type": "usage",
-                "input_tokens": 0,
-                "output_tokens": 0,
-            }
+        data_lines: list[str] = []
+        async for line in _stream_agent(body):
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+                continue
+            # Dòng trống = hết 1 block SSE của agent → xử lý payload đã gom.
+            if line.strip():
+                continue
+            event = _parse_agent_event(data_lines)
+            data_lines = []
+            if event is None:
+                continue
+            etype = event.get("type")
+            if etype in ("start", "usage", "done", "error"):
+                if etype == "usage":
+                    usage = {
+                        "input_tokens": int(event.get("input_tokens", 0) or 0),
+                        "output_tokens": int(event.get("output_tokens", 0) or 0),
+                    }
+                elif etype == "done":
+                    finish_reason = event.get("finish_reason", "stop")
+                elif etype == "error":
+                    error_category = event.get("category", "chat_internal")
+                    error_event = event
+                # `start` đã do backend phát — relay các event còn lại cho portal.
+                if etype == "start":
+                    continue
+            elif etype == "token":
+                answer_parts.append(event.get("text", ""))
+            # relay event của agent (re-sequenced theo stream của backend)
+            payload = {k: v for k, v in event.items() if k not in ("seq", "v")}
+            payload["v"] = SSE_SCHEMA_VERSION
+            payload["seq"] = seq
+            yield _sse(payload)
+            seq += 1
+
+        if error_event is None and finish_reason not in ("canceled", "error"):
+            finish_reason = "stop"
+
+        await _finalize_turn(
+            db,
+            turn_id=turn_id,
+            content="".join(answer_parts),
+            usage=usage,
+            finish_reason=finish_reason,
+            error_category=error_category,
         )
-        seq += 1
-        yield _sse(
-            {
-                "v": SSE_SCHEMA_VERSION,
-                "seq": seq,
-                "type": "done",
-                "message_id": str(result.message_id) if result.message_id else None,
-                "finish_reason": "stop",
-            }
-        )
-    except Exception:  # lỗi trong stream → event `error` rồi đóng
-        logger.exception("chat.turn %s: stream thất bại", turn.id)
+        await db.commit()
+    except Exception:  # agent/DB không kết nối được → stream lỗi, vẫn persist kết quả
+        logger.exception("chat.turn %s: proxy ChatAgent thất bại", turn_id)
         await db.rollback()
+        error_event = _error("chat_stream_lost", "mất kết nối tới ChatAgent")
+        try:
+            await _finalize_turn(
+                db,
+                turn_id=turn_id,
+                content="".join(answer_parts),
+                usage=usage,
+                finish_reason="error",
+                error_category="chat_stream_lost",
+            )
+            await db.commit()
+            await append_audit(
+                db,
+                action="chat.turn.gateway",
+                actor=str(actor_id),
+                target=str(turn_id),
+                details={"reason": "agent_unreachable", "category": "chat_stream_lost"},
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("chat.turn %s: persist sau lỗi proxy thất bại", turn_id)
         yield _sse(
             {
                 "v": SSE_SCHEMA_VERSION,
                 "seq": seq,
                 "type": "error",
-                "category": "chat_internal",
-                "hint": "lỗi xử lý turn",
-                "retryable": False,
+                **error_event,
             }
         )
+
+
+async def _finalize_turn(
+    db: AsyncSession,
+    *,
+    turn_id: uuid.UUID,
+    content: str,
+    usage: dict,
+    finish_reason: str,
+    error_category: str | None,
+) -> None:
+    """Persist assistant message qua T8 `complete_turn` (idempotent theo digest)."""
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    await complete_turn(
+        db,
+        turn_id,
+        content=content,
+        finish_reason=finish_reason,
+        usage=usage,
+        content_digest=digest,
+        error_category=error_category,
+    )
+
+
+def _error(category: str, hint: str, *, retryable: bool = False) -> dict:
+    return {"category": category, "hint": hint, "retryable": retryable, "http_status": 502}
 
 
 async def _stream_replay(db: AsyncSession, turn: ChatTurn, stored: ChatMessage | None):
@@ -524,10 +773,24 @@ async def send_message(
     conv.message_count += 1
     conv.last_message_at = datetime.now(UTC)
     conv.updated_at = datetime.now(UTC)
-    await db.commit()
+    try:
+        await db.commit()
+    except SQLAlchemyError as exc:
+        # Ghi nhận admission thất bại (DB) → fail closed như ngân sách không khả dụng.
+        await db.rollback()
+        raise _err(
+            503, "chat_budget_unavailable", "không ghi nhận được lượt gửi (admission)"
+        ) from exc
 
     return StreamingResponse(
-        _stream_stub(db, turn, STUB_ASSISTANT_CONTENT),
+        _stream_from_agent(
+            db,
+            conv=conv,
+            turn=turn,
+            actor_id=user.id,
+            machine_id=machine_id,
+            machine_ref=machine_ref,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )

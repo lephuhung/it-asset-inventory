@@ -587,3 +587,80 @@ async def test_outstanding_limit_per_client() -> None:
     with pytest.raises(CollectionDeniedError):
         registry.rate_limiter.try_acquire("C.1")
     registry.rate_limiter.try_acquire("C.2")  # client khác vẫn OK
+
+
+# ── Final-fix regressions: cancellation/timeout outcome + resolver overrun ────
+
+
+async def test_cancelled_bridge_call_audits_canceled_not_ok() -> None:
+    """Finding 5: hủy giữa lời gọi ghi outcome `canceled`, KHÔNG phải `ok`."""
+    import asyncio
+
+    events: list = []
+
+    class CancelBridge(RecordingBridge):
+        async def call_tool(self, name, arguments):
+            self.events.append(("bridge", name, dict(arguments)))
+            if name == "windows_pslist":
+                raise asyncio.CancelledError()
+            return await super().call_tool(name, arguments)
+
+    bridge = CancelBridge(events=events)
+    backend = RecordingBackend(events=events)
+    registry = await build_tools(bridge, backend, _settings())
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.run(_ctx("tc-cancel"), "windows_pslist", {"hostname": "WS-01"})
+
+    outcomes = [e for e in events if e[0] == "outcome"]
+    assert outcomes, "phải ghi outcome"
+    assert outcomes[-1][2] == "canceled"
+
+
+async def test_collection_flow_deadline_audits_unknown_and_holds_slot() -> None:
+    """Finding 6: vượt deadline flow → outcome `unknown` + giữ slot per-machine."""
+    import asyncio
+
+    from chatagent.tools import CollectionFlowTimeoutError
+
+    events: list = []
+
+    class SlowBridge(RecordingBridge):
+        async def call_tool(self, name, arguments):
+            self.events.append(("bridge", name, dict(arguments)))
+            if name == "windows_pslist":
+                await asyncio.sleep(5)
+            return await super().call_tool(name, arguments)
+
+    bridge = SlowBridge(events=events)
+    backend = RecordingBackend(events=events)
+    registry = await build_tools(
+        bridge, backend, _settings(collection_flow_deadline_seconds=1)
+    )
+
+    with pytest.raises(CollectionFlowTimeoutError):
+        await registry.run(_ctx("tc-timeout"), "windows_pslist", {"hostname": "WS-01"})
+
+    outcomes = [e for e in events if e[0] == "outcome"]
+    assert outcomes and outcomes[-1][2] == "unknown"
+    # Slot per-machine KHÔNG được giải phóng (flow chưa verified terminal).
+    with pytest.raises(CollectionDeniedError):
+        registry.rate_limiter.try_acquire("C.autoresolved")
+
+
+async def test_resolve_total_overrun_fails_closed() -> None:
+    """Finding 8: offset + len(items) > total → fail closed (không tự chọn)."""
+    bridge = RecordingBridge(
+        names={"search_clients"},
+        responses={
+            "search_clients": _search_response(
+                [
+                    {"client_id": "C.1", "os_info": {"hostname": "ws-01"}},
+                    {"client_id": "C.2", "os_info": {"hostname": "ws-01"}},
+                ],
+                1,
+            )
+        },
+    )
+    with pytest.raises(CollectionDeniedError):
+        await resolve_client_id(bridge, "WS-01", settings=_settings())

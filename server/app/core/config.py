@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     chat_service_token: str = Field(
         default="CHANGE_ME_CHAT_SERVICE_TOKEN_0000", min_length=16
     )
+    # URL ChatAgent container (T11) — backend gọi `POST {chat_agent_url}/v1/chat`
+    # để stream SSE thật. Container không publish port; chỉ backend gọi được.
+    chat_agent_url: str = "http://127.0.0.1:8091"
     # Intent audit chưa có outcome quá ngưỡng này (giây) → reconciler ghi `unknown`.
     audit_outcome_deadline: int = 600
     # Cửa sổ ân hạn cho completion đến muộn sau khi turn đã terminal (T8).
@@ -73,6 +76,13 @@ class Settings(BaseSettings):
     chat_max_messages_per_conversation: int = 100
     # Trần số hội thoại active/người dùng (spec `chat_max_active_conversations_per_user`).
     chat_max_active_conversations_per_user: int = 3
+    # Trần per-turn gửi sang ChatAgent (spec F11 `limits`).
+    chat_max_tool_calls_per_turn: int = 12
+    chat_evidence_chars: int = 120000
+    chat_wall_clock_seconds: int = 300
+    # Trần history gửi kèm mỗi lượt (spec F11).
+    chat_max_history_messages: int = 40
+    chat_max_history_chars: int = 60000
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

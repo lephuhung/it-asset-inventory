@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     # Số trang tối đa khi resolve hostname → client_id (fail closed nếu vượt).
     resolver_max_pages: int = Field(default=20, ge=1)
     resolver_page_size: int = Field(default=200, ge=1)
+    # Ngân sách thời gian resolve (spec V3-5: client mới enroll có thể chưa visible).
+    resolver_consistency_window_seconds: float = Field(default=5.0, gt=0)
 
     # Egress: mặc định fail-closed cho endpoint LLM private (spec R7).
     egress_allow_cloud: bool = False

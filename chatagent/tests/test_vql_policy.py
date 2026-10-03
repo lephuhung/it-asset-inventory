@@ -213,6 +213,38 @@ def test_accepts_backtick_quoted_allowed_plugin() -> None:
     _accept("SELECT * FROM `info`()")
 
 
+# ── Qualified callables (C3) ────────────────────────────────────────────────
+
+
+def test_rejects_qualified_allowlisted_plugin() -> None:
+    """`Artifact.Custom.clients()` có ident cuối `clients` trong allowlist nhưng định
+    danh đầy đủ KHÔNG — phải bị từ chối."""
+    _reject("SELECT * FROM Artifact.Custom.clients()")
+
+
+def test_rejects_qualified_allowlisted_function() -> None:
+    _reject("SELECT Ns.count() FROM clients()")
+
+
+def test_rejects_deep_qualified_side_effect() -> None:
+    _reject("SELECT Scope.collect_client() FROM scope()")
+
+
+def test_rejects_qualified_plugin_in_from() -> None:
+    _reject("SELECT * FROM Ns.pslist()")
+
+
+def test_rejects_method_call_on_string_literal() -> None:
+    _reject('SELECT "foo".bar() FROM scope()')
+
+
+def test_accepts_bare_names_after_c3() -> None:
+    """Đảm bảo fix C3 không chặn nhầm gọi trần hợp lệ."""
+    _accept("SELECT count() FROM clients()")
+    _accept("SELECT lower(name) FROM clients()")
+    _accept("SELECT * FROM scope()")
+
+
 # ── Caps (exported for execution in T15) ────────────────────────────────────
 
 

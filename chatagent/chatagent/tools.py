@@ -24,8 +24,11 @@ Helper nào không enforce được bound → fail closed.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -34,9 +37,11 @@ from typing import Any, Protocol
 
 from chatagent.backend_client import BackendClient
 from chatagent.config import Settings
-from chatagent.vql_policy import validate_vql
+from chatagent.vql_policy import VQL_MAX_BYTES, validate_vql
 
 CATEGORY_DENIED = "chat_collection_denied"
+
+logger = logging.getLogger(__name__)
 
 # ── Manifest ─────────────────────────────────────────────────────────────────
 
@@ -166,6 +171,15 @@ class CollectionDeniedError(ToolRegistryError):
         super().__init__(f"[{CATEGORY_DENIED}] {hint}")
 
 
+class CollectionFlowTimeoutError(CollectionDeniedError):
+    """Collection vượt deadline flow — flow có thể vẫn chạy phía Velociraptor.
+
+    Spec F9/R6: caller timeout KHÔNG phải flow-level guarantee; quá hạn → outcome
+    `unknown`, **không** huỷ flow, và **không** giải phóng slot per-machine (vì flow
+    chưa được xác minh terminal).
+    """
+
+
 # ── Kết quả ──────────────────────────────────────────────────────────────────
 
 
@@ -248,6 +262,18 @@ def args_digest(arguments: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _enforce_byte_cap(result: ToolResult, max_bytes: int) -> None:
+    """Fail closed khi kết quả vượt trần byte (spec F1 item 5).
+
+    `run_vql` chỉ VQL server-side; byte cap enforce TẠI EXECUTOR, không chỉ ở
+    validator — kết quả vượt trần bị từ chối thay vì trả về nguyên khối.
+    """
+    if result.byte_count > max_bytes:
+        raise CollectionDeniedError(
+            f"{result.tool}: kết quả vượt trần byte ({result.byte_count} > {max_bytes})"
+        )
+
+
 # ── Hostname / identity ──────────────────────────────────────────────────────
 
 
@@ -283,17 +309,25 @@ async def resolve_client_id(bridge: McpBridge, hostname: Any, *, settings: Setti
     """Resolve hostname → đúng một `client_id` (V3-5/V5/V6) — fail closed.
 
     Không tự chọn khi mơ hồ: ≥2 `client_id` phân biệt, 0 match, `total` thiếu/đổi,
-    phân trang không đủ, hoặc vượt số trang tối đa → `chat_collection_denied`.
+    phân trang không đủ, phân trang vượt `total`, record lặp giữa trang, hoặc vượt
+    số trang/ngân sách thời gian resolve → `chat_collection_denied`.
     """
     target = normalize_hostname(hostname)
     if not target:
         raise CollectionDeniedError("hostname rỗng/không hợp lệ")
 
+    deadline = time.monotonic() + settings.resolver_consistency_window_seconds
     found: set[str] = set()
+    seen_ids: set[str] = set()
     offset = 0
     total: int | None = None
     pages = 0
     while True:
+        if time.monotonic() > deadline:
+            raise CollectionDeniedError(
+                f"resolve hostname {target!r} vượt ngân sách thời gian "
+                f"{settings.resolver_consistency_window_seconds}s"
+            )
         if pages >= settings.resolver_max_pages:
             raise CollectionDeniedError(
                 f"resolve hostname {target!r} vượt {settings.resolver_max_pages} trang"
@@ -312,6 +346,10 @@ async def resolve_client_id(bridge: McpBridge, hostname: Any, *, settings: Setti
         items = payload.get("items")
         if not isinstance(items, list):
             raise CollectionDeniedError("SearchClients thiếu `items` (phân trang không xác định)")
+        if len(items) > settings.resolver_page_size:
+            raise CollectionDeniedError(
+                f"SearchClients trả trang vượt page_size {settings.resolver_page_size}"
+            )
         page_total = payload.get("total")
         if isinstance(page_total, bool) or not isinstance(page_total, int) or page_total < 0:
             raise CollectionDeniedError("SearchClients thiếu `total` hợp lệ")
@@ -323,8 +361,17 @@ async def resolve_client_id(bridge: McpBridge, hostname: Any, *, settings: Setti
             )
         if page_total == 0 and items:
             raise CollectionDeniedError("total=0 nhưng items không rỗng")
+        if offset + len(items) > page_total:
+            raise CollectionDeniedError(
+                f"trang vượt `total` (offset {offset} + {len(items)} > {page_total})"
+            )
         for item in items:
             client_id, item_hostname = _validated_identity(item, offset=offset)
+            if client_id in seen_ids:
+                raise CollectionDeniedError(
+                    f"record lặp giữa các trang (client_id {client_id!r})"
+                )
+            seen_ids.add(client_id)
             if item_hostname == target:
                 found.add(client_id)
         pages += 1
@@ -472,6 +519,7 @@ class ToolRegistry:
             params.get("time_range_hours"), self._settings
         )
         self.rate_limiter.try_acquire(client_id)
+        flow_may_be_running = False
         try:
             # Argument do CODE sinh — model không thể đặt parameters/fields/pagination.
             arguments: dict[str, Any] = {
@@ -480,6 +528,8 @@ class ToolRegistry:
                 "limit": self._settings.collection_max_rows,
                 "offset": 0,
             }
+            # Collection dùng deadline riêng (spec F9/R6); vượt hạn → outcome `unknown`,
+            # KHÔNG huỷ flow. `_audited_call` map timeout → `CollectionFlowTimeoutError`.
             return await self._audited_call(
                 ctx,
                 tool=tool,
@@ -487,9 +537,18 @@ class ToolRegistry:
                 arguments=arguments,
                 client_id=client_id,
                 flow_id=None,
+                deadline_seconds=float(self._settings.collection_flow_deadline_seconds),
+                manifest_platforms=artifact.supported_platforms,
             )
+        except CollectionFlowTimeoutError:
+            # Flow có thể vẫn chạy phía Velociraptor → KHÔNG giải phóng slot
+            # per-machine (spec F9/R6: chưa xác minh terminal thì fail closed cho
+            # collection kế tiếp). Reconciliation sẽ đóng outcome `unknown`.
+            flow_may_be_running = True
+            raise
         finally:
-            self.rate_limiter.release(client_id)
+            if not flow_may_be_running:
+                self.rate_limiter.release(client_id)
 
     # ── Server-side Velociraptor tools ───────────────────────────────────────
 
@@ -507,14 +566,19 @@ class ToolRegistry:
             }
         else:
             arguments = self._read_arguments(spec, params)
-        return await self._audited_call(
+        result = await self._audited_call(
             ctx,
             tool=spec.name,
             bridge_name=spec.bridge_name,
             arguments=arguments,
             client_id=client_id if isinstance(client_id, str) else None,
             flow_id=flow_id if isinstance(flow_id, str) else None,
+            deadline_seconds=float(self._settings.collection_flow_deadline_seconds),
         )
+        if spec.kind == "vql":
+            # Trần byte VQL enforce tại executor (không chỉ validator) — spec F1 item 5.
+            _enforce_byte_cap(result, VQL_MAX_BYTES)
+        return result
 
     @staticmethod
     def _read_arguments(spec: ServerTool, params: dict[str, Any]) -> dict[str, Any]:
@@ -537,8 +601,14 @@ class ToolRegistry:
         arguments: dict[str, Any],
         client_id: str | None,
         flow_id: str | None,
+        deadline_seconds: float | None = None,
+        manifest_platforms: frozenset[str] | None = None,
     ) -> ToolResult:
-        """Intent TRƯỚC khi chạy (fail → không chạy); outcome SAU (kể cả lỗi)."""
+        """Intent TRƯỚC khi chạy (fail → không chạy); outcome SAU (kể cả lỗi/hủy).
+
+        CancelledError/timeout ghi outcome `canceled`/`unknown` (KHÔNG phải `ok`).
+        `flow_id` thực tế do bridge báo được forward vào outcome (spec F2).
+        """
         digest = args_digest(arguments)
         intent = await self._backend.audit_intent(
             capability=ctx.capability,
@@ -555,33 +625,69 @@ class ToolRegistry:
             )
 
         started = time.monotonic()
-        outcome = "ok"
+        # Mặc định `unknown`: CHỈ đổi thành `ok` khi lời gọi chứng minh đã hoàn tất
+        # thành công. Mọi nhánh lỗi/hủy/quá hạn đặt giá trị riêng trước `finally`.
+        outcome = "unknown"
+        result_flow_id = flow_id
         try:
-            payload = await self._bridge.call_tool(bridge_name, arguments)
+            if deadline_seconds is not None:
+                payload = await asyncio.wait_for(
+                    self._bridge.call_tool(bridge_name, arguments), timeout=deadline_seconds
+                )
+            else:
+                payload = await self._bridge.call_tool(bridge_name, arguments)
             duration_ms = int((time.monotonic() - started) * 1000)
             if not isinstance(payload, dict):
+                outcome = "error"
                 raise CollectionDeniedError(f"{tool}: bridge trả payload không hợp lệ")
             if not payload.get("ok", True):
                 outcome = "error"
+            else:
+                outcome = "ok"
+            reported_flow_id = payload.get("flow_id")
+            if isinstance(reported_flow_id, str) and reported_flow_id:
+                result_flow_id = reported_flow_id
+            if manifest_platforms is not None:
+                platform = payload.get("platform")
+                if isinstance(platform, str) and platform and platform not in manifest_platforms:
+                    outcome = "error"
+                    raise CollectionDeniedError(
+                        f"{tool}: platform {platform!r} không nằm trong "
+                        f"{sorted(manifest_platforms)}"
+                    )
             return ToolResult.from_bridge(
                 tool,
                 payload,
                 self._settings,
                 client_id=client_id,
-                flow_id=payload.get("flow_id", flow_id),
+                flow_id=result_flow_id,
                 duration_ms=duration_ms,
             )
-        except Exception:
+        except asyncio.CancelledError:
+            # Hủy turn: outcome KHÔNG được là `ok` (spec F2/R2).
+            outcome = "canceled"
+            raise
+        except TimeoutError as exc:
+            # Quá deadline: flow giữ nguyên, outcome `unknown` (spec F9/R6).
+            # Ném `CollectionFlowTimeoutError` để `_run_collection` giữ slot
+            # per-machine (flow chưa được xác minh terminal).
+            outcome = "unknown"
+            raise CollectionFlowTimeoutError(
+                f"{tool}: vượt deadline flow {deadline_seconds}s (flow giữ nguyên)"
+            ) from exc
+        except BaseException:
             outcome = "error"
             raise
         finally:
-            await self._backend.audit_outcome(
-                turn_id=ctx.turn_id,
-                tool_call_id=ctx.tool_call_id,
-                outcome=outcome,
-                client_id=client_id,
-                flow_id=flow_id,
-            )
+            # Best-effort: lỗi audit không che lỗi gốc/hủy; vẫn ghi flow_id/client thực.
+            with contextlib.suppress(Exception):
+                await self._backend.audit_outcome(
+                    turn_id=ctx.turn_id,
+                    tool_call_id=ctx.tool_call_id,
+                    outcome=outcome,
+                    client_id=client_id,
+                    flow_id=result_flow_id,
+                )
 
 
 async def build_tools(
