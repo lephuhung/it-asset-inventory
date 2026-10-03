@@ -929,8 +929,9 @@ async def test_local_analysis_cancellation_settles_unknown(session_factory, monk
 class _CommitBoomSession:
     """Bọc session: delegate mọi thứ, riêng `commit` ném OperationalError.
 
-    Dùng để chứng minh lỗi ở chính bước commit admission cũng được dịch thành
-    `BudgetUnavailable` (không escape dưới dạng lỗi DB thô).
+    Dùng chung cho cả admission lẫn settlement: chứng minh lỗi ở chính bước
+    `commit` cũng được dịch thành `BudgetUnavailable` (không escape dưới dạng
+    lỗi DB thô).
     """
 
     def __init__(self, inner):
@@ -1593,19 +1594,6 @@ async def test_dispatch_pre_post_flush_failure_settles_unknown(session_factory, 
 
 
 # ── Fix Round 4: settle-commit DB-error translation to BudgetUnavailable ──
-
-
-class _CommitBoomSession:
-    """Bọc session: mọi `commit()` ném `OperationalError` (DB ngân sách hỏng lúc ghi)."""
-
-    def __init__(self, inner):
-        self._inner = inner
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    async def commit(self):
-        raise OperationalError("COMMIT", {}, Exception("budget db down"))
 
 
 @pytest.mark.asyncio
