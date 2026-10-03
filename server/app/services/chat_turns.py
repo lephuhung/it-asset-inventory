@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import append_audit
@@ -151,9 +151,19 @@ def _action_for_finish(finish_reason: str) -> str:
 
 
 async def _lock_turn(db: AsyncSession, turn_id: uuid.UUID) -> ChatTurn | None:
-    """Khóa hàng turn (`SELECT ... FOR UPDATE`) — nền tảng cho CAS completion."""
+    """Khóa hàng turn (`SELECT ... FOR UPDATE`) — nền tảng cho CAS completion.
+
+    Dùng `populate_existing=True` để refresh mọi trường khi session đã load trước:
+    tránh stale ORM state khi một session khác đã commit xong trong khi session này
+    vẫn giữ bản cũ của đối tượng (CAS concurrent-completer attack).
+    """
     return (
-        await db.execute(select(ChatTurn).where(ChatTurn.id == turn_id).with_for_update())
+        await db.execute(
+            select(ChatTurn)
+            .where(ChatTurn.id == turn_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
 
 
@@ -188,6 +198,9 @@ async def _settle_best_effort(db: AsyncSession, turn_id: uuid.UUID, actual: int 
     Cô lập trong savepoint: lỗi ngân sách (`chat_budget_unavailable`) hoặc settle
     xung đột chỉ rollback về savepoint, KHÔNG làm abort transaction đang giữ
     assistant message + status. Nhờ đó caller vẫn commit được kết quả đã hoàn thành.
+
+    Catch rộng (SQLAlchemyError) vì `settle` chỉ stage ORM fields và flush/raise có
+    thể xảy ra khi savepoint context thoát, ngoài handler của `settle`.
     """
     try:
         async with db.begin_nested():
@@ -195,6 +208,10 @@ async def _settle_best_effort(db: AsyncSession, turn_id: uuid.UUID, actual: int 
     except (BudgetUnavailable, BudgetConflict):
         logger.exception(
             "chat.turn: settle ngân sách thất bại — giữ nguyên kết quả đã hoàn thành"
+        )
+    except SQLAlchemyError:
+        logger.exception(
+            "chat.turn: DB lỗi khi settle ngân sách — giữ nguyên kết quả đã hoàn thành"
         )
 
 
@@ -236,10 +253,13 @@ async def create_turn(
     )
     db.add(turn)
     try:
-        await db.flush()
+        # Cô lập insert trong savepoint để lỗi race không rollback toàn bộ
+        # transaction của caller (caller có thể đang giữ user message mới hoặc
+        # các thay đổi khác cần được commit độc lập).
+        async with db.begin_nested():
+            await db.flush()
     except IntegrityError as exc:
-        # Rollback để giải phóng transaction đang abort, rồi phân loại race.
-        await db.rollback()
+        # Savepoint rollback (không ảnh hưởng transaction bên ngoài); phân loại race.
         if idempotency_key is not None:
             replayed = (
                 await db.execute(
@@ -306,6 +326,10 @@ async def complete_turn(
     if finish_reason not in FINISH_REASON_TO_STATUS:
         raise ChatTurnError(f"finish_reason không hợp lệ: {finish_reason!r}")
     _validate_error_category(error_category)
+    # Spec V5 yêu cầu `failed` phải có `error_category` thuộc taxonomy. Mặc định
+    # `chat_internal` nếu caller không truyền (route luôn có thể mappping bên được).
+    if finish_reason == "error" and error_category is None:
+        error_category = "chat_internal"
 
     now = datetime.now(UTC)
     turn = await _lock_turn(db, turn_id)
@@ -390,13 +414,18 @@ async def complete_turn(
 async def cancel_turn(db: AsyncSession, turn_id: uuid.UUID, actor: uuid.UUID) -> TurnStatus:
     """Hủy turn đang active (`pending|streaming`) → `canceled` + audit.
 
-    Turn đã terminal → `already_terminal` (idempotent). Không tìm thấy → `not_found`.
+    Chỉ `conversation.created_by` (actor của turn) mới có thể hủy. Turn đã terminal
+    → `conflict` (route map 409). Không tìm thấy → `not_found`. Không có quyền →
+    `unauthorized`.
     """
     turn = await _lock_turn(db, turn_id)
     if turn is None:
         return TurnStatus(status="not_found")
+    # AuthZ: chỉ actor của turn (chính là conversation.created_by) được hủy.
+    if turn.actor_id != actor:
+        return TurnStatus(status="unauthorized", turn_id=turn.id)
     if turn.status not in ACTIVE_STATUSES:
-        return TurnStatus(status="already_terminal", turn_id=turn.id)
+        return TurnStatus(status="conflict", turn_id=turn.id)
 
     turn.status = "canceled"
     turn.finish_reason = "canceled"
