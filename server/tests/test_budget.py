@@ -373,3 +373,115 @@ async def test_external_callback_without_usage_charges_envelope(session_factory,
         ).one()
         assert row[0] == "unknown"
         assert await charged(s, _today()) == 700
+
+
+async def _seed_analyzing_investigation(session_factory):
+    """1 investigation local (không external) đang 'analyzing' để chạy _state_analyze."""
+    from app.db.models import (
+        DfirInvestigation,
+        LlmConfig,
+        Machine,
+        Organization,
+        OrgType,
+        User,
+        UserRole,
+    )
+
+    async with session_factory() as s:
+        org = Organization(name=f"Org {uuid.uuid4()}", type=OrgType.ROOT.value)
+        s.add(org)
+        await s.flush()
+        user = User(
+            org_id=org.id,
+            full_name="T6-local",
+            email=f"t6l-{uuid.uuid4()}@example.com",
+            role=UserRole.SUPER_ADMIN.value,
+            password_hash="x",
+        )
+        s.add(user)
+        await s.flush()
+        machine = Machine(
+            hostname=f"T6L-{uuid.uuid4()}", org_id=org.id, machine_uuid=str(uuid.uuid4())
+        )
+        s.add(machine)
+        await s.flush()
+        s.add(
+            LlmConfig(
+                id=1,
+                enabled=True,
+                provider="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="m",
+                daily_token_budget=100_000,
+                tokens_used_today=0,
+            )
+        )
+        await s.flush()
+        inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="C.t6-local",
+            artifacts=[],
+            raw_artifacts={},
+            status="analyzing",
+            requested_by=user.id,
+        )
+        s.add(inv)
+        await s.commit()
+        return inv.id
+
+
+async def test_local_analysis_reserves_then_settles_actual(session_factory, monkeypatch):
+    """_state_analyze: reserve trước LLM, settle actual sau; tokens_used_today đồng bộ."""
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    async def _noop_notify(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _noop_notify)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "test-key")
+
+    class _Resp:
+        content = "### 1. Low\nMức độ nghiêm trọng: low\n"
+        input_tokens = 11
+        output_tokens = 5
+        total_tokens = 16
+        estimated_cost_usd = 0.0
+        model = "m"
+
+    class _FakeLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            return _Resp()
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _FakeLlm)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        await inv_svc._state_analyze(s, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state, actual FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "settled" and row[1] == 16
+        assert await charged(s, _today()) == 16
+        cfg = await s.get(inv_svc.LlmConfig, 1)
+        assert cfg is not None and cfg.tokens_used_today == 16
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored is not None and stored.status == "completed"
