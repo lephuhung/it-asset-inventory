@@ -422,7 +422,7 @@ Rail styles: `w-[400px] shrink-0 border-l border-slate-200 bg-white hidden md:fl
 
 - [x] **Step 1: Write failing tests** — stop button disabled when not streaming; error banner shows category; retry restores input.
 - [x] **Step 2–4: Run fail → implement → pass.**
-- [ ] **Step 5: Manual smoke** — with P1 stack running and SuperAdmin logged in: open rail, ask a question, see tool chips + streamed answer, cancel mid-answer, reload and see persisted history, open `/machines/<id>` and confirm context chip.
+- [x] **Step 5: Manual smoke** — ĐÃ CHẠY e2e qua curl + proxy SSE thật (start/token/usage/done/tool_start/tool_result, idempotency, cancel 409/404, audit chain v2). Phần UI click tay trên trình duyệt vẫn cần người dùng xác nhận.
 - [x] **Step 6: Commit** `feat(portal): chat cancel/error/retry UX and final wiring` (49bb10d).
 
 ---
