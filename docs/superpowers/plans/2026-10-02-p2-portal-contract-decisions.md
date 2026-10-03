@@ -45,3 +45,35 @@ P2 chỉ chạm `portal/`. Worktree riêng: `.worktrees/p2-portal` trên branch
 `research/velociraptor-chat-assistant-p2`.
 
 **Task 9 Step 5 (smoke test tay) bị block** cho tới khi P1 xong T11 + T15 + T16.
+## Trạng thái thực thi (2026-10-03)
+
+Branch `research/velociraptor-chat-assistant-p2`, worktree `.worktrees/p2-portal`.
+
+| Task | Commit | Tests |
+|---|---|---|
+| T1 types + wrappers | `8d57bda` | 10 |
+| T2 SSE proxy route | `c692cfb` | 15 |
+| T3 `useChatStream` | `8f0f502` | 32 |
+| T4 machine context | `f63df19` | 14 |
+| T5 message + tool trace | `98b937b` | 16 |
+| (refactor) rail state | `a34120c` | — |
+| T6 conversation list | `ea05980` | 12 |
+| T7+T8 rail + context chip | `13e1de3` | 16 |
+| T9 cancel/error/retry | `49bb10d` | 17 |
+
+Tổng: **162 test pass**, `tsc --noEmit` sạch, `next build` thành công, lint warning
+102 → 103 (đúng bằng pattern fetch-trong-effect đã có sẵn ở `compliance-gate.tsx`).
+
+### Sai lệch so với plan gốc (đã chủ động sửa)
+
+1. **D1** — proxy route chuyển `idempotency_key` body → header `Idempotency-Key`.
+2. **D3** — `reduceEvent` phủ đủ 7 event `chat.sse/1`, không chỉ `token`/`tool_start`.
+3. Thêm `portal/components/chat/chat-ux.ts` — quyết định thuần cho composer/banner/retry
+   để test được không cần jsdom (repo không cài jsdom).
+4. `useSyncExternalStore` cho trạng thái mở/đóng rail thay vì `setState` trong effect.
+5. `deriveMachineId` bỏ qua query/hash và chỉ nhận đúng một segment UUID.
+
+### Còn lại
+
+- **Task 9 Step 5 — manual smoke: BLOCKED.** Cần P1 xong T11 (public routes) +
+  T15 (chatagent loop) + T16 (compose). Không thể chạy end-to-end với backend chưa có.

@@ -55,7 +55,7 @@
 - Types: `ChatConversation`, `ChatMessage`, `ChatTurn`, `ChatToolCall`, `ChatConversationDetail`, `ChatSseEvent`.
 - `chatApi.listConversations()`, `.getConversation(id)`, `.createConversation({title?, machine_id?})`, `.patchConversation(id, patch)`, `.deleteConversation(id)`, `.cancelTurn(id, turnId)`.
 
-- [ ] **Step 1: Write failing test** — wrappers hit the right paths via the mocked `api`.
+- [x] **Step 1: Write failing test** — wrappers hit the right paths via the mocked `api`.
 
 ```ts
 // portal/__tests__/chat-api.test.ts
@@ -87,12 +87,12 @@ describe("chatApi", () => {
 });
 ```
 
-- [ ] **Step 2: Run test, verify it fails**
+- [x] **Step 2: Run test, verify it fails**
 
 Run: `cd portal && pnpm test -- chat-api`
 Expected: FAIL (module not found).
 
-- [ ] **Step 3: Implement types and wrappers**
+- [x] **Step 3: Implement types and wrappers**
 
 ```ts
 // portal/lib/chat.ts
@@ -115,9 +115,9 @@ export const chatApi = {
 
 Define the DTO types in `types.ts` exactly per spec: `ChatMessage = { id; role; content; turn_id: string | null; machine_id: string | null; error_category: string | null; created_at }`, `ChatConversationDetail` adds `messages: ChatMessage[]; active_turn_id: string | null`, `ChatSseEvent` = discriminated union of the seven event types.
 
-- [ ] **Step 4: Run test, verify it passes.**
+- [x] **Step 4: Run test, verify it passes.**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add portal/lib/chat.ts portal/lib/types.ts portal/__tests__/chat-api.test.ts
@@ -136,7 +136,7 @@ git commit -m "feat(portal): chat API types and wrappers"
 - `POST` body `{ conversation_id: string, content: string, machine_context?: { machine_id: string } | null, idempotency_key: string }`.
 - Upstream: `POST {API_BASE}/api/chat/conversations/{id}/messages`; relays `text/event-stream` body.
 
-- [ ] **Step 1: Write failing test** — a mocked upstream SSE response is relayed with streaming headers.
+- [x] **Step 1: Write failing test** — a mocked upstream SSE response is relayed with streaming headers.
 
 ```ts
 // portal/__tests__/chat-stream-route.test.ts
@@ -169,9 +169,9 @@ describe("chat stream proxy", () => {
 });
 ```
 
-- [ ] **Step 2: Run test, verify it fails.**
+- [x] **Step 2: Run test, verify it fails.**
 
-- [ ] **Step 3: Implement the route**
+- [x] **Step 3: Implement the route**
 
 ```ts
 // portal/app/api/chat/stream/route.ts
@@ -223,9 +223,9 @@ export async function POST(request: Request) {
 }
 ```
 
-- [ ] **Step 4: Run test, verify it passes.**
+- [x] **Step 4: Run test, verify it passes.**
 
-- [ ] **Step 5: Commit** `feat(portal): dedicated SSE streaming proxy route`.
+- [x] **Step 5: Commit** `feat(portal): dedicated SSE streaming proxy route`.
 
 ---
 
@@ -239,7 +239,7 @@ export async function POST(request: Request) {
 - `useChatStream(conversationId)` → `{ messages, streaming, activeTurnId, error, send(content, machineContext?), cancel(), reset() }`.
 - Exported pure helper `parseSseFrame(frame: string): ChatSseEvent | null` (unit-testable).
 
-- [ ] **Step 1: Write failing tests** — parse frames, accumulate tokens, persist on done, abort.
+- [x] **Step 1: Write failing tests** — parse frames, accumulate tokens, persist on done, abort.
 
 ```ts
 // portal/__tests__/use-chat-stream.test.ts
@@ -268,9 +268,9 @@ describe("reduceEvent", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests, verify they fail.**
+- [x] **Step 2: Run tests, verify they fail.**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 export function parseSseFrame(frame: string): ChatSseEvent | null {
@@ -282,9 +282,9 @@ export function parseSseFrame(frame: string): ChatSseEvent | null {
 
 The hook uses `fetch("/api/chat/stream", { method: "POST", body, signal })`, reads `res.body!.getReader()`, buffers text, splits on `\n\n`, and dispatches via `parseSseFrame` + `reduceEvent`. `cancel()` calls `chatApi.cancelTurn` with the current `active_turn_id`.
 
-- [ ] **Step 4: Run tests, verify they pass.**
+- [x] **Step 4: Run tests, verify they pass.**
 
-- [ ] **Step 5: Commit** `feat(portal): useChatStream SSE client hook`.
+- [x] **Step 5: Commit** `feat(portal): useChatStream SSE client hook`.
 
 ---
 
@@ -298,7 +298,7 @@ The hook uses `fetch("/api/chat/stream", { method: "POST", body, signal })`, rea
 - `deriveMachineId(pathname: string): string | null`
 - `useChatPanel()` → `{ open, setOpen, machineId, pendingMachineId, setPendingMachineId }` (open state in `localStorage` key `chat-rail-open`).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 import { describe, it, expect } from "vitest";
@@ -316,9 +316,9 @@ describe("deriveMachineId", () => {
 });
 ```
 
-- [ ] **Step 2–4: Run fail → implement → run pass.** Implementation: regex `^/machines/([0-9a-f-]{36})$` case-insensitive; `useChatPanel` reads/writes `localStorage` in an effect (SSR-safe guard), and sets `pendingMachineId` from `usePathname()` whenever it changes while the rail is open.
+- [x] **Step 2–4: Run fail → implement → run pass.** Implementation: regex `^/machines/([0-9a-f-]{36})$` case-insensitive; `useChatPanel` reads/writes `localStorage` in an effect (SSR-safe guard), and sets `pendingMachineId` from `usePathname()` whenever it changes while the rail is open.
 
-- [ ] **Step 5: Commit** `feat(portal): chat panel state and machine context derivation`.
+- [x] **Step 5: Commit** `feat(portal): chat panel state and machine context derivation`.
 
 ---
 
@@ -332,7 +332,7 @@ describe("deriveMachineId", () => {
 - `<ChatMessage role content tools errorCategory createdAt />`
 - `<ChatToolTrace tools />` where `tools: ChatToolCall[]`.
 
-- [ ] **Step 1: Write failing SSR tests**
+- [x] **Step 1: Write failing SSR tests**
 
 ```tsx
 import { renderToString } from "react-dom/server";
@@ -350,9 +350,9 @@ it("renders error category safely", () => {
 });
 ```
 
-- [ ] **Step 2–4: Run fail → implement → pass.** Reuse `InvestigationMarkdown` for assistant content. `ChatToolTrace` renders collapsible chips; never renders raw payloads.
+- [x] **Step 2–4: Run fail → implement → pass.** Reuse `InvestigationMarkdown` for assistant content. `ChatToolTrace` renders collapsible chips; never renders raw payloads.
 
-- [ ] **Step 5: Commit** `feat(portal): chat message and tool trace components`.
+- [x] **Step 5: Commit** `feat(portal): chat message and tool trace components`.
 
 ---
 
@@ -365,9 +365,9 @@ it("renders error category safely", () => {
 **Interfaces:**
 - `<ChatConversationList items activeId onSelect onCreate onDelete />`.
 
-- [ ] **Step 1: Write failing SSR test** — renders titles, calls `onCreate`/`onDelete` props exist, empty state copy.
-- [ ] **Step 2–4: Run fail → implement → pass.** List shows `title ?? "Hội thoại mới"`, relative `last_message_at`; delete asks confirm.
-- [ ] **Step 5: Commit** `feat(portal): chat conversation list`.
+- [x] **Step 1: Write failing SSR test** — renders titles, calls `onCreate`/`onDelete` props exist, empty state copy.
+- [x] **Step 2–4: Run fail → implement → pass.** List shows `title ?? "Hội thoại mới"`, relative `last_message_at`; delete asks confirm.
+- [x] **Step 5: Commit** `feat(portal): chat conversation list`.
 
 ---
 
@@ -381,8 +381,8 @@ it("renders error category safely", () => {
 **Interfaces:**
 - `<ChatRail />` consumes `useChatPanel`, `useChatStream`, `chatApi`, `useAuth`.
 
-- [ ] **Step 1: Write failing SSR tests** — closed by default renders nothing (or a toggle button); when `open` renders panel header, conversation list, input; non-SuperAdmin renders nothing.
-- [ ] **Step 2–4: Run fail → implement → pass.**
+- [x] **Step 1: Write failing SSR tests** — closed by default renders nothing (or a toggle button); when `open` renders panel header, conversation list, input; non-SuperAdmin renders nothing.
+- [x] **Step 2–4: Run fail → implement → pass.**
 
 ```tsx
 // portal/app/(portal)/layout.tsx (inside Shell root flex, after the content column)
@@ -391,7 +391,7 @@ it("renders error category safely", () => {
 
 Rail styles: `w-[400px] shrink-0 border-l border-slate-200 bg-white hidden md:flex flex-col` when open; `md:hidden` overlay drawer when small. Toggle button lives in the header; open state from `useChatPanel`.
 
-- [ ] **Step 5: Commit** `feat(portal): docked ChatRail mounted in portal layout`.
+- [x] **Step 5: Commit** `feat(portal): docked ChatRail mounted in portal layout`.
 
 ---
 
@@ -405,9 +405,9 @@ Rail styles: `w-[400px] shrink-0 border-l border-slate-200 bg-white hidden md:fl
 **Interfaces:**
 - `<ChatContextChip machineId hostname pinned onClear onPin />`.
 
-- [ ] **Step 1: Write failing SSR tests** — shows `Đang hỏi về: <hostname>`; clear button; pin button.
-- [ ] **Step 2–4: Run fail → implement → pass.** Send flow: if no active conversation, `createConversation({ machine_id })`; else pass `machine_context` per-turn. "Ghim" calls `patchConversation(id, { machine_id })`. Clear resets to stored `machine_id` (if any).
-- [ ] **Step 5: Commit** `feat(portal): machine context chip with soft per-turn override`.
+- [x] **Step 1: Write failing SSR tests** — shows `Đang hỏi về: <hostname>`; clear button; pin button.
+- [x] **Step 2–4: Run fail → implement → pass.** Send flow: if no active conversation, `createConversation({ machine_id })`; else pass `machine_context` per-turn. "Ghim" calls `patchConversation(id, { machine_id })`. Clear resets to stored `machine_id` (if any).
+- [x] **Step 5: Commit** `feat(portal): machine context chip with soft per-turn override`.
 
 ---
 
@@ -420,10 +420,10 @@ Rail styles: `w-[400px] shrink-0 border-l border-slate-200 bg-white hidden md:fl
 **Interfaces:**
 - Stop button calls `cancel()`; error banner renders `[category] hint`; retry re-sends last content.
 
-- [ ] **Step 1: Write failing tests** — stop button disabled when not streaming; error banner shows category; retry restores input.
-- [ ] **Step 2–4: Run fail → implement → pass.**
+- [x] **Step 1: Write failing tests** — stop button disabled when not streaming; error banner shows category; retry restores input.
+- [x] **Step 2–4: Run fail → implement → pass.**
 - [ ] **Step 5: Manual smoke** — with P1 stack running and SuperAdmin logged in: open rail, ask a question, see tool chips + streamed answer, cancel mid-answer, reload and see persisted history, open `/machines/<id>` and confirm context chip.
-- [ ] **Step 6: Commit** `feat(portal): chat cancel/error/retry UX and final wiring`.
+- [x] **Step 6: Commit** `feat(portal): chat cancel/error/retry UX and final wiring` (49bb10d).
 
 ---
 
