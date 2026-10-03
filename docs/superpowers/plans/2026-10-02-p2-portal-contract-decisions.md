@@ -100,3 +100,18 @@ Thứ tự ưu tiên khi gửi:
 
 Hệ quả: `resetPendingMachineContext()` (khi chuyển hội thoại) chỉ rụng ghi đè cũ,
 KHÔNG chặn ngữ cảnh trang; `clearPendingMachineId()` (nút "Gỡ") mới chặn.
+
+## D8 — Đối chiếu với backend P1 thực tế (2026-10-03, e2e đã chạy)
+
+Ba điểm lệch giữa type khai báo và dữ liệu thật, đã sửa trong `portal/lib/types.ts`:
+
+1. **`v` là CHUỖI `"chat.sse/1"`, không phải số `1`.** Nguồn: `chatagent/chatagent/agent.py:40`
+   (`SSE_VERSION`) và `server/app/api/routes/chat.py:74` (`SSE_SCHEMA_VERSION`).
+2. **`start.message_id` có thể `null`** — agent chưa có id tin nhắn lúc bắt đầu
+   (`agent.py:344` hard-code `message_id: None`). Cùng kiểu cho `done.message_id`.
+3. **`seq` BẮT ĐẦU TỪ 0.** Xác nhận bằng stream thật. Fix `seq = -Infinity` ở vòng 2
+   là bắt buộc — nếu khởi tạo `seq: 0` thì event `start` đầu tiên bị drop và mất `turn_id`.
+
+Thêm: backend đã bọc sẵn `hint` theo format `[<category>] <hint> [HTTP <code>]`, nên
+`formatErrorBanner` không bọc lần hai khi `hint` đã bắt đầu bằng `[` (tránh
+`[cat] [cat] ... [HTTP 400] [HTTP 400]`).

@@ -186,9 +186,6 @@ _TOOL_KEYWORDS: tuple[tuple[str, str], ...] = (
 class StubPlanner:
     """Planner tất định cho P1 — chọn tool từ message user cuối, rồi dừng."""
 
-    def __init__(self) -> None:
-        self._calls = 0
-
     async def plan(
         self,
         *,
@@ -196,9 +193,12 @@ class StubPlanner:
         observations: list[str],
         machine_context: MachineContext | None,
     ) -> PlannedToolCall | None:
-        if observations or self._calls:
+        # KHÔNG giữ bộ đếm trên instance: `ChatAgent` là singleton
+        # (chatagent/api.py `get_agent`), nên state sống suốt vòng đỗi process
+        # và chỉ request ĐẦU TIÊN từng được chạy tool. Mỗi turn đã
+        # có `observations` thì vòng lặp ReAct tự dừng — đây chỉ là chốt an toàn.
+        if observations:
             return None
-        self._calls += 1
         text = ""
         for message in reversed(messages):
             if message.role == "user":

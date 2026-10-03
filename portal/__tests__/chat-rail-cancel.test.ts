@@ -140,3 +140,25 @@ describe("nextRetryContent", () => {
     expect(nextRetryContent([msg({ role: "user", content: "hỏi", error_category: "chat_timeout_llm" })])).toBe("hỏi");
   });
 });
+describe("banner không bọc trùng khi hint đã có sẵn format của backend", () => {
+  it("giữ nguyên hint đã kèm [category] ... [HTTP code]", () => {
+    const banner = formatErrorBanner({
+      category: "chat_guardrail_sql",
+      hint: "[chat_guardrail_sql] thiếu tham số hostname [HTTP 400]",
+      retryable: false,
+      httpStatus: 400,
+    });
+    // Bọc thêm lần nữa sẽ thành [cat] [cat] ... [HTTP 400] [HTTP 400].
+    expect(banner?.text).toBe("[chat_guardrail_sql] thiếu tham số hostname [HTTP 400]");
+  });
+
+  it("vẫn bọc khi hint trần (chưa có format)", () => {
+    const banner = formatErrorBanner({
+      category: "chat_timeout_llm",
+      hint: "Mô hình phản hồi quá lâu.",
+      retryable: true,
+      httpStatus: 504,
+    });
+    expect(banner?.text).toBe("[chat_timeout_llm] Mô hình phản hồi quá lâu. [HTTP 504]");
+  });
+});

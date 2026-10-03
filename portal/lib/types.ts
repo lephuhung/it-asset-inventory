@@ -1502,16 +1502,21 @@ export interface ChatMachineContext {
 }
 
 interface ChatSseBase {
-  /** Phiên bản schema: `1`. */
-  v: 1;
-  /** Số thứ tự đơn diệu trong stream. */
+  /**
+   * Phiên bản schema: backend/agent gửi CHUỖI "chat.sse/1" — đã đối chiếu
+   * SSE_VERSION (chatagent/chatagent/agent.py:40) và SSE_SCHEMA_VERSION
+   * (server/app/api/routes/chat.py:74).
+   */
+  v: string;
+  /** Số thứ tự đơn điệu trong stream. Agent đánh số BẮT ĐẦU TỪ 0. */
   seq: number;
 }
 
 export interface ChatSseStart extends ChatSseBase {
   type: "start";
   turn_id: string;
-  message_id: string;
+  /** Lúc bắt đầu agent chưa có id tin nhắn → null. */
+  message_id: string | null;
 }
 
 export interface ChatSseToolStart extends ChatSseBase {
@@ -1547,7 +1552,7 @@ export interface ChatSseUsage extends ChatSseBase {
 
 export interface ChatSseDone extends ChatSseBase {
   type: "done";
-  message_id: string;
+  message_id: string | null;
   finish_reason: "stop" | "length" | "canceled" | "error";
 }
 

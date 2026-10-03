@@ -69,16 +69,16 @@ describe("parseSseFrame", () => {
 describe("reduceEvent", () => {
   it("appends token deltas and records tool traces", () => {
     let s = initialStreamState();
-    s = reduceEvent(s, { v: 1, seq: 1, type: "token", text: "Hel" });
-    s = reduceEvent(s, { v: 1, seq: 2, type: "tool_start", tool_call_id: "t1", tool: "inventory_search", params_digest: null, summary: null });
-    s = reduceEvent(s, { v: 1, seq: 3, type: "token", text: "lo" });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 1, type: "token", text: "Hel" });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 2, type: "tool_start", tool_call_id: "t1", tool: "inventory_search", params_digest: null, summary: null });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 3, type: "token", text: "lo" });
     expect(s.content).toBe("Hello");
     expect(s.tools).toHaveLength(1);
   });
 
   it("captures the turn from the start event", () => {
     const s = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1",
+      v: "chat.sse/1", seq: 1, type: "start", turn_id: "t1", message_id: "m1",
     });
     expect(s.turnId).toBe("t1");
     expect(s.messageId).toBe("m1");
@@ -87,10 +87,10 @@ describe("reduceEvent", () => {
 
   it("merges tool_result into the matching tool call", () => {
     let s = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "tool_start", tool_call_id: "t1", tool: "inventory_search", params_digest: null, summary: null,
+      v: "chat.sse/1", seq: 1, type: "tool_start", tool_call_id: "t1", tool: "inventory_search", params_digest: null, summary: null,
     });
     s = reduceEvent(s, {
-      v: 1, seq: 2, type: "tool_result", tool_call_id: "t1", ok: true,
+      v: "chat.sse/1", seq: 2, type: "tool_result", tool_call_id: "t1", ok: true,
       row_count: 3, byte_count: 128, duration_ms: 12, client_id: "C.1", flow_id: "F.1",
     });
     expect(s.tools[0]).toMatchObject({ ok: true, row_count: 3, duration_ms: 12, client_id: "C.1", flow_id: "F.1" });
@@ -98,7 +98,7 @@ describe("reduceEvent", () => {
 
   it("adds a tool entry when tool_result arrives without tool_start", () => {
     const s = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "tool_result", tool_call_id: "t9", ok: false,
+      v: "chat.sse/1", seq: 1, type: "tool_result", tool_call_id: "t9", ok: false,
       row_count: null, byte_count: null, duration_ms: 5, error_category: "chat_timeout_tool",
     });
     expect(s.tools).toHaveLength(1);
@@ -107,25 +107,25 @@ describe("reduceEvent", () => {
 
   it("ignores duplicate tool_start for the same tool_call_id", () => {
     let s = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "tool_start", tool_call_id: "t1", tool: "a", params_digest: null, summary: null,
+      v: "chat.sse/1", seq: 1, type: "tool_start", tool_call_id: "t1", tool: "a", params_digest: null, summary: null,
     });
     s = reduceEvent(s, {
-      v: 1, seq: 2, type: "tool_start", tool_call_id: "t1", tool: "a", params_digest: null, summary: null,
+      v: "chat.sse/1", seq: 2, type: "tool_start", tool_call_id: "t1", tool: "a", params_digest: null, summary: null,
     });
     expect(s.tools).toHaveLength(1);
   });
 
   it("records usage", () => {
     const s = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "usage", input_tokens: 10, output_tokens: 20,
+      v: "chat.sse/1", seq: 1, type: "usage", input_tokens: 10, output_tokens: 20,
     });
     expect(s.usage).toEqual({ input_tokens: 10, output_tokens: 20 });
   });
 
   it("records the error category and hint without losing streamed text", () => {
-    let s = reduceEvent(initialStreamState(), { v: 1, seq: 1, type: "token", text: "partial" });
+    let s = reduceEvent(initialStreamState(), { v: "chat.sse/1", seq: 1, type: "token", text: "partial" });
     s = reduceEvent(s, {
-      v: 1, seq: 2, type: "error", category: "chat_timeout_llm", hint: "Mô hình phản hồi quá lâu.", retryable: true,
+      v: "chat.sse/1", seq: 2, type: "error", category: "chat_timeout_llm", hint: "Mô hình phản hồi quá lâu.", retryable: true,
     });
     expect(s.error).toMatchObject({ category: "chat_timeout_llm", retryable: true });
     expect(s.content).toBe("partial");
@@ -134,32 +134,32 @@ describe("reduceEvent", () => {
 
   it("maps finish_reason to a terminal status", () => {
     const stopped = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "done", message_id: "m1", finish_reason: "stop",
+      v: "chat.sse/1", seq: 1, type: "done", message_id: "m1", finish_reason: "stop",
     });
     expect(stopped.status).toBe("done");
 
     const canceled = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "done", message_id: "m1", finish_reason: "canceled",
+      v: "chat.sse/1", seq: 1, type: "done", message_id: "m1", finish_reason: "canceled",
     });
     expect(canceled.status).toBe("canceled");
 
     const failed = reduceEvent(initialStreamState(), {
-      v: 1, seq: 1, type: "done", message_id: "m1", finish_reason: "error",
+      v: "chat.sse/1", seq: 1, type: "done", message_id: "m1", finish_reason: "error",
     });
     expect(failed.status).toBe("error");
   });
 
   it("drops out-of-order and replayed events by seq", () => {
-    let s = reduceEvent(initialStreamState(), { v: 1, seq: 1, type: "token", text: "A" });
-    s = reduceEvent(s, { v: 1, seq: 1, type: "token", text: "A-replayed" });
-    s = reduceEvent(s, { v: 1, seq: 0, type: "token", text: "old" });
+    let s = reduceEvent(initialStreamState(), { v: "chat.sse/1", seq: 1, type: "token", text: "A" });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 1, type: "token", text: "A-replayed" });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 0, type: "token", text: "old" });
     expect(s.content).toBe("A");
   });
 
   it("never mutates the input state", () => {
     const before = initialStreamState();
     const snapshot = JSON.stringify(before);
-    reduceEvent(before, { v: 1, seq: 1, type: "token", text: "x" });
+    reduceEvent(before, { v: "chat.sse/1", seq: 1, type: "token", text: "x" });
     expect(JSON.stringify(before)).toBe(snapshot);
   });
 });
@@ -177,7 +177,7 @@ describe("runChatStream", () => {
   it("streams every event through onState", async () => {
     const onState = vi.fn();
     const state = await runChatStream({
-      ...args(chunked([frame({ v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1" }), frame({ v: 1, seq: 2, type: "token", text: "Chào" }), frame({ v: 1, seq: 3, type: "token", text: " bạn" }), frame({ v: 1, seq: 4, type: "done", message_id: "m1", finish_reason: "stop" })]), onState),
+      ...args(chunked([frame({ v: "chat.sse/1", seq: 1, type: "start", turn_id: "t1", message_id: "m1" }), frame({ v: "chat.sse/1", seq: 2, type: "token", text: "Chào" }), frame({ v: "chat.sse/1", seq: 3, type: "token", text: " bạn" }), frame({ v: "chat.sse/1", seq: 4, type: "done", message_id: "m1", finish_reason: "stop" })]), onState),
     });
 
     expect(state.content).toBe("Chào bạn");
@@ -208,7 +208,7 @@ describe("runChatStream", () => {
   });
 
   it("reassembles frames split across chunk boundaries", async () => {
-    const whole = frame({ v: 1, seq: 1, type: "token", text: "Hello" });
+    const whole = frame({ v: "chat.sse/1", seq: 1, type: "token", text: "Hello" });
     const res = chunked([whole.slice(0, 12), whole.slice(12, 30), whole.slice(30)]);
     const state = await runChatStream(args(res));
     expect(state.content).toBe("Hello");
@@ -238,7 +238,7 @@ describe("runChatStream", () => {
   });
 
   it("reports a lost stream when the body ends without a done event", async () => {
-    const res = chunked([frame({ v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1" }), frame({ v: 1, seq: 2, type: "token", text: "dở" })]);
+    const res = chunked([frame({ v: "chat.sse/1", seq: 1, type: "start", turn_id: "t1", message_id: "m1" }), frame({ v: "chat.sse/1", seq: 2, type: "token", text: "dở" })]);
     const state = await runChatStream(args(res));
 
     expect(state.status).toBe("error");
@@ -255,7 +255,7 @@ describe("runChatStream", () => {
       pull(c) {
         pulled += 1;
         if (pulled === 1) {
-          c.enqueue(moduleEnc.encode(frame({ v: 1, seq: 1, type: "token", text: "dở dang" })));
+          c.enqueue(moduleEnc.encode(frame({ v: "chat.sse/1", seq: 1, type: "token", text: "dở dang" })));
           return;
         }
         // Reader ném AbortError khi signal bị abort (đúng như fetch thật).
@@ -345,7 +345,7 @@ describe("runChatStream", () => {
   });
 
   it("keeps the server error category when the stream carries an error event", async () => {
-    const res = chunked([frame({ v: 1, seq: 1, type: "error", category: "chat_budget_exceeded", hint: "Hết hạn mức.", retryable: false })]);
+    const res = chunked([frame({ v: "chat.sse/1", seq: 1, type: "error", category: "chat_budget_exceeded", hint: "Hết hạn mức.", retryable: false })]);
     const state = await runChatStream(args(res));
     expect(state.error).toMatchObject({ category: "chat_budget_exceeded", retryable: false });
   });
@@ -353,9 +353,9 @@ describe("runChatStream", () => {
   it("ignores heartbeat frames mid-stream", async () => {
     const res = chunked([
       ": hb\n\n",
-      frame({ v: 1, seq: 1, type: "token", text: "ok" }),
+      frame({ v: "chat.sse/1", seq: 1, type: "token", text: "ok" }),
       ": keep-alive\n\n",
-      frame({ v: 1, seq: 2, type: "done", message_id: "m", finish_reason: "stop" }),
+      frame({ v: "chat.sse/1", seq: 2, type: "done", message_id: "m", finish_reason: "stop" }),
     ]);
     const state = await runChatStream(args(res));
     expect(state.content).toBe("ok");
@@ -395,9 +395,9 @@ describe("runChatStream", () => {
   it("emits partial state as tokens arrive", async () => {
     const seen: string[] = [];
     const res = chunked([
-      frame({ v: 1, seq: 1, type: "token", text: "A" }),
-      frame({ v: 1, seq: 2, type: "token", text: "B" }),
-      frame({ v: 1, seq: 3, type: "done", message_id: "m", finish_reason: "stop" }),
+      frame({ v: "chat.sse/1", seq: 1, type: "token", text: "A" }),
+      frame({ v: "chat.sse/1", seq: 2, type: "token", text: "B" }),
+      frame({ v: "chat.sse/1", seq: 3, type: "done", message_id: "m", finish_reason: "stop" }),
     ]);
     await runChatStream({
       ...args(res),
@@ -419,18 +419,44 @@ describe("ChatSseEvent typing", () => {
 });
 describe("seq khởi đầu bằng 0 (contract mở, spec chỉ yêu cầu đơn điệu)", () => {
   it("nhận event đầu tiên có seq = 0", () => {
-    const s = reduceEvent(initialStreamState(), { v: 1, seq: 0, type: "token", text: "A" });
+    const s = reduceEvent(initialStreamState(), { v: "chat.sse/1", seq: 0, type: "token", text: "A" });
     expect(s.content).toBe("A");
   });
 
   it("vẫn loại event lặp sau đó khi bắt đầu từ 0", () => {
-    let s = reduceEvent(initialStreamState(), { v: 1, seq: 0, type: "token", text: "A" });
-    s = reduceEvent(s, { v: 1, seq: 0, type: "token", text: "A-again" });
+    let s = reduceEvent(initialStreamState(), { v: "chat.sse/1", seq: 0, type: "token", text: "A" });
+    s = reduceEvent(s, { v: "chat.sse/1", seq: 0, type: "token", text: "A-again" });
     expect(s.content).toBe("A");
   });
 
   it("nhận event đầu tiên có seq = 1", () => {
-    const s = reduceEvent(initialStreamState(), { v: 1, seq: 1, type: "token", text: "A" });
+    const s = reduceEvent(initialStreamState(), { v: "chat.sse/1", seq: 1, type: "token", text: "A" });
     expect(s.content).toBe("A");
+  });
+});
+
+describe("Contract thực tế với P1 (đã verify end-to-end)", () => {
+  it("event đầu tiên có seq = 0 vẫn được nhận", () => {
+    // chatagent/chatagent/agent.py đánh số seq BẮT ĐẦU TỪ 0. Nếu khởi tạo
+    // seq: 0, event `start` đầu tiên bị drop → mất turn_id.
+    const s = reduceEvent(initialStreamState(), {
+      v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null,
+    });
+    expect(s.turnId).toBe("t1");
+  });
+
+  it("start.message_id = null không làm hỏng state", () => {
+    const s = reduceEvent(initialStreamState(), {
+      v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null,
+    });
+    expect(s.messageId).toBeNull();
+    expect(s.status).toBe("streaming");
+  });
+
+  it("parse được frame thật từ chatagent (v là chuỗi, key không theo thứ tự)", () => {
+    const ev = parseSseFrame(
+      'event: start\ndata: {"v": "chat.sse/1", "seq": 0, "type": "start", "turn_id": "abc", "message_id": null}',
+    );
+    expect(ev).toMatchObject({ type: "start", turn_id: "abc", message_id: null, seq: 0, v: "chat.sse/1" });
   });
 });

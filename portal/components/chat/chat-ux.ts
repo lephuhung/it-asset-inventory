@@ -54,15 +54,19 @@ export interface ErrorBanner {
 
 /**
  * Định dạng lỗi theo spec: `[<category>] <hint> [HTTP <code>]`.
- * `hint` rỗng thì lấy câu chữ mặc định theo taxonomy — không bao giờ để trống.
+ *
+ * Backend đã gửi `hint` ở đúng format đó (route chat.py bọc sẵn), nếu bọc thêm
+ * lần nữa sẽ thành `[cat] [cat] ... [HTTP 400] [HTTP 400]`. Vì vậy chỉ bọc khi
+ * hint trần; hint đã có tiền tố `[` thì giữ nguyên.
  */
 export function formatErrorBanner(error: ErrorLike | null | undefined): ErrorBanner | null {
   if (!error) return null;
   const hint = error.hint?.trim() || chatErrorHint(error.category);
-  const status = error.httpStatus ? ` [HTTP ${error.httpStatus}]` : "";
+  const alreadyFormatted = hint.startsWith("[");
+  const status = error.httpStatus && !alreadyFormatted ? ` [HTTP ${error.httpStatus}]` : "";
   return {
     category: error.category,
-    text: `[${error.category}] ${hint}${status}`,
+    text: alreadyFormatted ? hint : `[${error.category}] ${hint}${status}`,
     canRetry: Boolean(error.retryable),
   };
 }

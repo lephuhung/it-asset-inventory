@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import settings
+from sqlalchemy.util import await_only
 
 engine = create_async_engine(settings.database_url, echo=settings.db_echo, pool_pre_ping=True)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -32,6 +33,10 @@ def _register_chat_ro_hygiene(engine_: AsyncEngine) -> None:
     `_start_transaction()` mở transaction ẩn — `RESET ALL`/`SET` khi đó nằm trong
     transaction và bị rollback khi kết thúc dùng connection, làm hygiene mất tác dụng.
     Gọi thẳng asyncpg không mở transaction nên hai câu lệnh có hiệu lực session ngay.
+
+    Gọi coroutine của asyncpg từ event listener (chạy đồng bộ) phải qua
+    `await_only` — engine này dùng driver **asyncpg**, không phải psycopg3, nên
+    `dbapi_conn.await_(...)` không tồn tại (đó là API của psycopg3).
     """
 
     @event.listens_for(engine_.sync_engine, "checkout")
@@ -39,8 +44,8 @@ def _register_chat_ro_hygiene(engine_: AsyncEngine) -> None:
         raw = getattr(dbapi_conn, "_connection", None)
         if raw is None:  # DBAPI không phải asyncpg — bỏ qua an toàn
             return
-        dbapi_conn.await_(raw.execute("RESET ALL"))
-        dbapi_conn.await_(raw.execute(f"SET search_path TO {CHAT_RO_SEARCH_PATH}"))
+        await_only(raw.execute("RESET ALL"))
+        await_only(raw.execute(f"SET search_path TO {CHAT_RO_SEARCH_PATH}"))
 
 
 def create_chat_ro_engine(url: str | None = None, **kwargs) -> AsyncEngine:
