@@ -87,6 +87,17 @@ export function ChatRail() {
   const sendingRef = useRef(false);
   // Câu hỏi vừa gửi — giữ riêng vì lỗi trước khi persist sẽ không có trong lịch sử.
   const lastAttemptRef = useRef<{ content: string } | null>(null);
+  // Câu hỏi đang bay: backend ĐÃ persist tin nhắn user TRƯỚC khi mở stream, nhưng
+  // `detail` chỉ được nạp lại sau khi stream kết thúc. Không render bản tạm thì
+  // người dùng thấy khung chat trống cho tới lúc câu trả lời về.
+  //
+  // `baselineCount` = số tin nhắn lúc gửi. Chỉ khi lịch sử dài hơn mốc đó thì
+  // tin nhắn thật mới xuất hiện; nếu không (stream lỗi trước khi claim turn) bản
+  // tạm vẫn giữ để người dùng còn thấy câu mình vừa hỏi và bấm Thử lại.
+  const [pendingQuestion, setPendingQuestion] = useState<{
+    content: string;
+    baselineCount: number;
+  } | null>(null);
   // Timer hỏi lại turn đang chạy — phải huỷ khi chuyển hội thoại / unmount.
   const pollTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   // Turn server đang theo dõi; đổi turn ⇒ snapshot của turn cũ không được áp.
@@ -278,6 +289,7 @@ const openConversation = useCallback(async (id: string) => {
       // Truyền `conversationId` tường minh: callback `send` của render cũ vẫn giữ
       // null và sẽ âm thầm bỏ câu hỏi đầu tiên.
       lastAttemptRef.current = { content };
+      setPendingQuestion({ content, baselineCount: (detail?.messages.length ?? 0) });
       setInput("");
 
       await send(content, {
@@ -305,10 +317,12 @@ const openConversation = useCallback(async (id: string) => {
       } catch {
         // giữ nguyên tin nhắn đang hiển thị
       }
+      // Bản tạm tự biến mất khi lịch sử đã dài hơn mốc lúc gửi — không xoá tay,
+      // để câu hỏi còn hiện khi stream lỗi trước khi backend kịp persist.
     } finally {
       sendingRef.current = false;
     }
-  }, [activeId, beginTracking, createConversation, effectiveMachineId, hasActiveTurn, input, pollUntilTerminal, refreshConversations, send, setServerActiveTurnId]);
+  }, [activeId, beginTracking, createConversation, detail, effectiveMachineId, hasActiveTurn, input, pollUntilTerminal, refreshConversations, send, setServerActiveTurnId]);
 
   // Nút Dừng: báo lỗi nếu server KHÔNG nhận yêu cầu hủy. Nuốt lỗi rồi báo
   // "canceled" sẽ khiến UI mở nút Gửi trong khi backend vẫn đang chạy.
@@ -349,15 +363,23 @@ const openConversation = useCallback(async (id: string) => {
   if (!allowed) return null;
 
   const messages = detail?.messages ?? [];
-  // Khi stream đã persist, tin nhắn trong lịch sử và bản stream là MỘT câu trả lời.
-  // MessageOut không mang tools → gắn tools của turn hiện tại vào đó thay vì render
-  // thêm một bản (render 2 lần) hoặc ẩn hẳn (mất dấu vết tool).
+  // Câu trả lời đã persist (có message_id trùng stream) không được render 2 lần.
   const persistedIndex =
     state.messageId !== null ? messages.findIndex((m) => m.id === state.messageId) : -1;
   const streamedAlreadyPersisted = persistedIndex !== -1;
+  // Bản tạm của câu hỏi: chỉ hiện khi lịch sử CHƯA có tin nhắn mới hơn mốc lúc
+  // gửi — tránh 2 bản khi bản thật đã vào lịch sử.
+  const pendingVisible =
+    pendingQuestion !== null && messages.length <= pendingQuestion.baselineCount;
   // Lỗi đã hiển thị ở banner bên dưới → không cần render lại trong khối stream.
   const showStreamed =
     !streamedAlreadyPersisted && (streaming || state.content !== "" || state.tools.length > 0);
+  // Chờ token đầu tiên: báo đang xử lý thay vì để khung trống lơ lửng.
+  // Có 2 mốc chờ khác nhau và độ trễ thật đo được ~5s (suy nghĩ) rồi ~20s
+  // (chạy xong tool, chờ token) — dùng chữ khác nhau cho từng mốc.
+  const thinkingLabel =
+    state.tools.length > 0 ? "Đang soạn câu trả lời…" : "Đang suy nghĩ…";
+  const showThinking = streaming && state.content === "" && state.messageId === null;
   const composer = decideComposerState({ streaming: hasActiveTurn, input });
   const banner = formatErrorBanner(state.error);
 
@@ -465,7 +487,7 @@ const openConversation = useCallback(async (id: string) => {
             className="flex min-h-0 flex-1 flex-col"
           >
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto border-t border-slate-200 px-3 py-3">
-            {messages.length === 0 && !showStreamed ? (
+            {messages.length === 0 && !showStreamed && !pendingVisible && !showThinking ? (
               <p className="mt-6 text-center text-xs text-slate-400">
                 Hỏi về máy, phần mềm, cảnh báo hoặc dữ liệu Velociraptor.
               </p>
@@ -482,6 +504,26 @@ const openConversation = useCallback(async (id: string) => {
                     tools={i === persistedIndex ? state.tools : []}
                   />
                 ))}
+
+                {pendingVisible && pendingQuestion && (
+                  <ChatMessage
+                    role="user"
+                    content={pendingQuestion.content}
+                    createdAt={new Date().toISOString()}
+                  />
+                )}
+
+                {showThinking && (
+                  <div className="flex items-center gap-2 px-1 py-1 text-xs text-slate-400">
+                    <span className="flex gap-1" aria-hidden="true">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300 [animation-delay:0ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300 [animation-delay:120ms]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-300 [animation-delay:240ms]" />
+                    </span>
+                    <span>{thinkingLabel}</span>
+                  </div>
+                )}
+
                 {showStreamed && (
                   <ChatMessage
                     role="assistant"

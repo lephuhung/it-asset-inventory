@@ -715,6 +715,19 @@ describe("Regression vòng 2 — dấu vết tool, Enter, reset, ngữ cảnh th
   });
 });
 
+
+/** Stream chỉ phát `start` rồi treo — mô phỏng lúc model đang suy nghĩ (~5s thật). */
+function thinkingStreamForTest(): Response {
+  return new Response(
+    new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null })));
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 describe("Tab lịch sử / Tab chat", () => {
   it("mở rail thì đang ở tab Chat", async () => {
     await openRail();
@@ -797,5 +810,204 @@ describe("Tab lịch sử / Tab chat", () => {
     await openRail();
     const historyTab = screen.getByRole("tab", { name: /Lịch sử/i });
     expect(historyTab.textContent).toContain("2");
+  });
+});
+
+describe("Câu hỏi phải hiện ngay + báo đang suy nghĩ", () => {
+  /** Stream treo: chỉ `start`, chưa có token — mô phỏng lúc model đang nghĩ. */
+  function thinkingStream(): Response {
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null })));
+          // không enqueue token, không đóng → treo
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  it("hiện câu hỏi ngay khi vừa gửi, chưa cần câu trả lời", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    let release!: (v: Response) => void;
+    const pending = new Promise<Response>((res) => {
+      release = res;
+    });
+    vi.stubGlobal("fetch", vi.fn(() => pending) as unknown as typeof fetch);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("máy nào quá hạn EOL?");
+    });
+
+    // Stream còn treo, lịch sử chưa kịp nạp — câu hỏi vẫn phải thấy.
+    await waitFor(() => {
+      expect(screen.getAllByText("máy nào quá hạn EOL?").length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      release(okStream());
+      await pending;
+    });
+  });
+
+  it("báo 'Đang suy nghĩ…' khi stream chưa có token nào", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(thinkingStream()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Đang suy nghĩ/)).toBeTruthy();
+    });
+  });
+
+  it("ẩn 'Đang suy nghĩ…' khi token đầu tiên về", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+
+    expect(screen.queryByText(/Đang suy nghĩ/)).toBeNull();
+  });
+
+  it("không hiện câu hỏi hai lần sau khi lịch sử nạp lại", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    // Lúc mở hội thoại thì lịch sử trống; sau khi gửi, backend đã persist cả
+    // câu hỏi lẫn câu trả lời (user persist ngay khi claim turn).
+    // Lần gọi đầu (mở hội thoại) thì lịch sử còn trống; các lần sau đã có dữ liệu.
+    let calls = 0;
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) =>
+      calls++ > 0
+        ? detail({
+            id,
+            messages: [
+              { id: "m0", role: "user", content: "câu hỏi", turn_id: "t0", machine_id: null, error_category: null, created_at: "2026-10-02T08:00:00Z" },
+              { id: "m1", role: "assistant", content: "Có 3 máy.", turn_id: "t1", machine_id: null, error_category: null, created_at: "2026-10-02T08:00:01Z" },
+            ],
+          })
+        : detail({ id }),
+    );
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+
+    expect(screen.getAllByText("câu hỏi")).toHaveLength(1);
+    expect(screen.getAllByText("Có 3 máy.")).toHaveLength(1);
+  });
+
+  it("câu hỏi vẫn còn khi stream báo lỗi", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ category: "chat_upstream_llm", hint: "Mô hình đang bận.", retryable: true }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi bị lỗi");
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("câu hỏi bị lỗi").length).toBeGreaterThan(0);
+    });
+    // Banner lỗi hiện ở khung chat...
+    const banner = document.querySelector("p.bg-red-50");
+    expect(banner?.textContent).toContain("chat_upstream_llm");
+    expect(banner?.textContent).toContain("Mô hình đang bận");
+    // ...và vùng aria-live thông báo lại cho trình đọc màn hình (cố ý trùng nội dung).
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toContain("Mô hình đang bận");
+  });
+});
+
+describe("Chỉ báo trong lúc chờ — phải nói đúng đang làm gì", () => {
+  /** Stream: start → tool_start → tool_result rồi TREO (chờ token, mất ~20s thật). */
+  function afterToolsStream(): Response {
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null })));
+          c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 1, type: "tool_start", tool_call_id: "tc1", tool: "inventory_software", params_digest: "d", summary: "s" })));
+          c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 2, type: "tool_result", tool_call_id: "tc1", ok: true, row_count: 5, byte_count: null, duration_ms: 20 })));
+          // chưa có token → treo
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  it("chờ token đầu tiên → 'Đang suy nghĩ…'", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(thinkingStreamForTest()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+
+    await waitFor(() => expect(screen.getByText(/Đang suy nghĩ/)).toBeTruthy());
+  });
+
+  it("tool đã xong nhưng token chưa về → 'Đang soạn câu trả lời…'", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(afterToolsStream()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("thống kê phần mềm");
+    });
+
+    await waitFor(() => expect(screen.getByText(/Đang soạn câu trả lời/)).toBeTruthy());
+    // Chip tool vẫn hiện — người dùng thấy tiến độ.
+    expect(screen.getByText("inventory_software")).toBeTruthy();
   });
 });
