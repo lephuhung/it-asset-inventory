@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import yaml
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -30,7 +31,7 @@ from app.db.models import (
     VelociraptorConfig,
     VelociraptorLink,
 )
-from app.services.budget import BudgetUnavailable, charged, reserve, settle
+from app.services.budget import BudgetUnavailable, Reservation, charged, reserve, settle
 from app.services.llm import (
     LlmAuthError,
     LlmClient,
@@ -307,22 +308,79 @@ async def _sync_tokens_used_today(db: AsyncSession, cfg: LlmConfig) -> None:
     cfg.tokens_used_today = await charged(db)
 
 
+async def _admit_budget(
+    db: AsyncSession,
+    *,
+    scope: str,
+    operation_id: uuid.UUID,
+    association_id: uuid.UUID | None,
+    cfg: LlmConfig,
+) -> Reservation | None:
+    """Giữ chỗ ngân sách + commit admission NGAY (giải phóng advisory lock).
+
+    Commit nằm trong hàm này để lỗi DB ở chính bước chốt admission cũng được dịch
+    thành `BudgetUnavailable` (fail closed cho thao tác MỚI — spec R8), thay vì
+    escape dưới dạng lỗi DB thô. Trả `None` khi vượt trần ngân sách.
+    """
+    reserved = await reserve(
+        db,
+        scope=scope,
+        operation_id=operation_id,
+        association_id=association_id,
+        envelope=_budget_envelope(cfg),
+        budget=cfg.daily_token_budget,
+    )
+    if reserved is not None:
+        try:
+            await db.commit()
+        except SQLAlchemyError as exc:
+            raise BudgetUnavailable(type(exc).__name__) from exc
+    return reserved
+
+
 async def _finalize_usage(
-    db: AsyncSession, *, scope: str, operation_id: uuid.UUID, actual: int | None, cfg: LlmConfig
+    db: AsyncSession,
+    *,
+    scope: str,
+    operation_id: uuid.UUID,
+    actual: int | None,
+    cfg: LlmConfig | None,
 ) -> None:
     """Ghi nhận usage SAU khi kết quả đã được persist (spec R8).
 
-    Lỗi ngân sách ở bước này KHÔNG được biến công việc đã hoàn thành thành thất bại:
-    rollback + log rồi trả về. Reservation khi đó vẫn ở trạng thái cũ (reserved →
-    vẫn tính đủ envelope) — dè dặt, an toàn.
+    - `cfg=None` (llm_config bị xoá): vẫn settle (BẮT BUỘC), chỉ bỏ cập nhật cột
+      hiển thị `tokens_used_today` (dẫn xuất).
+    - Lỗi ngân sách ở bước này KHÔNG được biến công việc đã hoàn thành thành thất bại:
+      rollback + log rồi trả về. Reservation khi đó vẫn ở trạng thái cũ (reserved →
+      vẫn tính đủ envelope) — dè dặt, an toàn.
     """
     try:
         await settle(db, scope=scope, operation_id=operation_id, actual=actual)
-        await _sync_tokens_used_today(db, cfg)
+        if cfg is not None:
+            await _sync_tokens_used_today(db, cfg)
         await db.commit()
     except Exception:
         await db.rollback()
         logger.exception("Ngân sách: ghi nhận usage thất bại — giữ nguyên kết quả đã lưu")
+
+
+async def _finalize_usage_best_effort(
+    db: AsyncSession, *, scope: str, operation_id: uuid.UUID, actual: int | None
+) -> None:
+    """`_finalize_usage` tự tra `llm_config` — settle chạy dù cfg vắng HOẶC tra lỗi.
+
+    Settlement là bắt buộc trên đường post-execution (spec R8); cột hiển thị chỉ là
+    dẫn xuất nên bỏ qua khi không có cfg.
+    """
+    try:
+        cfg = await _load_llm_config(db)
+    except Exception:
+        await db.rollback()
+        cfg = None
+        logger.exception("Ngân sách: tra llm_config thất bại — vẫn settle reservation")
+    await _finalize_usage(
+        db, scope=scope, operation_id=operation_id, actual=actual, cfg=cfg
+    )
 
 
 async def _settle_unknown_fresh(*, scope: str, operation_id: uuid.UUID) -> None:
@@ -348,6 +406,28 @@ async def _settle_unknown_fresh(*, scope: str, operation_id: uuid.UUID) -> None:
         logger.exception("Ngân sách: cleanup settle thất bại cho %s/%s", scope, operation_id)
     finally:
         await engine.dispose()
+
+
+async def _dispatch_fail_definitive(
+    db: AsyncSession, inv: DfirInvestigation, *, error: str
+) -> None:
+    """Đánh dấu dispatch thất bại DỨT ĐIỂM + settle unknown (đủ envelope).
+
+    Dùng cho mọi lỗi TRƯỚC khi request được gửi (cấu hình/validation pre-POST, 4xx
+    definitive, job_id mismatch) — không có callback nào sẽ tới để settle sau, nên
+    reservation phải được đóng tại chỗ.
+    """
+    op_id = inv.id
+    inv.status = "failed"
+    inv.hermes_status = "dispatch_failed"
+    inv.error = error[:2000]
+    inv.completed_at = datetime.now(UTC)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Dispatch %s: persist trạng thái failed thất bại", op_id)
+    await _settle_unknown_fresh(scope="investigation_analysis", operation_id=op_id)
 
 
 # ── Public: enqueue investigation ────────────────────────────────
@@ -725,13 +805,12 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi dispatch (DeepAgent callback có thể
     # không báo usage → settle unknown sẽ tính đủ envelope).
     try:
-        reserved = await reserve(
+        reserved = await _admit_budget(
             db,
             scope="investigation_analysis",
             operation_id=inv.id,
             association_id=inv.id,
-            envelope=_budget_envelope(llm_cfg),
-            budget=llm_cfg.daily_token_budget,
+            cfg=llm_cfg,
         )
     except BudgetUnavailable as exc:
         # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
@@ -749,34 +828,41 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         await db.commit()
         logger.warning("Investigation %s: vượt budget, bỏ qua dispatch DeepAgent", inv.id)
         return
-    # Chốt admission ngay để giải phóng advisory lock trước khi dispatch.
-    await db.commit()
+    # Chốt admission xong; mọi lỗi cấu hình/validation TRƯỚC khi POST cũng phải
+    # được settle unknown (không có callback nào tới để settle sau).
+    try:
+        velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
+        if not velo_cfg or not velo_cfg.client_config_encrypted:
+            raise LlmError("Chưa upload api_client.yaml cho Velociraptor")
+        api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
+        now = datetime.now(UTC)
+        time_from = now - timedelta(hours=settings.deepagent_default_lookback_hours)
+        expected_job_id = f"deepagent-{inv.id}"
+        request_body = {
+            "schema_version": "dfir.deepagent.request/1.2",
+            "investigation_id": str(inv.id),
+            "client_id": inv.velociraptor_client_id,
+            "hostname": hostname,
+            "target_platform": target_platform,
+            "time_range": {"from": time_from.isoformat(), "to": now.isoformat()},
+            "suspicious_activity": inv.custom_instructions
+            or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
+            "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt, "allow_cloud": llm_cfg.allow_cloud},
+            "velociraptor_api_client_yaml": api_client_yaml,
+            "custom_artifacts": await _load_custom_artifact_refs(db, target_platform),
+        }
+        inv.status = "analyzing"
+        inv.external_job_id = expected_job_id
+        inv.hermes_status = "dispatching"
+        inv.started_at = now
+        await db.commit()
+    except Exception as exc:
+        # Cấu hình/validation TRƯỚC khi POST → definitive → settle unknown.
+        await _dispatch_fail_definitive(
+            db, inv, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
+        )
+        raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}") from exc
 
-    velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
-    if not velo_cfg or not velo_cfg.client_config_encrypted:
-        raise LlmError("Chưa upload api_client.yaml cho Velociraptor")
-    api_client_yaml = decrypt_aes_gcm(velo_cfg.client_config_encrypted)
-    now = datetime.now(UTC)
-    time_from = now - timedelta(hours=settings.deepagent_default_lookback_hours)
-    expected_job_id = f"deepagent-{inv.id}"
-    request_body = {
-        "schema_version": "dfir.deepagent.request/1.2",
-        "investigation_id": str(inv.id),
-        "client_id": inv.velociraptor_client_id,
-        "hostname": hostname,
-        "target_platform": target_platform,
-        "time_range": {"from": time_from.isoformat(), "to": now.isoformat()},
-        "suspicious_activity": inv.custom_instructions
-        or "Điều tra chủ động: đánh giá tiến trình, mạng, persistence, event log và PowerShell; không mặc định máy đã bị xâm nhập.",
-        "llm_runtime": {"base_url": llm_cfg.base_url, "api_key": api_key, "model": llm_cfg.model, "temperature": float(llm_cfg.temperature), "timeout_seconds": llm_cfg.request_timeout, "max_tokens": llm_cfg.max_tokens, "system_prompt": llm_cfg.system_prompt, "allow_cloud": llm_cfg.allow_cloud},
-        "velociraptor_api_client_yaml": api_client_yaml,
-        "custom_artifacts": await _load_custom_artifact_refs(db, target_platform),
-    }
-    inv.status = "analyzing"
-    inv.external_job_id = expected_job_id
-    inv.hermes_status = "dispatching"
-    inv.started_at = now
-    await db.commit()
     try:
         async with httpx.AsyncClient(timeout=settings.deepagent_request_timeout_seconds) as client:
             response = await client.post(
@@ -810,14 +896,9 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
                 "request có thể đã tới server. Đã lưu dispatch_uncertain + reconcile job."
             ) from exc
         if body.get("job_id") != expected_job_id:
-            inv.status = "failed"
-            inv.hermes_status = "dispatch_failed"
-            inv.error = "DeepAgent trả về job ID không khớp investigation"
-            inv.completed_at = datetime.now(UTC)
-            await db.commit()
             # Dispatch definitive-failed → settle unknown (tính đủ envelope).
-            await _settle_unknown_fresh(
-                scope="investigation_analysis", operation_id=inv.id
+            await _dispatch_fail_definitive(
+                db, inv, error="DeepAgent trả về job ID không khớp investigation"
             )
             raise DispatchFailed("DeepAgent trả về job ID không khớp investigation")
         inv.external_job_id = expected_job_id
@@ -837,14 +918,9 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         #   reconcile sẽ GET job_id để quyết định tiếp.
         status_code = exc.response.status_code if exc.response else 0
         if 400 <= status_code < 500 and status_code not in (408, 429):
-            inv.status = "failed"
-            inv.hermes_status = "dispatch_failed"
-            inv.error = f"DeepAgent dispatch 4xx: {status_code}: {exc}"[:2000]
-            inv.completed_at = datetime.now(UTC)
-            await db.commit()
             # 4xx definitive → request không tới thành công → settle unknown.
-            await _settle_unknown_fresh(
-                scope="investigation_analysis", operation_id=inv.id
+            await _dispatch_fail_definitive(
+                db, inv, error=f"DeepAgent dispatch 4xx: {status_code}: {exc}"
             )
             raise DispatchFailed(f"DeepAgent dispatch 4xx: {status_code}")
         # 5xx / 408 / 429: ambiguous — KHÔNG set failed; raise typed
@@ -931,15 +1007,9 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
             raise DispatchUncertain(
                 f"Post-POST exception: {type(exc).__name__}"
             )
-        # Lỗi trước khi request được gửi → definitive failure.
-        inv.status = "failed"
-        inv.hermes_status = "dispatch_failed"
-        inv.error = f"DeepAgent dispatch: {type(exc).__name__}: {exc}"[:2000]
-        inv.completed_at = datetime.now(UTC)
-        await db.commit()
-        # Lỗi trước POST → definitive → settle unknown (tính đủ envelope).
-        await _settle_unknown_fresh(
-            scope="investigation_analysis", operation_id=inv.id
+        # Lỗi trước khi request được gửi → definitive failure → settle unknown.
+        await _dispatch_fail_definitive(
+            db, inv, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
         )
         raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}")
 
@@ -1091,6 +1161,9 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
     if inv.external_orchestrator:
         # Kết quả external chỉ được chấp nhận qua callback đã xác thực.
         return
+    # Giữ id ngay từ đầu: sau rollback ORM object có thể bị expire, đọc lại
+    # `inv.id` sẽ lazy-load ngoài async (MissingGreenlet).
+    op_id = inv.id
     cfg = await _load_llm_config(db)
     if not cfg:
         inv.status = "failed"
@@ -1164,13 +1237,12 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
 
     # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi gọi LLM (DB là source of truth).
     try:
-        reserved = await reserve(
+        reserved = await _admit_budget(
             db,
             scope="investigation_analysis",
-            operation_id=inv.id,
-            association_id=inv.id,
-            envelope=_budget_envelope(cfg),
-            budget=cfg.daily_token_budget,
+            operation_id=op_id,
+            association_id=op_id,
+            cfg=cfg,
         )
     except BudgetUnavailable as exc:
         # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
@@ -1179,17 +1251,15 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         inv.error = str(exc)[:2000]
         inv.completed_at = datetime.now(UTC)
         await db.commit()
-        logger.warning("Investigation %s: budget DB không khả dụng, bỏ qua phân tích", inv.id)
+        logger.warning("Investigation %s: budget DB không khả dụng, bỏ qua phân tích", op_id)
         return
     if reserved is None:
         inv.status = "failed"
         inv.error = "chat_budget_exceeded: đã vượt ngân sách token hôm nay"
         inv.completed_at = datetime.now(UTC)
         await db.commit()
-        logger.warning("Investigation %s: vượt budget, bỏ qua phân tích", inv.id)
+        logger.warning("Investigation %s: vượt budget, bỏ qua phân tích", op_id)
         return
-    # Chốt admission ngay để giải phóng advisory lock trước khi gọi LLM.
-    await db.commit()
 
     try:
         async with LlmClient(
@@ -1228,20 +1298,25 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         # Persist kết quả TRƯỚC; ghi nhận usage ở transaction riêng để lỗi ngân
         # sách không thể biến công việc đã hoàn thành thành thất bại (spec R8).
         await db.commit()
+        # Chụp snapshot TRƯỚC `_finalize_usage`: nếu settle lỗi, hàm đó rollback
+        # làm expire ORM object; đọc `inv.*` sau đó sẽ lazy-load ngoài async
+        # (MissingGreenlet). Dùng snapshot cho log + notification.
+        snapshot = _inv_to_dict(inv)
         await _finalize_usage(
-            db, scope="investigation_analysis", operation_id=inv.id,
+            db, scope="investigation_analysis", operation_id=op_id,
             actual=resp.total_tokens, cfg=cfg,
         )
         logger.info(
             "Investigation %s completed: severity=%s findings=%d tokens=%d",
-            inv.id, inv.severity, inv.findings_count or 0, resp.total_tokens,
+            snapshot["id"], snapshot["severity"], snapshot["findings_count"] or 0,
+            resp.total_tokens,
         )
 
         # Gửi notification qua alert engine (Org Admin + Super Admin)
         await _notify_investigation_result(
-            db, investigation_id=inv.id, machine_id=inv.machine_id,
-            status="completed", severity=inv.severity,
-            findings_count=inv.findings_count, llm_model=inv.llm_model,
+            db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
+            status="completed", severity=snapshot["severity"],
+            findings_count=snapshot["findings_count"], llm_model=snapshot["llm_model"],
         )
 
     except (LlmAuthError, LlmTimeoutError, LlmRateLimitError, LlmError) as e:
@@ -1249,20 +1324,31 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         inv.error = f"LLM: {e}"[:2000]
         inv.completed_at = datetime.now(UTC)
         await db.commit()
+        # Chụp snapshot trước `_finalize_usage` (rollback có thể expire `inv`).
+        snapshot = _inv_to_dict(inv)
         # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
         await _finalize_usage(
-            db, scope="investigation_analysis", operation_id=inv.id, actual=None, cfg=cfg,
+            db, scope="investigation_analysis", operation_id=op_id,
+            actual=None, cfg=cfg,
         )
-        logger.warning("Investigation %s LLM failed: %s", inv.id, e)
+        logger.warning("Investigation %s LLM failed: %s", snapshot["id"], e)
         # Gửi notification failed
         await _notify_investigation_result(
-            db, investigation_id=inv.id, machine_id=inv.machine_id,
+            db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
             status="failed", error=str(e),
         )
     except asyncio.CancelledError:
         # Hủy giữa chừng → settle unknown trong session mới (session hiện đang bị hủy).
         await _settle_unknown_fresh(
-            scope="investigation_analysis", operation_id=inv.id
+            scope="investigation_analysis", operation_id=op_id
+        )
+        raise
+    except Exception:
+        # Lỗi không lường trước sau khi đã reserve → settle unknown (best-effort)
+        # rồi re-raise. `_settle_unknown_fresh` bỏ qua nếu reservation đã terminal
+        # (ví dụ nhánh thành công đã settle known xong).
+        await _settle_unknown_fresh(
+            scope="investigation_analysis", operation_id=op_id
         )
         raise
 
@@ -1303,13 +1389,12 @@ async def chat_with_llm(
     # Mỗi câu hỏi Q&A là MỘT thao tác tính phí riêng (operation_id mới).
     chat_op_id = uuid.uuid4()
     try:
-        reserved = await reserve(
+        reserved = await _admit_budget(
             db,
             scope="investigation_chat",
             operation_id=chat_op_id,
             association_id=inv.id,
-            envelope=_budget_envelope(cfg),
-            budget=cfg.daily_token_budget,
+            cfg=cfg,
         )
     except BudgetUnavailable as exc:
         # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
@@ -1317,8 +1402,6 @@ async def chat_with_llm(
         raise LlmError(str(exc)) from exc
     if reserved is None:
         raise LlmError("chat_budget_exceeded: đã vượt ngân sách token hôm nay")
-    # Chốt admission ngay để giải phóng advisory lock trước khi gọi LLM.
-    await db.commit()
 
     try:
         async with LlmClient(
@@ -1336,11 +1419,10 @@ async def chat_with_llm(
         # Hủy giữa chừng → settle unknown trong session mới rồi re-raise.
         await _settle_unknown_fresh(scope="investigation_chat", operation_id=chat_op_id)
         raise
-    except LlmError:
-        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
-        await _finalize_usage(
-            db, scope="investigation_chat", operation_id=chat_op_id, actual=None, cfg=cfg,
-        )
+    except Exception:
+        # Mọi lỗi sau khi đã reserve (không chỉ LlmError) → usage không xác định
+        # → settle unknown (tính đủ envelope) trong session mới rồi re-raise.
+        await _settle_unknown_fresh(scope="investigation_chat", operation_id=chat_op_id)
         raise
 
     db.add(DfirInvestigationMessage(
@@ -1529,12 +1611,11 @@ async def submit_external_result(
         # (đủ envelope) ở transaction riêng, best-effort (spec R8).
         snapshot = _inv_to_dict(inv)
         await db.commit()
-        cfg = await _load_llm_config(db)
-        if cfg:
-            await _finalize_usage(
-                db, scope="investigation_analysis", operation_id=inv.id,
-                actual=None, cfg=cfg,
-            )
+        # Settlement là BẮT BUỘC (spec R8) — không phụ thuộc llm_config còn tồn tại.
+        await _finalize_usage_best_effort(
+            db, scope="investigation_analysis", operation_id=snapshot["id"],
+            actual=None,
+        )
         # Notify failed
         await _notify_investigation_result(
             db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
@@ -1581,12 +1662,12 @@ async def submit_external_result(
         snapshot["id"], snapshot["severity"], snapshot["findings_count"] or 0,
         reported_actual,
     )
-    cfg = await _load_llm_config(db)
-    if cfg:
-        await _finalize_usage(
-            db, scope="investigation_analysis", operation_id=inv.id,
-            actual=reported_actual, cfg=cfg,
-        )
+    # Settlement là BẮT BUỘC (spec R8) — không phụ thuộc llm_config còn tồn tại;
+    # `_finalize_usage_best_effort` tự tra cfg và bỏ qua cột hiển thị nếu vắng.
+    await _finalize_usage_best_effort(
+        db, scope="investigation_analysis", operation_id=snapshot["id"],
+        actual=reported_actual,
+    )
 
     # Gửi notification (alert engine — Org Admin + Super Admin)
     await _notify_investigation_result(

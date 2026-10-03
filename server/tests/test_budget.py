@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import TokenReservation
@@ -917,3 +918,334 @@ async def test_local_analysis_cancellation_settles_unknown(session_factory, monk
             )
         ).one_or_none()
         assert row is not None and row[0] == "unknown"
+
+
+# ── Fix Round 2: DB-failure translation, settlement coverage, cfg-independent ──
+
+
+class _CommitBoomSession:
+    """Bọc session: delegate mọi thứ, riêng `commit` ném OperationalError.
+
+    Dùng để chứng minh lỗi ở chính bước commit admission cũng được dịch thành
+    `BudgetUnavailable` (không escape dưới dạng lỗi DB thô).
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def commit(self):
+        raise OperationalError("COMMIT", {}, Exception("commit down"))
+
+
+class _NthCommitBoom:
+    """Bọc session: commit thứ `fail_on` ném OperationalError, còn lại delegate."""
+
+    def __init__(self, inner, *, fail_on: int):
+        self._inner = inner
+        self._n = 0
+        self._fail_on = fail_on
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def commit(self):
+        self._n += 1
+        if self._n == self._fail_on:
+            raise OperationalError("COMMIT", {}, Exception("commit down"))
+        return await self._inner.commit()
+
+
+@pytest.mark.asyncio
+async def test_admit_budget_translates_commit_failure(session_factory, monkeypatch):
+    """`_admit_budget`: lỗi ở chính `commit` admission → `BudgetUnavailable` (Finding 1)."""
+    from app.db.models import LlmConfig
+    from app.services import dfir_investigation as inv_svc
+    from app.services.budget import BudgetUnavailable
+
+    async with session_factory() as s:
+        cfg = LlmConfig(
+            id=1, enabled=True, provider="ollama",
+            base_url="http://127.0.0.1:11434/v1", model="m",
+            daily_token_budget=100_000, tokens_used_today=0,
+        )
+        s.add(cfg)
+        await s.flush()
+        with pytest.raises(BudgetUnavailable):
+            await inv_svc._admit_budget(
+                _CommitBoomSession(s),
+                scope="investigation_analysis",
+                operation_id=uuid.uuid4(),
+                association_id=None,
+                cfg=cfg,
+            )
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_admission_commit_failure_fails_closed(session_factory, monkeypatch):
+    """`_state_analyze`: commit admission lỗi → investigation failed + chat_budget_unavailable."""
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        # commit #1: persist llm_provider/model; commit #2: admission (lỗi).
+        wrapped = _NthCommitBoom(s, fail_on=2)
+        await inv_svc._state_analyze(wrapped, inv)
+
+    async with session_factory() as s:
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored.status == "failed"
+        assert "chat_budget_unavailable" in (stored.error or "")
+
+
+async def _seed_dispatchable_no_velo(session_factory):
+    """Investigation DeepAgent 'analyzing' + reservation, KHÔNG có VelociraptorConfig."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from app.core.security import encrypt_aes_gcm
+    from app.db.models import (
+        DfirInvestigation,
+        LlmConfig,
+        Machine,
+        MachineCurrent,
+        Organization,
+        OrgType,
+        User,
+        UserRole,
+    )
+
+    async with session_factory() as s:
+        org = Organization(name=f"Org {uuid.uuid4()}", type=OrgType.ROOT.value)
+        s.add(org)
+        await s.flush()
+        user = User(
+            org_id=org.id,
+            full_name="T6d",
+            email=f"t6d-{uuid.uuid4()}@example.com",
+            role=UserRole.SUPER_ADMIN.value,
+            password_hash="x",
+        )
+        s.add(user)
+        await s.flush()
+        machine = Machine(
+            hostname=f"T6D-{uuid.uuid4()}", org_id=org.id, machine_uuid=str(uuid.uuid4())
+        )
+        s.add(machine)
+        await s.flush()
+        s.add(
+            MachineCurrent(
+                machine_id=machine.id, collected_at=_dt.now(_UTC), platform="windows"
+            )
+        )
+        cfg = LlmConfig(
+            id=1, enabled=True, provider="ollama",
+            base_url="http://127.0.0.1:11434/v1",
+            api_key_encrypted=encrypt_aes_gcm("k"), model="m",
+            daily_token_budget=100_000, tokens_used_today=0,
+        )
+        s.add(cfg)
+        inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="C.t6d",
+            artifacts=[],
+            status="analyzing",
+            external_orchestrator="deepagent",
+            hermes_status="dispatching",
+            requested_by=user.id,
+        )
+        s.add(inv)
+        await s.flush()
+        r = await reserve(
+            s,
+            scope="investigation_analysis",
+            operation_id=inv.id,
+            association_id=inv.id,
+            envelope=500,
+            budget=cfg.daily_token_budget,
+        )
+        assert r is not None
+        await s.commit()
+        return inv.id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_config_missing_settles_unknown(session_factory, monkeypatch):
+    """Thiếu VelociraptorConfig sau admission → definitive → settle unknown (Finding 2)."""
+    from app.core import config as config_mod
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(config_mod.settings, "deepagent_enabled", True)
+    monkeypatch.setattr(config_mod.settings, "deepagent_url", "http://deepagent.test/")
+    monkeypatch.setattr(config_mod.settings, "deepagent_api_key", "test-token")
+
+    inv_id = await _seed_dispatchable_no_velo(session_factory)
+
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        with pytest.raises(inv_svc.DispatchFailed):
+            await inv_svc._state_dispatch_deepagent(s, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored.status == "failed"
+        assert stored.hermes_status == "dispatch_failed"
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_unexpected_error_settles_unknown(session_factory, monkeypatch):
+    """Lỗi KHÔNG phải LlmError sau khi reserve → settle unknown rồi re-raise (Finding 2)."""
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    class _BoomLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            raise RuntimeError("unexpected non-LLM failure")
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _BoomLlm)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        with pytest.raises(RuntimeError):
+            await inv_svc._state_analyze(s, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_survives_settlement_failure(session_factory, monkeypatch):
+    """Settle lỗi → rollback expire ORM; notification vẫn chạy dùng snapshot (Finding 3).
+
+    Nếu code đọc `inv.*` sau rollback sẽ ném MissingGreenlet và test fail.
+    """
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    calls: dict = {}
+
+    async def _record_notify(*args, **kwargs):
+        calls["status"] = kwargs.get("status")
+        calls["investigation_id"] = kwargs.get("investigation_id")
+
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _record_notify)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    class _Resp:
+        content = "### 1. Low\n"
+        input_tokens = 3
+        output_tokens = 2
+        total_tokens = 5
+        estimated_cost_usd = 0.0
+        model = "m"
+
+    class _FakeLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            return _Resp()
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _FakeLlm)
+
+    async def _boom_settle(*args, **kwargs):
+        raise OperationalError("UPDATE", {}, Exception("settle down"))
+
+    monkeypatch.setattr(inv_svc, "settle", _boom_settle)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        await inv_svc._state_analyze(s, inv)  # phải KHÔNG ném MissingGreenlet
+
+    assert calls.get("status") == "completed"
+    assert calls.get("investigation_id") == inv_id
+    async with session_factory() as s:
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_external_callback_settles_without_llm_config(session_factory, monkeypatch):
+    """Callback tới khi KHÔNG còn LlmConfig → vẫn settle reservation (Finding 4)."""
+    from app.db.models import LlmConfig
+    from app.services import dfir_investigation as inv_svc
+
+    async def _noop_notify(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _noop_notify)
+
+    inv_id = await _seed_external_investigation(session_factory, envelope=900)
+    async with session_factory() as s:
+        cfg = await s.get(LlmConfig, 1)
+        assert cfg is not None
+        await s.delete(cfg)
+        await s.commit()
+
+    async with session_factory() as s:
+        await inv_svc.submit_external_result(
+            s,
+            investigation_id=str(inv_id),
+            api_key_id=None,
+            report_markdown="# report",
+            severity="low",
+            input_tokens=10,
+            output_tokens=5,
+            external_job_id="deepagent-job-1",
+            idempotency_key="cb-nocfg",
+        )
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state, actual FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "settled" and row[1] == 15
