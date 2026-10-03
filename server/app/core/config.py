@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     )
     # Cửa sổ ân hạn cho completion đến muộn sau khi turn đã terminal (T8).
     chat_completion_grace_seconds: int = 120
+    # Turn `pending` quá hạn này (không được dispatch) → failed(chat_dispatch_stuck) (T8, F7).
+    turn_pending_timeout_seconds: int = 60
     # Khoảng retry bounded khi resolve client_id từ Velociraptor (T7).
     resolver_consistency_window_seconds: int = 5
 
