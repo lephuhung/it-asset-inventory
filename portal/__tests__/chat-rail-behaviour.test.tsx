@@ -11,7 +11,6 @@ import { render, screen, act, waitFor, cleanup, fireEvent } from "@testing-libra
 
 // jsdom không cài scrollTo — rail gọi nó để cuộn xuống đáy khi có token mới.
 beforeEach(() => {
-  Element.prototype.scrollTo = function scrollTo() {};
   // jsdom không có matchMedia; rail dùng để biết docked hay drawer.
   window.matchMedia = ((query: string) => ({
     matches: false,
@@ -1093,5 +1092,143 @@ describe("Không được hiện bong bóng rỗng khi chưa có chữ", () => {
     });
     // Lỗi thì hiện banner, KHÔNG hiện bong bóng trợ lý rỗng.
     expect(document.querySelectorAll('[data-role="assistant"]').length).toBe(0);
+  });
+});
+
+describe("Cuộn tự động bám đáy", () => {
+  /**
+   * jsdom không layout: `scrollHeight`/`clientHeight` luôn 0 nên không thể quan
+   * sát hành vi cuộn. Ta gắn thuộc tính giả để mô phỏng khung cuộn thật.
+   */
+  function fakeMetrics(el: HTMLElement, scrollHeight: number, clientHeight = 300): void {
+    Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+    let top = 0;
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => {
+        top = Math.max(0, Math.min(v, Math.max(0, scrollHeight - clientHeight)));
+      },
+    });
+  }
+
+  function scrollBox(): HTMLElement {
+    const el = document.querySelector("[data-chat-scroll]") as HTMLElement;
+    if (!el) throw new Error("không tìm thấy khung chat");
+    return el;
+  }
+
+  it("câu hỏi mới xuất hiện thì khung tự cuộn xuống đáy", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    let release!: (v: Response) => void;
+    const pending = new Promise<Response>((res) => {
+      release = res;
+    });
+    vi.stubGlobal("fetch", vi.fn(() => pending) as unknown as typeof fetch);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+
+    const box = scrollBox();
+    fakeMetrics(box, 1200, 300);
+    // Đang ở đáy trước khi gửi.
+    box.scrollTop = 900;
+
+    await act(async () => {
+      typeAndSend("câu hỏi dài");
+    });
+
+    // Khung dài thêm nên đáy vẫn phải được giữ.
+    await waitFor(() => {
+      expect(box.scrollTop).toBe(900);
+    });
+
+    await act(async () => {
+      release(okStream());
+      await pending;
+    });
+  });
+
+  it("người dùng cuộn lên đọc lịch sử thì token mới KHÔNG kéo họ xuống", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+
+    // Stream phát nhiều token lần lượt để có nhiều lần render.
+    let seq = 0;
+    let push!: (t: string) => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq: 0, type: "start", turn_id: "t1", message_id: null })));
+        push = (t: string) => {
+          seq += 1;
+          c.enqueue(enc.encode(frame({ v: "chat.sse/1", seq, type: "token", text: t })));
+        };
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    ));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+
+    const box = scrollBox();
+    fakeMetrics(box, 2000, 300);
+    // Người dùng cuộn lên để đọc tin nhắn cũ → tách khỏi đáy.
+    act(() => {
+      box.scrollTop = 100;
+      fireEvent.scroll(box);
+    });
+
+    await act(async () => {
+      typeAndSend("câu hỏi");
+    });
+    await act(async () => {
+      push("A");
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    // Vẫn giữ vị trí người dùng chọn, không bị kéo về cuối.
+    expect(box.scrollTop).toBe(100);
+  });
+
+  it("lệch đáy thì hiện nút Cuộn xuống; bấm nút là về đáy", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(thinkingStreamForTest()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+
+    const box = scrollBox();
+    fakeMetrics(box, 2000, 300);
+
+    // Bám đáy → không hiện nút.
+    act(() => {
+      box.scrollTop = 1700;
+      fireEvent.scroll(box);
+    });
+    expect(screen.queryByLabelText("Cuộn xuống tin nhắn mới nhất")).toBeNull();
+
+    // Cuộn lên → hiện nút.
+    act(() => {
+      box.scrollTop = 0;
+      fireEvent.scroll(box);
+    });
+    const btn = screen.getByLabelText("Cuộn xuống tin nhắn mới nhất");
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    expect(box.scrollTop).toBe(1700);
+    expect(screen.queryByLabelText("Cuộn xuống tin nhắn mới nhất")).toBeNull();
   });
 });

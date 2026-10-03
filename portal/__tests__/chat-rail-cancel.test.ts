@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   decideComposerState,
   formatErrorBanner,
+  isNearBottom,
   nextRetryContent,
 } from "@/components/chat/chat-ux";
 import type { ChatMessage } from "@/lib/types";
@@ -160,5 +161,42 @@ describe("banner không bọc trùng khi hint đã có sẵn format của backen
       httpStatus: 504,
     });
     expect(banner?.text).toBe("[chat_timeout_llm] Mô hình phản hồi quá lâu. [HTTP 504]");
+  });
+});
+
+describe("isNearBottom — quyết định có bám đáy hay không", () => {
+  const metrics = (scrollTop: number, clientHeight: number, scrollHeight: number) => ({
+    scrollTop,
+    clientHeight,
+    scrollHeight,
+  });
+
+  it("đang ở đáy → bám theo", () => {
+    expect(isNearBottom(metrics(0, 500, 500))).toBe(true);
+  });
+
+  it("cách đáy dưới ngưỡng → vẫn coi là bám (vừa cuộn xuống)", () => {
+    expect(isNearBottom(metrics(0, 500, 540))).toBe(true);
+  });
+
+  it("đã cuộn lên xa → KHÔNG bám", () => {
+    expect(isNearBottom(metrics(0, 500, 1200))).toBe(false);
+  });
+
+  it("giữa khung, cách đáy quá ngưỡng → KHÔNG bám", () => {
+    expect(isNearBottom(metrics(100, 500, 1200))).toBe(false);
+  });
+
+  it("nội dung chưa dài hơn khung → coi như đang ở đáy", () => {
+    expect(isNearBottom(metrics(0, 500, 300))).toBe(true);
+  });
+
+  it("scrollHeight = 0 (chưa render) → không kẹt vào trạng thái không bám", () => {
+    expect(isNearBottom(metrics(0, 0, 0))).toBe(true);
+  });
+
+  it("ngưỡng tuỳ chỉnh", () => {
+    expect(isNearBottom(metrics(0, 500, 700), 50)).toBe(false);
+    expect(isNearBottom(metrics(0, 500, 700), 250)).toBe(true);
   });
 });

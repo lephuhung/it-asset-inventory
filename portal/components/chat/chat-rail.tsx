@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { MessageSquare, Send, Square } from "lucide-react";
+import { MessageSquare, ArrowDown, Send, Square } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
 import { ChatConversationList } from "@/components/chat/chat-conversation-list";
 import { ChatContextChip } from "@/components/chat/chat-context-chip";
@@ -18,7 +18,7 @@ import { ChatMessage } from "@/components/chat/chat-message";
 import { ChatRailHeader, ChatRailTabs } from "@/components/chat/chat-rail-header";
 import { useChatPanel } from "@/components/chat/use-chat-panel";
 import { useChatStream } from "@/components/chat/use-chat-stream";
-import { decideComposerState, formatErrorBanner, nextRetryContent } from "@/components/chat/chat-ux";
+import { decideComposerState, formatErrorBanner, isNearBottom, nextRetryContent } from "@/components/chat/chat-ux";
 import { api } from "@/lib/api";
 import { chatApi } from "@/lib/chat";
 import type { ChatConversation, ChatConversationDetail, SessionUser } from "@/lib/types";
@@ -140,10 +140,50 @@ export function ChatRail() {
     void refreshConversations();
   }, [allowed, open, refreshConversations]);
 
-  // Cuộn xuống đáy mỗi khi có token mới.
+  // Người dùng có đang bám đáy không. true = cứ có nội dung mới là kéo xuống;
+// false = người dùng đã cuộn lên đọc lịch sử, KHÔNG được kéo họ xuống.
+  const stickToBottomRef = useRef(true);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  const metricsOf = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return { scrollTop: 0, clientHeight: 0, scrollHeight: 0 };
+    return { scrollTop: el.scrollTop, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight };
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const near = isNearBottom(metricsOf());
+    stickToBottomRef.current = near;
+    setShowScrollDown(!near);
+  }, [metricsOf]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottomRef.current = true;
+    setShowScrollDown(false);
+  }, []);
+
+  // Kéo xuống đáy mỗi khi khung dài thêm: câu hỏi mới, token mới, tin nhắn nạp
+  // về, hoặc trạng thái đổi (chỉ báo → câu trả lời). Chỉ khi đang bám đáy.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [state.content, state.tools.length]);
+    if (!stickToBottomRef.current) return;
+    scrollToBottom();
+  }, [
+    scrollToBottom,
+    state.content,
+    state.status,
+    pendingQuestion,
+    detail?.messages.length,
+    detail?.active_turn_id,
+  ]);
+
+  // Vào hội thoại mới thì luôn bắt đầu ở đáy.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    setShowScrollDown(false);
+  }, [activeId]);
 
   // Tên máy để chip ngữ cảnh đọc được. Chỉ cần hostname — không kéo cả object máy.
   // Ghi vào map theo machine_id nên rời trang máy không cần reset.
@@ -489,7 +529,12 @@ const openConversation = useCallback(async (id: string) => {
             hidden={tab !== "chat"}
             className="flex min-h-0 flex-1 flex-col"
           >
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto border-t border-slate-200 px-3 py-3">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            data-chat-scroll=""
+            className="relative min-h-0 flex-1 overflow-y-auto px-3 py-3"
+          >
             {messages.length === 0 && !showStreamed && !pendingVisible && !showThinking ? (
               <p className="mt-6 text-center text-xs text-slate-400">
                 Hỏi về máy, phần mềm, cảnh báo hoặc dữ liệu Velociraptor.
@@ -538,6 +583,21 @@ const openConversation = useCallback(async (id: string) => {
               </div>
             )}
           </div>
+
+          {/* Nút cuộn xuống: chỉ hiện khi người dùng đang lệch đáy để không kéo họ
+              về cuối khi họ đang đọc tin nhắn cũ. */}
+          {showScrollDown && (
+            <div className="pointer-events-none relative">
+              <button
+                type="button"
+                onClick={scrollToBottom}
+                aria-label="Cuộn xuống tin nhắn mới nhất"
+                className="pointer-events-auto absolute -top-11 left-1/2 flex h-8 w-8 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-md transition-colors hover:text-slate-800"
+              >
+                <ArrowDown size={15} aria-hidden="true" />
+              </button>
+            </div>
+          )}
 
           <ChatContextChip
             machineId={effectiveMachineId}

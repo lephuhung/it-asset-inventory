@@ -79,7 +79,38 @@ export function nextRetryContent(messages: ChatMessage[]): string {
   return "";
 }
 
-// ── Gom lịch sử theo ngày ───────────────────────────────────────────────────
+// ── Cuộn tự động theo đáy khung chat ────────────────────────────────────────
+
+/** Sai lệch tối đa so với đáy vẫn được coi là “đang bám”. */
+export const STICK_THRESHOLD_PX = 64;
+
+export interface ScrollMetrics {
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
+}
+
+/**
+ * Người dùng có đang ở đáy không?
+ *
+ * Dùng để quyết định có kéo khung chat xuống theo khi có nội dung mới hay không.
+ * Bám đáy là mặc định; nếu người dùng đã cuộn lên đọc tin nhắn cũ thì TUYỆT ĐỐI
+ * không kéo họ xuống — làm vậy rất khó chịu khi đang đọc lịch sử.
+ */
+export function isNearBottom(
+  metrics: ScrollMetrics,
+  threshold: number = STICK_THRESHOLD_PX,
+): boolean {
+  const { scrollTop, clientHeight, scrollHeight } = metrics;
+  // Chưa có nội dung cuộn được → coi như đang ở đáy, đừng kẹt vào trạng thái lệch.
+  if (scrollHeight <= clientHeight) return true;
+  return scrollHeight - (scrollTop + clientHeight) <= threshold;
+}
+
+/** Con trỏ tới cuối khung, dùng khi bấm nút “Cuộn xuống”. */
+export function bottomScrollTop(metrics: ScrollMetrics): number {
+  return Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+}
 
 export interface ConversationDayGroup {
   /** Nhãn nhóm: `Hôm nay` / `Hôm qua` / `Trước đó`. */
