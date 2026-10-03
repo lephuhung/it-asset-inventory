@@ -12,6 +12,7 @@ import { AnnouncementGate } from "@/components/announcement-gate";
 import { Sidebar } from "@/components/sidebar";
 import { UserInfo } from "@/components/user-info";
 import { Spinner } from "@/components/ui";
+import { ChatRail } from "@/components/chat/chat-rail";
 
 const TITLES: Array<[string, string]> = [
   ["/dashboard", "Dashboard tổng quan"],
@@ -121,6 +122,10 @@ function Shell({ children }: { children: React.ReactNode }) {
           Hệ thống quản lý tài sản máy tính — agent read-only, không giám sát cá nhân (mục 6.6)
         </footer>
       </div>
+
+      {/* ChatRail là sibling của cột nội dung → nội dung co lại, không bị che.
+          Chỉ SuperAdmin thấy (gate bên trong component). */}
+      <ChatRail />
 
       <ComplianceGate />
       <AnnouncementGate />
