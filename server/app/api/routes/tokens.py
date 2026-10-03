@@ -113,7 +113,7 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
         bypass
         + f'$t="{token}";'
         f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
-        f'$m="$env:TEMP\\agent-$t.msi";'
+        f'$m="$env:ProgramData\\OrgInventory\\pkgcache\\OrgInventoryAgent.msi";New-Item -ItemType Directory -Force -Path (Split-Path $m)|Out-Null;'
         f'irm "{portal_url}/download/agent.msi" -OutFile $m;'
         f'$a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
         f'$b=(irm "{portal_url}/download/agent.msi.sha256");'
@@ -121,10 +121,76 @@ def _install_command_org_only(token: str, portal_url: str, agent_server_url: str
         f'if($b -is [byte[]]){{$b=[Text.Encoding]::UTF8.GetString($b)}};'
         f'$b="$b".Trim().ToLower();'
         f'if($a -ne $b){{Write-Host "LOI: SHA256 khong khop - da dung cai dat";exit 1}};'
+        f'$d="$env:ProgramData\\OrgInventory";New-Item -ItemType Directory -Force -Path $d|Out-Null;'
+        f'$c=(Invoke-WebRequest "{portal_url}/download/agent.config.yaml" -UseBasicParsing -ErrorAction Stop).RawContentStream.ToArray();'
+        f'if(-not [Text.Encoding]::UTF8.GetString($c).Contains("server_urls:")){{Write-Host "LOI: cau hinh agent tu backend khong hop le";exit 1}};'
+        f'[IO.File]::WriteAllBytes("$d\\agent.config.yaml",$c);'
         f'msiexec /i $m /qn /norestart ENROLL_TOKEN=$t TOKEN=$t ENDPOINTS="{agent_server_url}"'
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -EncodedCommand {encoded}"
+
+
+def _update_command(portal_url: str, agent_server_url: str) -> str:
+    """Lệnh inline (EncodedCommand) cho máy ĐÃ CÀI agent — KHÔNG cần token enroll.
+
+    Dùng cho 2 case quản trị thường gặp:
+      - Đã cài bản mới nhất (token cũ hết hạn/không còn): chỉ refresh
+        agent.config.yaml + merge endpoints vào config.json (giữ identity)
+        + restart service.
+      - Bản cũ + config cũ: tải MSI mới về pkgcache → verify SHA256 + chữ ký →
+        msiexec /i (MajorUpgrade giữ enrollment) + refresh config + restart.
+    Máy chưa cài → thoát với hướng dẫn dùng lệnh có token.
+    Tự chứa hoàn toàn trong base64 (không tải file script nào về chạy) — tránh
+    AV gắn cờ pattern download-and-execute.
+    """
+    import base64
+
+    script = (
+        f'$ErrorActionPreference="Stop";'
+        f'$p="{portal_url}";$e="{agent_server_url}";'
+        f'if(!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){{Write-Host "Chay bang quyen Administrator";exit 1}};'
+        f'$pc=$null;$ver=$null;'
+        f'foreach($r in @("HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*","HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*")){{'
+        f'  $it=Get-ItemProperty $r -ErrorAction SilentlyContinue|Where-Object{{$_.DisplayName -like "*OrgInventory*" -and $_.PSChildName -match "^\\{{[0-9A-Fa-f\\-]+\\}}$"}}|Select-Object -First 1;'
+        f'  if($it){{$pc=$it.PSChildName;$ver=$it.DisplayVersion;break}}'
+        f'}};'
+        f'if(-not $pc){{Write-Host "Agent chua cai tren may nay — dung lenh cai moi co token (portal > Enroll tokens).";exit 1}};'
+        f'$mv=$null;try{{$mv=(Invoke-RestMethod "$p/download/agent-version" -UseBasicParsing -TimeoutSec 30).msi_version}}catch{{}};'
+        f'$up=$false;if($mv -and $ver){{try{{$up=[version]$mv -gt [version]$ver}}catch{{$up=$false}}}};'
+        f'$d="$env:ProgramData\\OrgInventory";New-Item -ItemType Directory -Force -Path "$d\\pkgcache"|Out-Null;'
+        f'try{{'
+        f'  $c=Invoke-WebRequest "$p/download/agent.config.yaml" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop;'
+        f'  $cb=$c.RawContentStream.ToArray();'
+        f'  $xp=@($c.Headers["X-Content-SHA256"])[0];'
+        f'  if($xp){{$ac=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($cb)).Replace("-","").ToLower();if($ac -ne $xp.ToLower()){{Write-Host "LOI: SHA256 cau hinh khong khop";exit 1}}}};'
+        f'  if(-not [Text.Encoding]::UTF8.GetString($cb).Contains("server_urls:")){{Write-Host "LOI: cau hinh agent tu backend khong hop le";exit 1}};'
+        f'  [IO.File]::WriteAllBytes("$d\\agent.config.yaml",$cb);Write-Host "Da tai lai agent.config.yaml"'
+        f'}}catch{{Write-Host ("LOI tai cau hinh: " + $_.Exception.Message);exit 1}};'
+        f'if($up){{'
+        f'  Write-Host "Nang cap v$ver -> v$mv (giu enrollment)...";'
+        f'  $m="$d\\pkgcache\\OrgInventoryAgent.msi";'
+        f'  try{{irm "$p/download/agent.msi" -OutFile $m}}catch{{Write-Host ("LOI tai MSI: " + $_.Exception.Message);exit 1}};'
+        f'  $b=irm "$p/download/agent.msi.sha256";if($b -is [byte[]]){{$b=[Text.Encoding]::UTF8.GetString($b)}};$b="$b".Trim().ToLower();'
+        f'  $a=(Get-FileHash $m -Algorithm SHA256).Hash.ToLower();'
+        f'  if($a -ne $b){{Write-Host "LOI: SHA256 khong khop";exit 1}};'
+        f'  $sg=Get-AuthenticodeSignature $m;'
+        f'  if($sg.Status -ne "Valid" -and $env:ORGINV_ALLOW_UNSIGNED -ne "1"){{Write-Host "LOI: chu ky so khong hop le ($($sg.Status))";exit 1}};'
+        f'  $rc=(Start-Process msiexec.exe -ArgumentList @("/i","`"$m`"","/qn","/norestart","ENDPOINTS=`"$e`"") -Wait -PassThru).ExitCode;'
+        f'  if($rc -ne 0){{Write-Host "LOI: msiexec exit=$rc";exit 1}};'
+        f'  Write-Host "Nang cap xong."'
+        f'}}else{{Write-Host "Da la ban moi nhat$(if($ver){{" (v$ver)"}}) - khong can cai lai MSI."}};'
+        f'$cfg="$d\\config.json";$o=$null;'
+        f'if(Test-Path $cfg){{try{{$o=Get-Content $cfg -Raw|ConvertFrom-Json}}catch{{}}}};'
+        f'$h=[ordered]@{{}};if($o){{foreach($pr in $o.PSObject.Properties){{$h[$pr.Name]=$pr.Value}}}};'
+        f'$h["endpoints"]=@($e);$h["configVersion"]=2;'
+        f'if($o -and $o.enrolled -and $h.Contains("token")){{$h.Remove("token")}};'
+        f'($h|ConvertTo-Json -Depth 5)|Set-Content $cfg -Encoding UTF8 -Force;'
+        f'Restart-Service -Name "OrgInventoryAgent" -Force -ErrorAction SilentlyContinue;'
+        f'Write-Host "HOAN TAT: agent cap nhat (endpoints=$e$(if($up){{", v$ver -> v$mv"}}))."'
+    )
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return f"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}"
 
 
 def _validate_install_urls(portal_url: str, agent_server_url: str) -> list[str]:
@@ -269,6 +335,26 @@ async def create_token(
         install_url_warnings=warnings,
         expires_at=expires,
     )
+
+
+@router.get("/update-command")
+async def update_command(
+    admin: User = Depends(require_admin()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Inline EncodedCommand cho máy ĐÃ CÀI agent — không cần token enroll.
+
+    Một command phủ cả 2 case: đã mới nhất (refresh config + endpoints + restart)
+    và bản cũ (tải MSI mới → verify → msiexec giữ enrollment → refresh config).
+    Admin copy-paste thẳng vào PowerShell admin trên máy — tự chứa, không tải
+    file script nào (tránh AV gắn cờ download-and-execute).
+    """
+    agent_cfg = await effective_agent_config(db)
+    portal_url = agent_cfg["portal_url"]
+    return {
+        "command": _update_command(portal_url, agent_cfg["agent_server_url"]),
+        "install_url_warnings": _validate_install_urls(portal_url, agent_cfg["agent_server_url"]),
+    }
 
 
 @router.get("", response_model=Page[TokenListItem])

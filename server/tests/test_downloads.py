@@ -258,3 +258,88 @@ async def test_offline_package_zip_contains_required_files(client):
         # pubkey là PEM hợp lệ
         pubkey = zf.read("server_public_key.pem").decode("utf-8")
         assert "BEGIN" in pubkey and "END" in pubkey
+
+
+async def test_download_agent_client_config_defaults(client):
+    """agent.config.yaml sinh từ cấu hình hiệu lực (env mặc định) — không cần file trong agent_dist."""
+    import hashlib
+
+    import yaml
+
+    from app.core.config import settings
+
+    r = await client.get("/download/agent.config.yaml")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/x-yaml")
+    assert r.headers["cache-control"] == "no-store"
+    assert r.headers["x-content-sha256"] == hashlib.sha256(r.content).hexdigest()
+    doc = yaml.safe_load(r.text)
+    assert doc["version"] == 1
+    assert doc["server_urls"] == [settings.agent_server_url]
+    assert doc["heartbeat_interval_seconds"] == settings.agent_config_payload()["heartbeat_interval_seconds"]
+    assert len(doc["agent_config_hash"]) == 64
+
+
+async def test_download_agent_client_config_uses_portal_override(client, db):
+    """Override trên portal (DB) phải phản ánh ngay vào file config tải về."""
+    import yaml
+
+    from app.db.models import AgentConfigOverride
+
+    db.add(
+        AgentConfigOverride(
+            id=1,
+            heartbeat_interval_seconds=120,
+            heartbeat_jitter_seconds=5,
+            inventory_interval_hours=6,
+            agent_server_url="https://agent.override.gov.vn",
+            portal_url="https://portal.override.gov.vn",
+        )
+    )
+    await db.commit()
+
+    r = await client.get("/download/agent.config.yaml")
+    assert r.status_code == 200, r.text
+    doc = yaml.safe_load(r.text)
+    assert doc["server_urls"] == ["https://agent.override.gov.vn"]
+    assert doc["portal_url"] == "https://portal.override.gov.vn"
+    assert doc["heartbeat_interval_seconds"] == 120
+    assert doc["heartbeat_jitter_seconds"] == 5
+    assert doc["inventory_interval_hours"] == 6
+
+
+async def test_download_agent_client_config_not_redirected_to_releases(client, monkeypatch):
+    """Dù có AGENT_RELEASES_BASE, config vẫn do backend phục vụ (binary mới lên GitHub)."""
+    from app.core import config as config_module
+
+    monkeypatch.setattr(
+        config_module.settings,
+        "agent_releases_base",
+        "https://github.com/lephuhung/org-inventory-agent/releases",
+    )
+    r = await client.get("/download/agent.config.yaml")
+    assert r.status_code == 200
+    assert "server_urls" in r.text
+
+
+def test_windows_msi_commands_fetch_agent_config_from_backend():
+    """Lệnh MSI trực tiếp (org-only + self-service) phải tải agent.config.yaml từ backend trước msiexec."""
+    import base64
+
+    from app.api.routes.self_service import _install_command as self_service_cmd
+    from app.api.routes.tokens import _install_command_org_only
+
+    for build in (_install_command_org_only, self_service_cmd):
+        cmd = build("t_abc", "https://portal.example.gov.vn", "https://agent.example.gov.vn")
+        script = base64.b64decode(cmd.split("-EncodedCommand ", 1)[1]).decode("utf-16-le")
+        cfg_idx = script.index("https://portal.example.gov.vn/download/agent.config.yaml")
+        assert script.index("msiexec /i") > cfg_idx
+        assert "agent.config.yaml\",$c" in script
+
+
+def test_install_templates_fetch_agent_config_from_backend():
+    """Mọi installer do backend phục vụ đều tải agent.config.yaml từ backend."""
+    templates = Path(__file__).parents[1] / "app" / "templates"
+    for name in ("install.sh.j2", "install.ps1.j2", "install-both.ps1"):
+        text = (templates / name).read_text(encoding="utf-8-sig")
+        assert "/download/agent.config.yaml" in text, name

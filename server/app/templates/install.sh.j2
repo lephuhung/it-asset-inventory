@@ -157,6 +157,38 @@ log_step "Phát hiện: ${ID:-?} ${VERSION_ID:-?} ($ARCH, VR=$VR_ARCH) — OrgIn
 #     giá trị cũ còn sót sẽ THẮNG enroll_token mới → agent enroll bằng token
 #     cũ → server 401.
 #   - REENROLL=1: xoá identity trong STATE config → agent enroll lại.
+#   - cấu hình agent (server_urls, enrollment) LUÔN tải từ backend
+#     (`GET /download/agent.config.yaml`) rồi merge, giữ identity đã enroll.
+CLIENT_CFG="/etc/orginventory/agent.config.yaml"
+
+# Binary có thể tải từ GitHub Releases, nhưng cấu hình agent LUÔN do backend sinh
+# (giống client.config.yaml của Velociraptor). Lỗi tải/verify → dừng cài đặt.
+fetch_oi_client_config() {
+    local tmp expected actual
+    tmp="$(mktemp)"
+    if ! curl -fsSL --max-time 30 -D "$tmp.hdr" -o "$tmp" "$PORTAL_URL/download/agent.config.yaml"; then
+        rm -f "$tmp" "$tmp.hdr"
+        log_fail "Không tải được cấu hình agent từ backend ($PORTAL_URL/download/agent.config.yaml)."
+        exit 1
+    fi
+    expected="$(tr -d '\r' < "$tmp.hdr" | awk -F': ' 'tolower($1)=="x-content-sha256"{print $2}' | tail -n1)"
+    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+    if [[ -n "$expected" && "$expected" != "$actual" ]]; then
+        rm -f "$tmp" "$tmp.hdr"
+        log_fail "SHA256 cấu hình agent không khớp (server: $expected, file: $actual) — dừng cài đặt."
+        exit 1
+    fi
+    if ! grep -q '^server_urls:' "$tmp"; then
+        rm -f "$tmp" "$tmp.hdr"
+        log_fail "File cấu hình agent từ backend không hợp lệ (thiếu server_urls)."
+        exit 1
+    fi
+    mkdir -p /etc/orginventory
+    install -m 0640 -o root -g orginventory "$tmp" "$CLIENT_CFG"
+    rm -f "$tmp" "$tmp.hdr"
+    log_ok "Đã tải cấu hình agent từ backend → $CLIENT_CFG"
+}
+
 merge_oi_config() {
     local cfg="$BOOT_CFG"
     mkdir -p /etc/orginventory
@@ -339,6 +371,7 @@ EOF
 
     # ── Ghi config (merge vẫn an toàn nếu config cũ tồn tại — giữ identity) ──
     AGENT_SERVER_URL="$AGENT_SERVER_URL" ENROLL_TOKEN="$TOKEN" REENROLL="$REENROLL" merge_oi_config
+    fetch_oi_client_config
     log_ok "Đã ghi $BOOT_CFG"
 
     # ── Start ────────────────────────────────────────────────────────────
@@ -361,6 +394,7 @@ else
     fi
     log_step "[CÀI LẠI] OrgInventory đã cài (binary mới nhất) → merge config + restart (KHÔNG tải binary)."
     AGENT_SERVER_URL="$AGENT_SERVER_URL" ENROLL_TOKEN="$TOKEN" REENROLL="$REENROLL" merge_oi_config
+    fetch_oi_client_config
     systemctl daemon-reload
     systemctl restart orginventory-agent.service 2>/dev/null || true
     sleep 2

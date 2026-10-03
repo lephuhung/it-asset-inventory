@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.services.agent_settings import effective_agent_config
+from app.services.agent_settings import effective_agent_config, render_agent_client_config
 
 router = APIRouter(prefix="/download", tags=["download"])
 
@@ -42,6 +42,7 @@ VELOCIRAPTOR_INSTALL_BAT = "install-velociraptor.bat"
 VELOCIRAPTOR_CONFIG_ONLY_ZIP = "velociraptor-config-only.zip"
 VELOCIRAPTOR_LINUX_ARCHES = ("amd64", "arm64")
 INSTALL_BOTH_PS1 = "install-both.ps1"
+AGENT_CLIENT_CONFIG_FILENAME = "agent.config.yaml"
 
 
 def _release_url(filename: str) -> str | None:
@@ -283,6 +284,26 @@ async def download_velociraptor_msi():
         path,
         media_type="application/x-msi",
         filename=VELOCIRAPTOR_MSI_FILENAME,
+    )
+
+
+@router.get(f"/{AGENT_CLIENT_CONFIG_FILENAME}", response_class=PlainTextResponse)
+async def download_agent_client_config(db: AsyncSession = Depends(get_db)):
+    """Client config YAML của OrgInventory Agent — sinh động từ `effective_agent_config`.
+
+    Luôn do backend phục vụ (KHÔNG redirect sang GitHub Releases dù có
+    `AGENT_RELEASES_BASE`): binary lấy từ GitHub, cấu hình lấy từ backend.
+    Header `X-Content-SHA256` để installer verify nội dung tải về.
+    """
+    body = render_agent_client_config(await effective_agent_config(db))
+    return PlainTextResponse(
+        content=body,
+        media_type="application/x-yaml",
+        headers={
+            "Content-Disposition": f'attachment; filename="{AGENT_CLIENT_CONFIG_FILENAME}"',
+            "Cache-Control": "no-store",
+            "X-Content-SHA256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        },
     )
 
 

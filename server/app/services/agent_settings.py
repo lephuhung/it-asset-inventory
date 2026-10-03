@@ -8,6 +8,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import yaml
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,3 +83,30 @@ def compute_agent_config_hash(cfg: dict) -> str:
     payload = {k: v for k, v in payload.items() if v is not None}
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+AGENT_CLIENT_CONFIG_VERSION = 1
+
+
+def render_agent_client_config(cfg: dict) -> str:
+    """File `agent.config.yaml` cho OrgInventory Agent (tương tự `client.config.yaml` của Velociraptor).
+
+    Installer tải binary/MSI từ GitHub Releases nhưng tải file này từ backend →
+    endpoint + chu kỳ luôn theo cấu hình hiệu lực trên portal. Agent đọc file khi
+    khởi động; sau enroll vẫn đồng bộ tiếp qua `GET /api/agent/config` (mTLS).
+    """
+    doc = {
+        "version": AGENT_CLIENT_CONFIG_VERSION,
+        "server_urls": [cfg["agent_server_url"]],
+        "portal_url": cfg.get("portal_url"),
+        "heartbeat_interval_seconds": cfg["heartbeat_interval_seconds"],
+        "heartbeat_jitter_seconds": cfg["heartbeat_jitter_seconds"],
+        "inventory_interval_hours": cfg["inventory_interval_hours"],
+        "renew_before_percent": cfg["renew_before_percent"],
+        "agent_config_hash": compute_agent_config_hash(cfg),
+    }
+    header = (
+        "# OrgInventory Agent client config — sinh bởi backend từ cấu hình agent hiệu lực.\n"
+        "# KHÔNG sửa tay: đổi cấu hình trên portal rồi chạy lại lệnh cài để tải file mới.\n"
+    )
+    return header + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
