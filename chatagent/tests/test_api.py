@@ -16,13 +16,13 @@ def test_healthz_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_chat_endpoint_is_stub_501() -> None:
-    """`POST /v1/chat` là stub 501 cho tới Task 15; lỗi theo format category."""
+def test_chat_endpoint_requires_service_token() -> None:
+    """`POST /v1/chat` cần service token (Task 15); thiếu → 401 theo format category."""
     response = client.post("/v1/chat", json={})
-    assert response.status_code == 501
+    assert response.status_code == 401
     detail = response.json()["detail"]
-    assert detail.startswith("[chat_internal]")
-    assert "[HTTP 501]" in detail
+    assert detail.startswith("[chat_authz]")
+    assert "[HTTP 401]" in detail
 
 
 def test_settings_read_chatagent_env(monkeypatch: pytest.MonkeyPatch) -> None:
