@@ -17,6 +17,7 @@ import { ChatContextChip } from "@/components/chat/chat-context-chip";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { useChatPanel } from "@/components/chat/use-chat-panel";
 import { useChatStream } from "@/components/chat/use-chat-stream";
+import { decideComposerState, formatErrorBanner, nextRetryContent } from "@/components/chat/chat-ux";
 import { api } from "@/lib/api";
 import { chatApi } from "@/lib/chat";
 import type { ChatConversation, ChatConversationDetail, SessionUser } from "@/lib/types";
@@ -153,8 +154,7 @@ export function ChatRail() {
   }, [activeId, createConversation, input, pendingMachineId, refreshConversations, send, streaming]);
 
   const handleRetry = useCallback(() => {
-    const last = detail?.messages.filter((m) => m.role === "user").at(-1);
-    setInput(last?.content ?? "");
+    setInput(nextRetryContent(detail?.messages ?? []));
   }, [detail]);
 
   // "Ghim" = ghi ngữ cảnh vào hội thoại. Không có hội thoại thì không có chỗ để ghim.
@@ -175,8 +175,9 @@ export function ChatRail() {
   if (!allowed) return null;
 
   const messages = detail?.messages ?? [];
-  const showStreamed =
-    streaming || state.content !== "" || state.error !== null;
+  const showStreamed = streaming || state.content !== "" || state.error !== null;
+  const composer = decideComposerState({ streaming, input });
+  const banner = formatErrorBanner(state.error);
 
   return (
     <>
@@ -270,12 +271,9 @@ export function ChatRail() {
             onPin={(id) => void handlePinContext(id)}
           />
 
-          {state.error && (
+          {banner && (
             <div className="shrink-0 px-3 pb-1">
-              <p className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">
-                <span className="font-mono font-medium">{state.error.category}</span>
-                <span className="mt-0.5 block">{state.error.hint}</span>
-              </p>
+              <p className="rounded-lg bg-red-50 px-2 py-1 text-xs text-red-700">{banner.text}</p>
             </div>
           )}
 
@@ -296,12 +294,13 @@ export function ChatRail() {
                 aria-label="Nội dung câu hỏi"
                 className="max-h-32 min-h-[2.5rem] flex-1 resize-none rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-blue-400"
               />
-              {streaming ? (
+              {composer.mode === "stop" ? (
                 <button
                   type="button"
                   onClick={() => void cancel()}
+                  disabled={composer.stopDisabled}
                   aria-label="Dừng trả lời"
-                  className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Square size={15} aria-hidden="true" />
                 </button>
@@ -309,7 +308,7 @@ export function ChatRail() {
                 <button
                   type="button"
                   onClick={() => void handleSend()}
-                  disabled={!input.trim()}
+                  disabled={composer.sendDisabled}
                   aria-label="Gửi câu hỏi"
                   className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-blue-600 text-white disabled:cursor-not-allowed disabled:bg-slate-200"
                 >
@@ -317,7 +316,7 @@ export function ChatRail() {
                 </button>
               )}
             </div>
-            {state.error?.retryable && (
+            {banner?.canRetry && (
               <button
                 type="button"
                 onClick={handleRetry}
