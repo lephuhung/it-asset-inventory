@@ -253,13 +253,10 @@ async def create_turn(
     )
     db.add(turn)
     try:
-        # Cô lập insert trong savepoint để lỗi race không rollback toàn bộ
-        # transaction của caller (caller có thể đang giữ user message mới hoặc
-        # các thay đổi khác cần được commit độc lập).
-        async with db.begin_nested():
-            await db.flush()
+        await db.flush()
     except IntegrityError as exc:
-        # Savepoint rollback (không ảnh hưởng transaction bên ngoài); phân loại race.
+        # Rollback để giải phóng transaction đang abort, rồi phân loại race.
+        await db.rollback()
         if idempotency_key is not None:
             replayed = (
                 await db.execute(
@@ -415,8 +412,8 @@ async def cancel_turn(db: AsyncSession, turn_id: uuid.UUID, actor: uuid.UUID) ->
     """Hủy turn đang active (`pending|streaming`) → `canceled` + audit.
 
     Chỉ `conversation.created_by` (actor của turn) mới có thể hủy. Turn đã terminal
-    → `conflict` (route map 409). Không tìm thấy → `not_found`. Không có quyền →
-    `unauthorized`.
+    → `already_terminal` (route map 409). Không tìm thấy → `not_found`. Không có
+    quyền → `unauthorized`.
     """
     turn = await _lock_turn(db, turn_id)
     if turn is None:
@@ -425,7 +422,7 @@ async def cancel_turn(db: AsyncSession, turn_id: uuid.UUID, actor: uuid.UUID) ->
     if turn.actor_id != actor:
         return TurnStatus(status="unauthorized", turn_id=turn.id)
     if turn.status not in ACTIVE_STATUSES:
-        return TurnStatus(status="conflict", turn_id=turn.id)
+        return TurnStatus(status="already_terminal", turn_id=turn.id)
 
     turn.status = "canceled"
     turn.finish_reason = "canceled"
