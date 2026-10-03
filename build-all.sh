@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build toàn bộ 2 thành phần (chạy từ root repo). Agent đã tách repo riêng. Mỗi phần độc lập; lỗi một phần không chặn phần khác.
+# Build toàn bộ 3 thành phần (chạy từ root repo). Agent đã tách repo riêng. Mỗi phần độc lập; lỗi một phần không chặn phần khác.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FAIL=0
 
-echo "========== [1/2] Server FastAPI =========="
+echo "========== [1/3] Server FastAPI =========="
 if [ -d "$ROOT/server" ]; then
   ( cd "$ROOT/server" && \
     if [ ! -d .venv ]; then python3 -m venv .venv; fi && \
@@ -14,7 +14,17 @@ else
   echo "  [SKIP] chưa có server/"
 fi
 
-echo "========== [2/2] Portal Next.js =========="
+echo "========== [2/3] ChatAgent =========="
+if [ -d "$ROOT/chatagent" ]; then
+  ( cd "$ROOT/chatagent" && \
+    if [ ! -d .venv ]; then python3 -m venv .venv; fi && \
+    .venv/bin/pip install -q -e ".[dev]" && \
+    .venv/bin/python -m compileall -q chatagent && echo "  [OK] chatagent compile" ) || { echo "  [FAIL] chatagent"; FAIL=1; }
+else
+  echo "  [SKIP] chưa có chatagent/"
+fi
+
+echo "========== [3/3] Portal Next.js =========="
 if [ -d "$ROOT/portal" ]; then
   ( cd "$ROOT/portal" && \
     pnpm install --frozen-lockfile && \

@@ -95,6 +95,23 @@ SECTIONS = [
     ]),
 ]
 
+# Container `chatagent` (T16) — compose truyền tường minh, KHÔNG đọc root `.env`
+# (spec F5). Các biến này không nằm trong Settings của server nên không suy ra từ
+# `Settings.model_fields`; khai báo tường minh (name, default).
+CHATAGENT_SECTION = [
+    ("MCP_VELOCIRAPTOR_REF", "9b3c4b3a590029390e88049896a473d7f909c0ce"),
+    ("CHATAGENT_HOST", "0.0.0.0"),
+    ("CHATAGENT_PORT", 8091),
+    ("CHATAGENT_SERVICE_TOKEN", "CHANGE_ME_match_backend_CHAT_SERVICE_TOKEN"),
+    ("CHATAGENT_BACKEND_URL", "http://api:8000"),
+    ("CHATAGENT_BACKEND_API_KEY", ""),
+    ("CHATAGENT_CHAT_TIMEOUT_SECONDS", 120),
+    ("CHATAGENT_MAX_TOOL_CALLS", 12),
+    ("CHATAGENT_MAX_EVIDENCE_CHARS", 120000),
+    ("CHATAGENT_WALL_CLOCK_SECONDS", 300),
+    ("CHATAGENT_EGRESS_ALLOW_CLOUD", "false"),
+]
+
 
 def main() -> None:
     out = sys.stdout
@@ -146,6 +163,15 @@ def main() -> None:
             printed.add(field_name)
         if section_index < len(SECTIONS) - 1:
             out.write("\n")
+
+    # Container chatagent — chỉ biến CHATAGENT_* (spec F5).
+    out.write("\n# ─── CHATAGENT CONTAINER (docker-compose.yml đọc; KHÔNG vào root .env) ──\n")
+    out.write(
+        "# Container `chatagent` nhận CHỈ các biến CHATAGENT_* dưới đây (spec F5). Không\n"
+        "# truyền DATABASE_URL / SECRET_KEY / DATA_ENCRYPTION_KEY / CHAT_CONTEXT_SECRET.\n"
+    )
+    for env_name, cvalue in CHATAGENT_SECTION:
+        out.write(f"{env_name}={cvalue}\n")
 
     # In các biến Settings không nằm trong SECTIONS (cảnh báo nếu có)
     remaining = set(values.keys()) - printed

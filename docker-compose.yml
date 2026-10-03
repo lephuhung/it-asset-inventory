@@ -92,6 +92,36 @@ services:
       retries: 6
     networks: [inventory-net]
 
+  chatagent:
+    build:
+      context: ./chatagent
+      dockerfile: Dockerfile
+      args:
+        # Pin mcp-velociraptor to the same immutable SHA as deepagent (spec §"Triển khai").
+        MCP_VELOCIRAPTOR_REF: ${MCP_VELOCIRAPTOR_REF:-9b3c4b3a590029390e88049896a473d7f909c0ce}
+    image: asset-inventory-chatagent:latest
+    # F5: chatagent nhận CHỈ biến CHATAGENT_* tường minh — KHÔNG `env_file: .env`
+    # (root .env chứa DATABASE_URL, SECRET_KEY, DATA_ENCRYPTION_KEY). Không có
+    # `ports:` — agent không publish port, chỉ reachable trên inventory-net.
+    environment:
+      # Trùng backend `CHAT_SERVICE_TOKEN` (T10) — agent gửi qua `X-Service-Token`.
+      CHATAGENT_SERVICE_TOKEN: ${CHAT_SERVICE_TOKEN:?CHAT_SERVICE_TOKEN must be set}
+      CHATAGENT_BACKEND_URL: http://api:8000
+      CHATAGENT_BACKEND_API_KEY: ${CHATAGENT_BACKEND_API_KEY:-}
+      CHATAGENT_MAX_TOOL_CALLS: ${CHATAGENT_MAX_TOOL_CALLS:-12}
+      CHATAGENT_MAX_EVIDENCE_CHARS: ${CHATAGENT_MAX_EVIDENCE_CHARS:-120000}
+      CHATAGENT_WALL_CLOCK_SECONDS: ${CHATAGENT_WALL_CLOCK_SECONDS:-300}
+      CHATAGENT_EGRESS_ALLOW_CLOUD: ${CHATAGENT_EGRESS_ALLOW_CLOUD:-false}
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [inventory-net]
+
   portal:
     build:
       context: ./portal
