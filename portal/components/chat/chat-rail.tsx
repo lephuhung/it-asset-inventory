@@ -371,12 +371,12 @@ const openConversation = useCallback(async (id: string) => {
   // gửi — tránh 2 bản khi bản thật đã vào lịch sử.
   const pendingVisible =
     pendingQuestion !== null && messages.length <= pendingQuestion.baselineCount;
-  // Lỗi đã hiển thị ở banner bên dưới → không cần render lại trong khối stream.
-  // Chỉ hiện bong bóng khi THẬT SỰ có nội dung (chữ hoặc chip tool). `send()`
-  // bật `status: "streaming"` ngay lập tức, nên nếu kéo `streaming` vào điều kiện
-  // này thì suốt lúc model suy nghĩ sẽ có một bong bóng assistant rỗng.
-  const showStreamed =
-    !streamedAlreadyPersisted && (state.content !== "" || state.tools.length > 0);
+  // KHÔNG render chip công cụ trong khung chat: rail chỉ 400px, chip chiếm chỗ mà
+  // không mang thông tin người dùng cần. `ChatToolTrace` vẫn còn (component độc
+  // lập, có test) nếu sau này muốn bật lại. Vì vậy `showStreamed` chỉ dựa vào CHỮ —
+  // nếu vẫn tính `tools` thì lúc tool chạy xong mà chưa có token sẽ lại hiện
+  // bong bóng rỗng.
+  const showStreamed = !streamedAlreadyPersisted && state.content !== "";
   // Chờ token đầu tiên: báo đang xử lý thay vì để khung trống lơ lửng.
   // Có 2 mốc chờ khác nhau và độ trễ thật đo được ~5s (suy nghĩ) rồi ~20s
   // (chạy xong tool, chờ token) — dùng chữ khác nhau cho từng mốc.
@@ -496,15 +496,13 @@ const openConversation = useCallback(async (id: string) => {
               </p>
             ) : (
               <div className="flex flex-col gap-3">
-                {messages.map((m, i) => (
+                {messages.map((m) => (
                   <ChatMessage
                     key={m.id}
                     role={m.role}
                     content={m.content}
                     errorCategory={m.error_category}
                     createdAt={m.created_at}
-                    // Dấu vết tool chỉ tồn tại trong stream, không có trong MessageOut.
-                    tools={i === persistedIndex ? state.tools : []}
                   />
                 ))}
 
@@ -531,7 +529,6 @@ const openConversation = useCallback(async (id: string) => {
                   <ChatMessage
                     role="assistant"
                     content={state.content}
-                    tools={state.tools}
                     // Lỗi đã hiển thị ở banner bên dưới — không lặp lại ở đây.
                     errorCategory={null}
                     createdAt={new Date().toISOString()}

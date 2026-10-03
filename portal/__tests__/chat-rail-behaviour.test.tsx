@@ -514,7 +514,7 @@ describe("Regression vòng 2 — dấu vết tool, Enter, reset, ngữ cảnh th
     );
   }
 
-  it("dấu vết tool KHÔNG biến mất sau khi lịch sử được nạp lại", async () => {
+  it("khung chat KHÔNG hiện chip công cụ (diện tích nhỏ, thông tin không cần thiết)", async () => {
     // MessageOut không mang tools → nếu chỉ ẩn bản stream, chip tool sẽ mất.
     vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
     vi.mocked(chatApi.getConversation).mockResolvedValue(
@@ -541,9 +541,11 @@ describe("Regression vòng 2 — dấu vết tool, Enter, reset, ngữ cảnh th
     });
 
     expect(fetchMock).toHaveBeenCalled();
-    // Chip tool vẫn còn, và câu trả lời chỉ hiện MỘT lần.
-    expect(screen.getByText("inventory_search")).toBeTruthy();
+    // Câu trả lời chỉ hiện MỘT lần...
     expect(screen.getAllByText("Có 3 máy.")).toHaveLength(1);
+    // ...và KHÔNG có chip công cụ nào chen vào khung chat.
+    expect(screen.queryByText("inventory_search")).toBeNull();
+    expect(screen.queryByText(/dòng/)).toBeNull();
   });
 
   it("phím Enter không bypass được khoá khi server còn turn đang chạy", async () => {
@@ -1006,9 +1008,9 @@ describe("Chỉ báo trong lúc chờ — phải nói đúng đang làm gì", ()
       typeAndSend("thống kê phần mềm");
     });
 
+    // Vẫn báo đúng giai đoạn đang chờ token sau tool, dù không hiện chip tool.
     await waitFor(() => expect(screen.getByText(/Đang soạn câu trả lời/)).toBeTruthy());
-    // Chip tool vẫn hiện — người dùng thấy tiến độ.
-    expect(screen.getByText("inventory_software")).toBeTruthy();
+    expect(screen.queryByText("inventory_software")).toBeNull();
   });
 });
 
