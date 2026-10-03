@@ -463,6 +463,9 @@ async def _seed_analyzing_investigation(session_factory):
             artifacts=[],
             raw_artifacts={},
             status="analyzing",
+            # "" (không phải NULL) — mirror server_default của migration; worker
+            # query `external_orchestrator != 'deepagent'` loại NULL.
+            external_orchestrator="",
             requested_by=user.id,
         )
         s.add(inv)
@@ -1249,3 +1252,341 @@ async def test_external_callback_settles_without_llm_config(session_factory, mon
             )
         ).one()
         assert row[0] == "settled" and row[1] == 15
+
+
+# ── Fix Round 3: failure/cancel coverage + caller-boundary snapshots ──
+
+
+class _RollbackThenBoomCommit:
+    """Bọc session: commit thứ `fail_on` rollback (mô phỏng flush lỗi thật làm
+    expire ORM) rồi ném OperationalError; các commit khác delegate.
+    """
+
+    def __init__(self, inner, *, fail_on: int):
+        self._inner = inner
+        self._n = 0
+        self._fail_on = fail_on
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def commit(self):
+        self._n += 1
+        if self._n == self._fail_on:
+            # Flush lỗi thật trong SQLAlchemy rollback + expire mọi ORM object.
+            await self._inner.rollback()
+            raise OperationalError("COMMIT", {}, Exception("commit down"))
+        return await self._inner.commit()
+
+
+async def _seed_dispatchable_with_velo(session_factory):
+    """`_seed_dispatchable_no_velo` + VelociraptorConfig → pre-POST block chạy tới commit."""
+    from app.core.security import encrypt_aes_gcm
+    from app.db.models import VelociraptorConfig
+
+    inv_id = await _seed_dispatchable_no_velo(session_factory)
+    async with session_factory() as s:
+        s.add(
+            VelociraptorConfig(
+                id=1,
+                enabled=True,
+                server_url="https://velo.test/",
+                client_config_encrypted=encrypt_aes_gcm("api_client_yaml: test"),
+            )
+        )
+        await s.commit()
+    return inv_id
+
+
+async def _seed_pending_deepagent(session_factory):
+    """Investigation DeepAgent 'pending' để worker claim + dispatch trong test."""
+    from app.db.models import (
+        DfirInvestigation,
+        LlmConfig,
+        Machine,
+        Organization,
+        OrgType,
+        User,
+        UserRole,
+    )
+
+    async with session_factory() as s:
+        org = Organization(name=f"Org {uuid.uuid4()}", type=OrgType.ROOT.value)
+        s.add(org)
+        await s.flush()
+        user = User(
+            org_id=org.id,
+            full_name="T6w",
+            email=f"t6w-{uuid.uuid4()}@example.com",
+            role=UserRole.SUPER_ADMIN.value,
+            password_hash="x",
+        )
+        s.add(user)
+        await s.flush()
+        machine = Machine(
+            hostname=f"T6W-{uuid.uuid4()}", org_id=org.id, machine_uuid=str(uuid.uuid4())
+        )
+        s.add(machine)
+        await s.flush()
+        s.add(
+            LlmConfig(
+                id=1,
+                enabled=True,
+                provider="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="m",
+                daily_token_budget=100_000,
+                tokens_used_today=0,
+            )
+        )
+        await s.flush()
+        inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="C.t6w",
+            artifacts=[],
+            status="pending",
+            external_orchestrator="deepagent",
+            requested_by=user.id,
+        )
+        s.add(inv)
+        await s.flush()
+        inv_id = inv.id
+        await s.commit()
+        return inv_id
+
+
+def _enable_deepagent(monkeypatch):
+    from app.core import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "deepagent_enabled", True)
+    monkeypatch.setattr(config_mod.settings, "deepagent_url", "http://deepagent.test/")
+    monkeypatch.setattr(config_mod.settings, "deepagent_api_key", "test-token")
+
+
+def _fake_llm_class(response_cls):
+    class _FakeLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            return response_cls()
+
+    return _FakeLlm
+
+
+class _OkResp:
+    content = "### 1. Low\n"
+    input_tokens = 3
+    output_tokens = 2
+    total_tokens = 5
+    estimated_cost_usd = 0.0
+    model = "m"
+
+
+@pytest.mark.asyncio
+async def test_chat_persistence_commit_failure_settles_unknown(session_factory, monkeypatch):
+    """Finding 1a: commit persist Q&A lỗi → reservation vẫn được đóng (unknown)."""
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+    monkeypatch.setattr(inv_svc, "LlmClient", _fake_llm_class(_OkResp))
+
+    inv_id = await _seed_completed_investigation(session_factory)
+    async with session_factory() as s:
+        # commit #1 = admission, commit #2 = persist Q&A (lỗi).
+        wrapped = _NthCommitBoom(s, fail_on=2)
+        with pytest.raises(OperationalError):
+            await inv_svc.chat_with_llm(
+                wrapped, investigation_id=str(inv_id), user_message="hi"
+            )
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_chat' AND association_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one_or_none()
+        assert row is not None and row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pre_post_cancelled_settles_unknown(session_factory, monkeypatch):
+    """Finding 1b: CancelledError TRƯỚC POST → reservation đóng (unknown)."""
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    _enable_deepagent(monkeypatch)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    async def _cancel(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    # `_load_custom_artifact_refs` chạy BÊN TRONG block pre-POST, sau admission.
+    monkeypatch.setattr(inv_svc, "_load_custom_artifact_refs", _cancel)
+
+    inv_id = await _seed_dispatchable_with_velo(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        with pytest.raises(asyncio.CancelledError):
+            await inv_svc._state_dispatch_deepagent(s, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored.status == "failed"
+        assert stored.hermes_status == "dispatch_failed"
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_llm_error_handler_failure_settles_unknown(
+    session_factory, monkeypatch
+):
+    """Finding 1c: persist trạng thái thất bại lỗi (sau settle) → vẫn đóng reservation.
+
+    Commit trạng thái là commit #4 trong nhánh lỗi LLM (sau commit admission #2 và
+    commit settle #3). Handler phải settle TRƯỚC commit trạng thái, nên khi #4 lỗi
+    reservation đã ở `unknown` (không bị bỏ mặc `reserved`).
+    """
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+    from app.services.llm import LlmError
+
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    class _ErrLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            raise LlmError("llm boom")
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _ErrLlm)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        # #1 persist provider/model, #2 admission, #3 settle, #4 status (lỗi).
+        wrapped = _NthCommitBoom(s, fail_on=4)
+        with pytest.raises(OperationalError):
+            await inv_svc._state_analyze(wrapped, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_settlement_failure(client, session_factory, monkeypatch):
+    """Finding 2 (hành vi): settle lỗi KHÔNG làm worker sập — vẫn processed=1/errors=0.
+
+    `_finalize_usage` lỗi bị nuốt (rollback + log) nên `_process_one` vẫn kết thúc OK;
+    worker boundary phải tổng hợp kết quả bằng id đã chụp, không đọc lại ORM.
+    """
+    from app.services import dfir_investigation as inv_svc
+
+    async def _noop_notify(*args, **kwargs):
+        return None
+
+    async def _boom_settle(*args, **kwargs):
+        raise OperationalError("UPDATE", {}, Exception("settle down"))
+
+    monkeypatch.setattr(inv_svc, "settle", _boom_settle)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+    monkeypatch.setattr(inv_svc, "LlmClient", _fake_llm_class(_OkResp))
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _noop_notify)
+
+    await _seed_analyzing_investigation(session_factory)
+    result = await inv_svc.run_pending_investigations()
+
+    assert result.get("processed") == 1
+    assert result.get("errors") == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_boundary_survives_expired_orm(client, session_factory, monkeypatch):
+    """Finding 2 (guard): helper rollback làm expire ORM (object có thay đổi pending)
+    rồi raise DispatchFailed → worker handler KHÔNG được đọc `inv.*` đã expire
+    (MissingGreenlet).
+    """
+    from app.services import dfir_investigation as inv_svc
+
+    async def _boom_dispatch(db, inv):
+        # Object có thay đổi pending → rollback expire nó (như flush/commit lỗi).
+        inv.status = "analyzing"
+        await db.rollback()
+        raise inv_svc.DispatchFailed("simulated rollback then definitive fail")
+
+    monkeypatch.setattr(inv_svc, "_state_dispatch_deepagent", _boom_dispatch)
+
+    await _seed_pending_deepagent(session_factory)
+    result = await inv_svc.run_pending_investigations()
+
+    assert result.get("errors") == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pre_post_flush_failure_settles_unknown(session_factory, monkeypatch):
+    """Finding 3: flush lỗi ở commit pre-POST → ORM expire; cleanup vẫn settle +
+    mark failed mà KHÔNG đọc `inv.id` đã expire (MissingGreenlet).
+    """
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    _enable_deepagent(monkeypatch)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    inv_id = await _seed_dispatchable_with_velo(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        # #1 admission, #2 pre-POST (lỗi + rollback → expire ORM).
+        wrapped = _RollbackThenBoomCommit(s, fail_on=2)
+        with pytest.raises(inv_svc.DispatchFailed):
+            await inv_svc._state_dispatch_deepagent(wrapped, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+        stored = await s.get(DfirInvestigation, inv_id)
+        assert stored.status == "failed"
+        assert stored.hermes_status == "dispatch_failed"

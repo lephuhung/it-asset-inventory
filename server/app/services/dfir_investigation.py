@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import yaml
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -408,25 +408,61 @@ async def _settle_unknown_fresh(*, scope: str, operation_id: uuid.UUID) -> None:
         await engine.dispose()
 
 
+async def _mark_investigation_failed(
+    db: AsyncSession,
+    *,
+    op_id: uuid.UUID,
+    error: str,
+    hermes_status: str | None = None,
+) -> None:
+    """Đánh dấu investigation `failed` bằng bulk UPDATE theo `id`.
+
+    Dùng ở ranh giới worker / cleanup dispatch, nơi ORM object có thể đã bị
+    expire (session đã rollback sau một flush/commit lỗi) — đọc/ghi thuộc tính
+    ORM lúc đó sẽ lazy-load ngoài async context (MissingGreenlet). Rollback trước
+    để xóa trạng thái pending-rollback rồi UPDATE thẳng theo khóa chính.
+    """
+    try:
+        await db.rollback()
+    except Exception:
+        logger.exception(
+            "Investigation %s: rollback trước khi đánh dấu failed thất bại", op_id
+        )
+    values: dict = {
+        "status": "failed",
+        "error": error[:2000],
+        "completed_at": datetime.now(UTC),
+    }
+    if hermes_status is not None:
+        values["hermes_status"] = hermes_status
+    try:
+        await db.execute(
+            update(DfirInvestigation)
+            .where(DfirInvestigation.id == op_id)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Investigation %s: đánh dấu failed thất bại", op_id)
+
+
 async def _dispatch_fail_definitive(
-    db: AsyncSession, inv: DfirInvestigation, *, error: str
+    db: AsyncSession, *, op_id: uuid.UUID, error: str
 ) -> None:
     """Đánh dấu dispatch thất bại DỨT ĐIỂM + settle unknown (đủ envelope).
 
     Dùng cho mọi lỗi TRƯỚC khi request được gửi (cấu hình/validation pre-POST, 4xx
     definitive, job_id mismatch) — không có callback nào sẽ tới để settle sau, nên
     reservation phải được đóng tại chỗ.
+
+    `op_id` do caller chụp TRƯỚC bước commit có thể flush lỗi: KHÔNG đọc `inv.id`
+    ở đây vì ORM có thể đã expire (MissingGreenlet).
     """
-    op_id = inv.id
-    inv.status = "failed"
-    inv.hermes_status = "dispatch_failed"
-    inv.error = error[:2000]
-    inv.completed_at = datetime.now(UTC)
-    try:
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        logger.exception("Dispatch %s: persist trạng thái failed thất bại", op_id)
+    await _mark_investigation_failed(
+        db, op_id=op_id, error=error, hermes_status="dispatch_failed"
+    )
     await _settle_unknown_fresh(scope="investigation_analysis", operation_id=op_id)
 
 
@@ -541,10 +577,17 @@ async def run_pending_investigations() -> dict:
             db, capacity=settings.deepagent_max_concurrent_jobs
         )
         # Process claimed DeepAgent rows first (they are already locked to analyzing)
-        for inv in active_deepagent_claimed:
+        # Chụp id trước khi lặp: một rollback ở iteration trước sẽ expire MỌI ORM
+        # object trong session, đọc `inv.id` ở iteration sau sẽ MissingGreenlet.
+        claimed_ops = [(str(inv.id), inv.id) for inv in active_deepagent_claimed]
+        for inv_id, op_id in claimed_ops:
+            inv = await db.get(DfirInvestigation, op_id)
+            if inv is None:
+                continue
+            await db.refresh(inv)
             try:
                 await _state_dispatch_deepagent(db, inv)
-                processed.append(str(inv.id))
+                processed.append(inv_id)
             except DispatchUncertain as e:
                 # BLOCKER 1 fix: ambiguous outcome KHÔNG được worker set thành
                 # failed. Đã được _state_dispatch_deepagent set
@@ -556,34 +599,27 @@ async def run_pending_investigations() -> dict:
                 logger.warning(
                     "Investigation %s dispatch ambiguous; worker KHÔNG set failed. "
                     "Reconcile loop sẽ xử lý ở tick sau. (%s)",
-                    inv.id, err,
+                    inv_id, err,
                 )
                 # Vẫn count là "processed" để loop không retry sớm — nhưng
                 # trạng thái cuối cùng là dispatch_uncertain để reconcile phía sau.
-                processed.append(str(inv.id))
+                processed.append(inv_id)
             except DispatchFailed as e:
                 # Typed state-machine exception — definitive failure.
                 # Helper đã set status=failed + completed_at + hermes status;
-                # worker boundary chỉ log + commit idempotent. Giữ clause riêng
-                # (không trộn vào generic Exception) để typed semantics visible.
+                # worker boundary chỉ log + mark failed idempotent. Giữ clause
+                # riêng (không trộn vào generic Exception) để typed semantics visible.
                 err = f"{type(e).__name__}: {e}"
-                errors.append(f"{inv.id}: {err}")
-                logger.warning("Investigation %s dispatch failed definitively: %s", inv.id, err)
-                if inv.status != "failed":
-                    inv.status = "failed"
-                    inv.error = err[:2000]
-                    inv.completed_at = datetime.now(UTC)
-                    await db.commit()
+                errors.append(f"{inv_id}: {err}")
+                logger.warning("Investigation %s dispatch failed definitively: %s", inv_id, err)
+                await _mark_investigation_failed(db, op_id=op_id, error=err)
             except Exception as e:
                 # Unexpected — definitive failure (KHÔNG bao gồm
                 # DispatchUncertain vì clause trên đã bắt riêng).
                 err = f"{type(e).__name__}: {e}"
-                errors.append(f"{inv.id}: {err}")
-                logger.exception("Investigation %s failed", inv.id)
-                inv.status = "failed"
-                inv.error = err[:2000]
-                inv.completed_at = datetime.now(UTC)
-                await db.commit()
+                errors.append(f"{inv_id}: {err}")
+                logger.exception("Investigation %s failed", inv_id)
+                await _mark_investigation_failed(db, op_id=op_id, error=err)
 
         # ── Process non-DeepAgent rows (local LLM) unchanged ─────────────────
         non_deepagent = (
@@ -601,18 +637,20 @@ async def run_pending_investigations() -> dict:
             )
         ).scalars().all()
 
-        for inv in non_deepagent:
+        non_deepagent_ops = [(str(inv.id), inv.id) for inv in non_deepagent]
+        for inv_id, op_id in non_deepagent_ops:
+            inv = await db.get(DfirInvestigation, op_id)
+            if inv is None:
+                continue
+            await db.refresh(inv)
             try:
                 await _process_one(db, inv)
-                processed.append(str(inv.id))
+                processed.append(inv_id)
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
-                errors.append(f"{inv.id}: {err}")
-                logger.exception("Investigation %s failed", inv.id)
-                inv.status = "failed"
-                inv.error = err[:2000]
-                inv.completed_at = datetime.now(UTC)
-                await db.commit()
+                errors.append(f"{inv_id}: {err}")
+                logger.exception("Investigation %s failed", inv_id)
+                await _mark_investigation_failed(db, op_id=op_id, error=err)
 
     elapsed_ms = int((time.time() - started) * 1000)
     if processed or errors:
@@ -781,6 +819,10 @@ async def _state_check_deepagent_job(db: AsyncSession, inv: DfirInvestigation) -
 
 async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) -> None:
     """Dispatch idempotent một investigation sang DeepAgent LangGraph."""
+    # Chụp khóa chính NGAY: sau một rollback ORM object có thể bị expire, đọc lại
+    # `inv.id` sẽ lazy-load ngoài async (MissingGreenlet). Mọi cleanup/commit lỗi
+    # về sau dùng `op_id` này, không đọc lại `inv`.
+    op_id = inv.id
     if not inv.velociraptor_client_id:
         raise LlmError("Investigation thiếu Velociraptor client_id")
 
@@ -856,10 +898,16 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         inv.hermes_status = "dispatching"
         inv.started_at = now
         await db.commit()
+    except asyncio.CancelledError:
+        # Hủy TRƯỚC khi POST → không callback nào sẽ tới → đóng reservation.
+        await _dispatch_fail_definitive(
+            db, op_id=op_id, error="DeepAgent dispatch cancelled before POST"
+        )
+        raise
     except Exception as exc:
         # Cấu hình/validation TRƯỚC khi POST → definitive → settle unknown.
         await _dispatch_fail_definitive(
-            db, inv, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
+            db, op_id=op_id, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
         )
         raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}") from exc
 
@@ -898,7 +946,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         if body.get("job_id") != expected_job_id:
             # Dispatch definitive-failed → settle unknown (tính đủ envelope).
             await _dispatch_fail_definitive(
-                db, inv, error="DeepAgent trả về job ID không khớp investigation"
+                db, op_id=op_id, error="DeepAgent trả về job ID không khớp investigation"
             )
             raise DispatchFailed("DeepAgent trả về job ID không khớp investigation")
         inv.external_job_id = expected_job_id
@@ -920,7 +968,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         if 400 <= status_code < 500 and status_code not in (408, 429):
             # 4xx definitive → request không tới thành công → settle unknown.
             await _dispatch_fail_definitive(
-                db, inv, error=f"DeepAgent dispatch 4xx: {status_code}: {exc}"
+                db, op_id=op_id, error=f"DeepAgent dispatch 4xx: {status_code}: {exc}"
             )
             raise DispatchFailed(f"DeepAgent dispatch 4xx: {status_code}")
         # 5xx / 408 / 429: ambiguous — KHÔNG set failed; raise typed
@@ -1009,7 +1057,7 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
             )
         # Lỗi trước khi request được gửi → definitive failure → settle unknown.
         await _dispatch_fail_definitive(
-            db, inv, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
+            db, op_id=op_id, error=f"DeepAgent dispatch: {type(exc).__name__}: {exc}"
         )
         raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}")
 
@@ -1320,17 +1368,27 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         )
 
     except (LlmAuthError, LlmTimeoutError, LlmRateLimitError, LlmError) as e:
-        inv.status = "failed"
-        inv.error = f"LLM: {e}"[:2000]
-        inv.completed_at = datetime.now(UTC)
-        await db.commit()
-        # Chụp snapshot trước `_finalize_usage` (rollback có thể expire `inv`).
+        # Snapshot TRƯỚC: `_finalize_usage` rollback có thể expire ORM.
         snapshot = _inv_to_dict(inv)
-        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
-        await _finalize_usage(
-            db, scope="investigation_analysis", operation_id=op_id,
-            actual=None, cfg=cfg,
-        )
+        try:
+            # Ghi nhận usage TRƯỚC khi persist trạng thái thất bại: commit trạng
+            # thái có thể lỗi/bị hủy, khi đó reservation vẫn phải đóng.
+            # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
+            await _finalize_usage(
+                db, scope="investigation_analysis", operation_id=op_id,
+                actual=None, cfg=cfg,
+            )
+            inv.status = "failed"
+            inv.error = f"LLM: {e}"[:2000]
+            inv.completed_at = datetime.now(UTC)
+            await db.commit()
+        except BaseException:
+            # Lỗi/hủy trong chính handler này (sibling handler không bắt được)
+            # → đóng reservation qua session mới rồi re-raise.
+            await _settle_unknown_fresh(
+                scope="investigation_analysis", operation_id=op_id
+            )
+            raise
         logger.warning("Investigation %s LLM failed: %s", snapshot["id"], e)
         # Gửi notification failed
         await _notify_investigation_result(
@@ -1425,15 +1483,21 @@ async def chat_with_llm(
         await _settle_unknown_fresh(scope="investigation_chat", operation_id=chat_op_id)
         raise
 
-    db.add(DfirInvestigationMessage(
-        investigation_id=inv.id, role="user", content=user_message, tokens=resp.input_tokens,
-    ))
-    db.add(DfirInvestigationMessage(
-        investigation_id=inv.id, role="assistant", content=resp.content,
-        tokens=resp.output_tokens,
-    ))
-    # Persist câu trả lời TRƯỚC; ghi nhận usage ở transaction riêng (spec R8).
-    await db.commit()
+    try:
+        db.add(DfirInvestigationMessage(
+            investigation_id=inv.id, role="user", content=user_message, tokens=resp.input_tokens,
+        ))
+        db.add(DfirInvestigationMessage(
+            investigation_id=inv.id, role="assistant", content=resp.content,
+            tokens=resp.output_tokens,
+        ))
+        # Persist câu trả lời TRƯỚC; ghi nhận usage ở transaction riêng (spec R8).
+        await db.commit()
+    except BaseException:
+        # Persist lỗi/bị hủy → usage không xác định → đóng reservation qua session
+        # mới rồi re-raise (không bỏ mặc ở `reserved`).
+        await _settle_unknown_fresh(scope="investigation_chat", operation_id=chat_op_id)
+        raise
     await _finalize_usage(
         db, scope="investigation_chat", operation_id=chat_op_id,
         actual=resp.total_tokens, cfg=cfg,
