@@ -459,3 +459,157 @@ def test_search_clients_exact_slow_retry_response_hits_absolute_deadline(
     assert calls["n"] == 2
     # Bị cancel quanh deadline (~1s), KHÔNG chờ hết 5s của response.
     assert elapsed < 3.0
+
+
+# ── Finding R2-C1: record hỏng dạng dict phải fail closed, không bỏ qua ──
+
+
+def test_search_clients_exact_empty_dict_record_raises() -> None:
+    # `items=[valid_match, {}]` — record rỗng không phân loại được; trước đây bị
+    # bỏ qua âm thầm và trả về client hợp lệ → sai tính đầy đủ. Phải fail closed.
+    pages = {
+        0: {"items": [_client_item("C.aaa111", "DESKTOP-ABC"), {}], "total": 2}
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "client_id" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_missing_client_id_raises() -> None:
+    pages = {
+        0: {"items": [{"os_info": {"hostname": "DESKTOP-ABC"}}], "total": 1}
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "client_id" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_non_string_client_id_raises() -> None:
+    # `str(client_id)` cũ chấp nhận id không phải string → identity không xác lập.
+    pages = {
+        0: {"items": [{"client_id": 123, "os_info": {"hostname": "DESKTOP-ABC"}}], "total": 1}
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "client_id" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_missing_hostname_raises() -> None:
+    # `os_info` là dict nhưng thiếu `hostname` → không phân loại được.
+    pages = {
+        0: {"items": [{"client_id": "C.aaa111", "os_info": {}}], "total": 1}
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "hostname" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_non_string_hostname_raises() -> None:
+    pages = {
+        0: {
+            "items": [{"client_id": "C.aaa111", "os_info": {"hostname": 42}}],
+            "total": 1,
+        }
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "hostname" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_blank_hostname_raises() -> None:
+    pages = {
+        0: {
+            "items": [{"client_id": "C.aaa111", "os_info": {"hostname": "   "}}],
+            "total": 1,
+        }
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "hostname" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_non_dict_os_info_raises() -> None:
+    # `os_info` truthy nhưng không phải dict → trước đây lọt `AttributeError`
+    # không category qua helper; nay phải là VelociraptorError đúng taxonomy.
+    pages = {
+        0: {
+            "items": [{"client_id": "C.aaa111", "os_info": "windows"}],
+            "total": 1,
+        }
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "hostname" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+# ── Finding R2-I2: ambiguity coverage đầy đủ hơn ────────────────────
+
+
+def test_search_clients_exact_ambiguous_distinct_ids_across_pages_raises() -> None:
+    # 2 client_id KHÁC nhau khớp cùng hostname, nằm ở 2 trang khác nhau → ambiguity.
+    pages = {
+        0: {"items": [_client_item("C.aaa111", "DESKTOP-ABC")], "total": 2},
+        1: {"items": [_client_item("C.bbb222", "DESKTOP-ABC")], "total": 2},
+    }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    message = str(ei.value)
+    assert "C.aaa111" in message
+    assert "C.bbb222" in message
+    assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_retry_detects_newly_enrolled_ambiguity(monkeypatch) -> None:
+    # Lần đầu 0 match; retry thấy 2 client mới enroll TRÙNG hostname → ambiguity
+    # phải được phát hiện trong cửa sổ retry, không tự chọn.
+    monkeypatch.setattr(settings, "resolver_consistency_window_seconds", 2)
+    monkeypatch.setattr(
+        "app.services.velociraptor.SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS", 0.01
+    )
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json={"items": [], "total": 0})
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    _client_item("C.new01", "DESKTOP-ABC"),
+                    _client_item("C.new02", "desktop-abc.local"),
+                ],
+                "total": 2,
+            },
+        )
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    message = str(ei.value)
+    assert "C.new01" in message
+    assert "C.new02" in message
+    assert ei.value.category == "chat_collection_denied"
+    assert calls["n"] >= 2

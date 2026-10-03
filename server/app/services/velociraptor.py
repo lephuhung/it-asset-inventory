@@ -770,32 +770,15 @@ class VelociraptorClient:
                         category=COLLECTION_DENIED_CATEGORY,
                     )
                 page_timeout = remaining
-            # `asyncio.wait_for` mới là deadline TỔNG thực sự: timeout của httpx chỉ
-            # giới hạn từng thao tác/mỗi lần đọc, nên một response streaming liên tục
-            # gửi chunk có thể vượt cửa sổ consistency. Hết hạn → hủy và fail closed.
-            if page_timeout is None:
-                items, page_total = await self._search_clients_page_exact(
-                    query=f"host:{target}",
-                    limit=SEARCH_CLIENTS_PAGE_SIZE,
-                    offset=offset,
-                )
-            else:
-                try:
-                    items, page_total = await asyncio.wait_for(
-                        self._search_clients_page_exact(
-                            query=f"host:{target}",
-                            limit=SEARCH_CLIENTS_PAGE_SIZE,
-                            offset=offset,
-                            timeout=page_timeout,
-                        ),
-                        timeout=page_timeout,
-                    )
-                except TimeoutError:
-                    raise VelociraptorError(
-                        f"[{COLLECTION_DENIED_CATEGORY}] hết cửa sổ consistency khi "
-                        f"lấy trang tại offset {offset}",
-                        category=COLLECTION_DENIED_CATEGORY,
-                    )
+            # `page_timeout` vừa là timeout request vừa là deadline TUYỆT ĐỐI mà
+            # `_search_clients_page_exact` bao bằng `asyncio.wait_for` (timeout của
+            # httpx chỉ giới hạn từng lần read, không chặn response streaming).
+            items, page_total = await self._search_clients_page_exact(
+                query=f"host:{target}",
+                limit=SEARCH_CLIENTS_PAGE_SIZE,
+                offset=offset,
+                timeout=page_timeout,
+            )
             pages += 1
             if page_total is None:
                 raise VelociraptorError(
