@@ -5,6 +5,7 @@ Chạy qua background worker `run_pending_investigations()` mỗi 30s.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -29,7 +30,7 @@ from app.db.models import (
     VelociraptorConfig,
     VelociraptorLink,
 )
-from app.services.budget import charged, reserve, settle
+from app.services.budget import BudgetUnavailable, charged, reserve, settle
 from app.services.llm import (
     LlmAuthError,
     LlmClient,
@@ -289,9 +290,11 @@ def _decrypt_api_key(encrypted: str | None) -> str | None:
 def _budget_envelope(cfg: LlmConfig) -> int:
     """Envelope token giữ chỗ cho 1 thao tác LLM (spec F11/R8/V3-7).
 
-    Lấy bằng trần output của model (`max_tokens`). Settle luôn dùng `actual` thật
-    nên chi phí đã hoàn tất không bị tính thiếu; khi usage mất (`unknown`), toàn bộ
-    envelope bị tính — phần input chưa biết là residual risk đã ghi nhận.
+    Lấy bằng trần output của model (`max_tokens`) — spec KHÔNG quy định công thức
+    envelope. Settle luôn dùng `actual` thật nên chi phí đã hoàn tất không bị tính
+    thiếu. Khi usage mất (`unknown`), envelope bị tính đủ: đây là chặn TRÊN dè dặt
+    cho phần output, nhưng KHÔNG bao gồm phần input chưa báo — residual risk đã
+    ghi nhận (chỉ ảnh hưởng khi operator đặt `daily_token_budget`).
     """
     return max(1, int(cfg.max_tokens or settings.llm_max_tokens))
 
@@ -302,6 +305,49 @@ async def _sync_tokens_used_today(db: AsyncSession, cfg: LlmConfig) -> None:
     Thay cho pattern read-modify-write cũ; `token_reservations` mới là nguồn sự thật.
     """
     cfg.tokens_used_today = await charged(db)
+
+
+async def _finalize_usage(
+    db: AsyncSession, *, scope: str, operation_id: uuid.UUID, actual: int | None, cfg: LlmConfig
+) -> None:
+    """Ghi nhận usage SAU khi kết quả đã được persist (spec R8).
+
+    Lỗi ngân sách ở bước này KHÔNG được biến công việc đã hoàn thành thành thất bại:
+    rollback + log rồi trả về. Reservation khi đó vẫn ở trạng thái cũ (reserved →
+    vẫn tính đủ envelope) — dè dặt, an toàn.
+    """
+    try:
+        await settle(db, scope=scope, operation_id=operation_id, actual=actual)
+        await _sync_tokens_used_today(db, cfg)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Ngân sách: ghi nhận usage thất bại — giữ nguyên kết quả đã lưu")
+
+
+async def _settle_unknown_fresh(*, scope: str, operation_id: uuid.UUID) -> None:
+    """Settle `unknown` trong engine/session MỚI — cleanup khi hủy/lỗi.
+
+    Dùng engine `NullPool` riêng, tạo + dispose tại chỗ: không phụ thuộc session
+    đang bị hủy/abort của caller, và không tái dùng connection gắn event-loop khác
+    (an toàn cả trong worker lẫn test tạo loop mới mỗi case).
+
+    Best-effort: nếu chính cleanup bị hủy, reservation vẫn ở `reserved` (đã tính đủ
+    envelope) — dè dặt.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as s:
+            await settle(s, scope=scope, operation_id=operation_id, actual=None)
+            await s.commit()
+    except Exception:
+        logger.exception("Ngân sách: cleanup settle thất bại cho %s/%s", scope, operation_id)
+    finally:
+        await engine.dispose()
 
 
 # ── Public: enqueue investigation ────────────────────────────────
@@ -678,14 +724,24 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
 
     # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi dispatch (DeepAgent callback có thể
     # không báo usage → settle unknown sẽ tính đủ envelope).
-    reserved = await reserve(
-        db,
-        scope="investigation_analysis",
-        operation_id=inv.id,
-        association_id=inv.id,
-        envelope=_budget_envelope(llm_cfg),
-        budget=llm_cfg.daily_token_budget,
-    )
+    try:
+        reserved = await reserve(
+            db,
+            scope="investigation_analysis",
+            operation_id=inv.id,
+            association_id=inv.id,
+            envelope=_budget_envelope(llm_cfg),
+            budget=llm_cfg.daily_token_budget,
+        )
+    except BudgetUnavailable as exc:
+        # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
+        await db.rollback()
+        inv.status = "failed"
+        inv.error = str(exc)[:2000]
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning("Investigation %s: budget DB không khả dụng, bỏ qua dispatch", inv.id)
+        return
     if reserved is None:
         inv.status = "failed"
         inv.error = "chat_budget_exceeded: đã vượt ngân sách token hôm nay"
@@ -759,6 +815,10 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
             inv.error = "DeepAgent trả về job ID không khớp investigation"
             inv.completed_at = datetime.now(UTC)
             await db.commit()
+            # Dispatch definitive-failed → settle unknown (tính đủ envelope).
+            await _settle_unknown_fresh(
+                scope="investigation_analysis", operation_id=inv.id
+            )
             raise DispatchFailed("DeepAgent trả về job ID không khớp investigation")
         inv.external_job_id = expected_job_id
         inv.hermes_status = "dispatched"
@@ -782,6 +842,10 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
             inv.error = f"DeepAgent dispatch 4xx: {status_code}: {exc}"[:2000]
             inv.completed_at = datetime.now(UTC)
             await db.commit()
+            # 4xx definitive → request không tới thành công → settle unknown.
+            await _settle_unknown_fresh(
+                scope="investigation_analysis", operation_id=inv.id
+            )
             raise DispatchFailed(f"DeepAgent dispatch 4xx: {status_code}")
         # 5xx / 408 / 429: ambiguous — KHÔNG set failed; raise typed
         # DispatchUncertain để worker boundary xử lý riêng.
@@ -873,6 +937,10 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
         inv.error = f"DeepAgent dispatch: {type(exc).__name__}: {exc}"[:2000]
         inv.completed_at = datetime.now(UTC)
         await db.commit()
+        # Lỗi trước POST → definitive → settle unknown (tính đủ envelope).
+        await _settle_unknown_fresh(
+            scope="investigation_analysis", operation_id=inv.id
+        )
         raise DispatchFailed(f"DeepAgent dispatch: {type(exc).__name__}: {exc}")
 
 
@@ -1095,14 +1163,24 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
     await db.commit()
 
     # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi gọi LLM (DB là source of truth).
-    reserved = await reserve(
-        db,
-        scope="investigation_analysis",
-        operation_id=inv.id,
-        association_id=inv.id,
-        envelope=_budget_envelope(cfg),
-        budget=cfg.daily_token_budget,
-    )
+    try:
+        reserved = await reserve(
+            db,
+            scope="investigation_analysis",
+            operation_id=inv.id,
+            association_id=inv.id,
+            envelope=_budget_envelope(cfg),
+            budget=cfg.daily_token_budget,
+        )
+    except BudgetUnavailable as exc:
+        # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
+        await db.rollback()
+        inv.status = "failed"
+        inv.error = str(exc)[:2000]
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning("Investigation %s: budget DB không khả dụng, bỏ qua phân tích", inv.id)
+        return
     if reserved is None:
         inv.status = "failed"
         inv.error = "chat_budget_exceeded: đã vượt ngân sách token hôm nay"
@@ -1145,17 +1223,15 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
             tokens=resp.output_tokens,
         ))
 
-        await settle(
-            db,
-            scope="investigation_analysis",
-            operation_id=inv.id,
-            actual=resp.total_tokens,
-        )
-        await _sync_tokens_used_today(db, cfg)
-
         inv.status = "completed"
         inv.completed_at = datetime.now(UTC)
+        # Persist kết quả TRƯỚC; ghi nhận usage ở transaction riêng để lỗi ngân
+        # sách không thể biến công việc đã hoàn thành thành thất bại (spec R8).
         await db.commit()
+        await _finalize_usage(
+            db, scope="investigation_analysis", operation_id=inv.id,
+            actual=resp.total_tokens, cfg=cfg,
+        )
         logger.info(
             "Investigation %s completed: severity=%s findings=%d tokens=%d",
             inv.id, inv.severity, inv.findings_count or 0, resp.total_tokens,
@@ -1172,18 +1248,23 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         inv.status = "failed"
         inv.error = f"LLM: {e}"[:2000]
         inv.completed_at = datetime.now(UTC)
-        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
-        await settle(
-            db, scope="investigation_analysis", operation_id=inv.id, actual=None
-        )
-        await _sync_tokens_used_today(db, cfg)
         await db.commit()
+        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
+        await _finalize_usage(
+            db, scope="investigation_analysis", operation_id=inv.id, actual=None, cfg=cfg,
+        )
         logger.warning("Investigation %s LLM failed: %s", inv.id, e)
         # Gửi notification failed
         await _notify_investigation_result(
             db, investigation_id=inv.id, machine_id=inv.machine_id,
             status="failed", error=str(e),
         )
+    except asyncio.CancelledError:
+        # Hủy giữa chừng → settle unknown trong session mới (session hiện đang bị hủy).
+        await _settle_unknown_fresh(
+            scope="investigation_analysis", operation_id=inv.id
+        )
+        raise
 
 
 # ── Public: chat Q&A ─────────────────────────────────────────────
@@ -1221,14 +1302,19 @@ async def chat_with_llm(
 
     # Mỗi câu hỏi Q&A là MỘT thao tác tính phí riêng (operation_id mới).
     chat_op_id = uuid.uuid4()
-    reserved = await reserve(
-        db,
-        scope="investigation_chat",
-        operation_id=chat_op_id,
-        association_id=inv.id,
-        envelope=_budget_envelope(cfg),
-        budget=cfg.daily_token_budget,
-    )
+    try:
+        reserved = await reserve(
+            db,
+            scope="investigation_chat",
+            operation_id=chat_op_id,
+            association_id=inv.id,
+            envelope=_budget_envelope(cfg),
+            budget=cfg.daily_token_budget,
+        )
+    except BudgetUnavailable as exc:
+        # DB ngân sách không khả dụng → fail closed cho thao tác MỚI (spec R8).
+        await db.rollback()
+        raise LlmError(str(exc)) from exc
     if reserved is None:
         raise LlmError("chat_budget_exceeded: đã vượt ngân sách token hôm nay")
     # Chốt admission ngay để giải phóng advisory lock trước khi gọi LLM.
@@ -1246,13 +1332,15 @@ async def chat_with_llm(
             allow_cloud=cfg.allow_cloud,
         ) as llm:
             resp = await llm.chat(llm_messages)
+    except asyncio.CancelledError:
+        # Hủy giữa chừng → settle unknown trong session mới rồi re-raise.
+        await _settle_unknown_fresh(scope="investigation_chat", operation_id=chat_op_id)
+        raise
     except LlmError:
         # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
-        await settle(
-            db, scope="investigation_chat", operation_id=chat_op_id, actual=None
+        await _finalize_usage(
+            db, scope="investigation_chat", operation_id=chat_op_id, actual=None, cfg=cfg,
         )
-        await _sync_tokens_used_today(db, cfg)
-        await db.commit()
         raise
 
     db.add(DfirInvestigationMessage(
@@ -1262,11 +1350,12 @@ async def chat_with_llm(
         investigation_id=inv.id, role="assistant", content=resp.content,
         tokens=resp.output_tokens,
     ))
-    await settle(
-        db, scope="investigation_chat", operation_id=chat_op_id, actual=resp.total_tokens
-    )
-    await _sync_tokens_used_today(db, cfg)
+    # Persist câu trả lời TRƯỚC; ghi nhận usage ở transaction riêng (spec R8).
     await db.commit()
+    await _finalize_usage(
+        db, scope="investigation_chat", operation_id=chat_op_id,
+        actual=resp.total_tokens, cfg=cfg,
+    )
 
     return {
         "response": resp.content,
@@ -1436,15 +1525,16 @@ async def submit_external_result(
         if external_job_id:
             inv.external_job_id = external_job_id
         inv.external_callback_idempotency_key = idempotency_key
-        # Callback báo lỗi → usage không xác định → settle unknown (đủ envelope).
-        await settle(
-            db, scope="investigation_analysis", operation_id=inv.id, actual=None
-        )
-        cfg = await _load_llm_config(db)
-        if cfg:
-            await _sync_tokens_used_today(db, cfg)
+        # Persist trạng thái thất bại TRƯỚC; usage không xác định → settle unknown
+        # (đủ envelope) ở transaction riêng, best-effort (spec R8).
         snapshot = _inv_to_dict(inv)
         await db.commit()
+        cfg = await _load_llm_config(db)
+        if cfg:
+            await _finalize_usage(
+                db, scope="investigation_analysis", operation_id=inv.id,
+                actual=None, cfg=cfg,
+            )
         # Notify failed
         await _notify_investigation_result(
             db, investigation_id=snapshot["id"], machine_id=snapshot["machine_id"],
@@ -1474,27 +1564,29 @@ async def submit_external_result(
         inv.external_job_id = external_job_id
     inv.external_callback_idempotency_key = idempotency_key
 
-    # Chốt reservation của lần dispatch: actual nếu callback báo usage, ngược lại
-    # unknown (tính đủ envelope) — DeepAgent có thể không báo usage.
-    reported = (input_tokens or 0) + (output_tokens or 0)
-    await settle(
-        db,
-        scope="investigation_analysis",
-        operation_id=inv.id,
-        actual=reported if reported > 0 else None,
-    )
-    cfg = await _load_llm_config(db)
-    if cfg:
-        await _sync_tokens_used_today(db, cfg)
+    # Chốt reservation của lần dispatch: actual nếu callback BÁO usage, ngược lại
+    # unknown (tính đủ envelope). "Không báo" = cả hai đều None; `0` là usage thật
+    # đã biết (không được coi là thiếu).
+    if input_tokens is None and output_tokens is None:
+        reported_actual: int | None = None
+    else:
+        reported_actual = (input_tokens or 0) + (output_tokens or 0)
 
-    # Snapshot trước commit; refresh ở đây sẽ làm mất các thay đổi chưa commit.
+    # Snapshot + persist kết quả TRƯỚC; ghi nhận usage ở transaction riêng để lỗi
+    # ngân sách không thể biến callback thành công thành thất bại (spec R8).
     snapshot = _inv_to_dict(inv)
     await db.commit()
     logger.info(
-        "Investigation %s: external result received (severity=%s findings=%d tokens=%d)",
+        "Investigation %s: external result received (severity=%s findings=%d tokens=%s)",
         snapshot["id"], snapshot["severity"], snapshot["findings_count"] or 0,
-        (input_tokens or 0) + (output_tokens or 0),
+        reported_actual,
     )
+    cfg = await _load_llm_config(db)
+    if cfg:
+        await _finalize_usage(
+            db, scope="investigation_analysis", operation_id=inv.id,
+            actual=reported_actual, cfg=cfg,
+        )
 
     # Gửi notification (alert engine — Org Admin + Super Admin)
     await _notify_investigation_result(

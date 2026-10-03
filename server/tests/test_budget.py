@@ -10,9 +10,11 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.db.models import TokenReservation
 from app.services import budget
 from app.services.budget import (
     BudgetConflict,
+    BudgetUnavailable,
     charged,
     reserve,
     settle,
@@ -339,7 +341,44 @@ async def test_external_callback_settles_dispatch_reservation(session_factory, m
 
 @pytest.mark.asyncio
 async def test_external_callback_without_usage_charges_envelope(session_factory, monkeypatch):
-    """Callback không báo usage → settle unknown → tính đủ envelope (spec R8)."""
+    """Callback KHÔNG báo usage (None) → settle unknown → tính đủ envelope (spec R8)."""
+    from app.services import dfir_investigation as inv_svc
+
+    async def _noop_notify(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _noop_notify)
+
+    inv_id = await _seed_external_investigation(session_factory, envelope=700)
+    async with session_factory() as s:
+        await inv_svc.submit_external_result(
+            s,
+            investigation_id=str(inv_id),
+            api_key_id=None,
+            report_markdown="# report",
+            severity="low",
+            # KHÔNG truyền usage (mặc định None) = mất usage thật.
+            external_job_id="deepagent-job-1",
+            idempotency_key="cb-2",
+        )
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state, actual FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one()
+        assert row[0] == "unknown"
+        assert await charged(s, _today()) == 700
+
+
+@pytest.mark.asyncio
+async def test_external_callback_with_reported_zero_settles_zero(session_factory, monkeypatch):
+    """Callback báo usage = 0 (biết chắc) → settled actual=0, KHÔNG phải envelope."""
     from app.services import dfir_investigation as inv_svc
 
     async def _noop_notify(*args, **kwargs):
@@ -358,7 +397,7 @@ async def test_external_callback_without_usage_charges_envelope(session_factory,
             input_tokens=0,
             output_tokens=0,
             external_job_id="deepagent-job-1",
-            idempotency_key="cb-2",
+            idempotency_key="cb-zero",
         )
 
     async with session_factory() as s:
@@ -371,8 +410,8 @@ async def test_external_callback_without_usage_charges_envelope(session_factory,
                 {"op": inv_id},
             )
         ).one()
-        assert row[0] == "unknown"
-        assert await charged(s, _today()) == 700
+        assert row[0] == "settled" and row[1] == 0
+        assert await charged(s, _today()) == 0
 
 
 async def _seed_analyzing_investigation(session_factory):
@@ -485,3 +524,396 @@ async def test_local_analysis_reserves_then_settles_actual(session_factory, monk
         assert cfg is not None and cfg.tokens_used_today == 16
         stored = await s.get(DfirInvestigation, inv_id)
         assert stored is not None and stored.status == "completed"
+
+
+# ── Fix Round 1: rollover lock, ON CONFLICT, conflict-aware settle ──
+
+
+@pytest.mark.asyncio
+async def test_settle_locks_reservation_budget_date_not_today(db_engine, monkeypatch):
+    """Settle phải khóa theo `budget_date` của reservation, KHÔNG phải hôm nay.
+
+    Reservation của hôm qua; giữ advisory lock ngày hôm qua ở transaction khác →
+    settle phải BỊ CHẶN. Bug cũ (lock `_utc_today()`) sẽ không bị chặn → test fail.
+    """
+    yesterday = _today() - timedelta(days=1)
+    op = uuid.uuid4()
+    maker = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with maker() as s:
+        s.add(
+            TokenReservation(
+                scope=SCOPE,
+                operation_id=op,
+                association_id=None,
+                budget_date=yesterday,
+                reserved=50,
+                state="reserved",
+            )
+        )
+        await s.commit()
+
+    # "Hôm nay" KHÁC ngày reservation.
+    monkeypatch.setattr(budget, "_utc_today", lambda: _today())
+
+    lock_held = asyncio.Event()
+    release = asyncio.Event()
+
+    async def holder():
+        async with maker() as s:
+            await budget._acquire_lock(s, yesterday)
+            lock_held.set()
+            await release.wait()
+            await s.rollback()
+
+    async def settler():
+        async with maker() as s:
+            await settle(s, scope=SCOPE, operation_id=op, actual=10)
+            await s.commit()
+
+    holder_task = asyncio.create_task(holder())
+    await asyncio.wait_for(lock_held.wait(), timeout=5)
+    settler_task = asyncio.create_task(settler())
+    # Settle phải bị chặn bởi lock NGÀY HÔM QUA (không phải hôm nay).
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(settler_task), timeout=1.0)
+    release.set()
+    await asyncio.wait_for(holder_task, timeout=5)
+    await asyncio.wait_for(settler_task, timeout=5)
+
+    async with maker() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state, actual FROM token_reservations"
+                    " WHERE scope=:sc AND operation_id=:op"
+                ),
+                {"sc": SCOPE, "op": op},
+            )
+        ).one()
+        assert row[0] == "settled" and row[1] == 10
+
+
+@pytest.mark.asyncio
+async def test_reserve_handles_racing_insert_via_on_conflict(db_engine, monkeypatch):
+    """Race qua nửa đêm: transaction khác chèn cùng (scope, op) giữa SELECT-miss và
+    INSERT của reserve → reserve phải idempotent (ON CONFLICT), không ném UniqueViolation.
+    """
+    op = uuid.uuid4()
+    maker = async_sessionmaker(db_engine, expire_on_commit=False)
+    today = _today()
+
+    async def racing_charged(db, budget_date=None):
+        # Side-effect: một transaction KHÁC đã chèn cùng (scope, op) sau khi reserve
+        # SELECT-miss → mô phỏng retry vắt qua nửa đêm giữ lock ngày khác.
+        async with maker() as other:
+            other.add(
+                TokenReservation(
+                    scope=SCOPE,
+                    operation_id=op,
+                    association_id=None,
+                    budget_date=today,
+                    reserved=30,
+                    state="reserved",
+                )
+            )
+            await other.commit()
+        return 0
+
+    monkeypatch.setattr(budget, "charged", racing_charged)
+
+    async with maker() as s:
+        r = await reserve(s, scope=SCOPE, operation_id=op, envelope=30, budget=1000)
+        await s.commit()
+    assert r is not None and r.operation_id == op
+
+    async with maker() as s:
+        count = (
+            await s.execute(
+                text(
+                    "SELECT count(*) FROM token_reservations"
+                    " WHERE scope=:sc AND operation_id=:op"
+                ),
+                {"sc": SCOPE, "op": op},
+            )
+        ).scalar_one()
+        assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_settle_known_then_unknown_is_conflict(db_session):
+    op = uuid.uuid4()
+    await reserve(db_session, scope=SCOPE, operation_id=op, envelope=30, budget=1000)
+    await settle(db_session, scope=SCOPE, operation_id=op, actual=25)
+    with pytest.raises(BudgetConflict):
+        await settle(db_session, scope=SCOPE, operation_id=op, actual=None)
+    assert await charged(db_session, _today()) == 25
+
+
+@pytest.mark.asyncio
+async def test_settle_unknown_then_known_is_conflict(db_session):
+    op = uuid.uuid4()
+    await reserve(db_session, scope=SCOPE, operation_id=op, envelope=30, budget=1000)
+    await settle(db_session, scope=SCOPE, operation_id=op, actual=None)
+    with pytest.raises(BudgetConflict):
+        await settle(db_session, scope=SCOPE, operation_id=op, actual=25)
+    assert await charged(db_session, _today()) == 30
+
+
+@pytest.mark.asyncio
+async def test_reserve_translates_db_error_to_budget_unavailable(db_session, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    async def boom(db, d):
+        raise OperationalError("SELECT 1", {}, Exception("db down"))
+
+    monkeypatch.setattr(budget, "_acquire_lock", boom)
+    with pytest.raises(BudgetUnavailable):
+        await reserve(
+            db_session, scope=SCOPE, operation_id=uuid.uuid4(), envelope=1, budget=10
+        )
+
+
+@pytest.mark.asyncio
+async def test_settle_translates_db_error_to_budget_unavailable(db_session, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    op = uuid.uuid4()
+    await reserve(db_session, scope=SCOPE, operation_id=op, envelope=1, budget=10)
+
+    async def boom(db, d):
+        raise OperationalError("SELECT 1", {}, Exception("db down"))
+
+    monkeypatch.setattr(budget, "_acquire_lock", boom)
+    with pytest.raises(BudgetUnavailable):
+        await settle(db_session, scope=SCOPE, operation_id=op, actual=1)
+
+
+@pytest.mark.asyncio
+async def test_settle_unknown_fresh_closes_reservation(session_factory):
+    """Cleanup dùng session MỚI vẫn settle được reservation (đường hủy/lỗi)."""
+    from app.services import dfir_investigation as inv_svc
+
+    op = uuid.uuid4()
+    async with session_factory() as s:
+        await reserve(s, scope=SCOPE, operation_id=op, envelope=40, budget=None)
+        await s.commit()
+
+    await inv_svc._settle_unknown_fresh(scope=SCOPE, operation_id=op)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope=:sc AND operation_id=:op"
+                ),
+                {"sc": SCOPE, "op": op},
+            )
+        ).one()
+        assert row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_releases_lock_before_llm_call(session_factory, monkeypatch):
+    """Reservation đã commit + advisory lock đã nhả TRƯỚC khi gọi LLM.
+
+    Trong lúc fake-LLM "chạy", một admission khác phải chạy được ngay (không block),
+    và reservation đã commit phải visible. Nếu lock còn giữ, admission trong LLM sẽ
+    block → `wait_for` timeout → test fail.
+    """
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    async def _noop_notify(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(inv_svc, "_notify_investigation_result", _noop_notify)
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "test-key")
+
+    observed: dict[str, bool] = {}
+
+    class _Resp:
+        content = "### 1. Low\n"
+        input_tokens = 1
+        output_tokens = 1
+        total_tokens = 2
+        estimated_cost_usd = 0.0
+        model = "m"
+
+    class _FakeLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            # Trong lúc "LLM chạy": admission mới phải chạy được ngay.
+            async with session_factory() as other:
+                r = await reserve(
+                    other,
+                    scope="chat_turn",
+                    operation_id=uuid.uuid4(),
+                    envelope=5,
+                    budget=None,
+                )
+                await other.commit()
+                observed["reserved_during_llm"] = r is not None
+            async with session_factory() as other:
+                observed["visible"] = await charged(other, _today()) >= 2
+            return _Resp()
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _FakeLlm)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        await asyncio.wait_for(inv_svc._state_analyze(s, inv), timeout=10)
+
+    assert observed.get("reserved_during_llm") is True
+    assert observed.get("visible") is True
+
+
+async def _seed_completed_investigation(session_factory):
+    """Investigation đã 'completed' + 1 message, để chạy chat_with_llm."""
+    from app.db.models import (
+        DfirInvestigation,
+        DfirInvestigationMessage,
+        LlmConfig,
+        Machine,
+        Organization,
+        OrgType,
+        User,
+        UserRole,
+    )
+
+    async with session_factory() as s:
+        org = Organization(name=f"Org {uuid.uuid4()}", type=OrgType.ROOT.value)
+        s.add(org)
+        await s.flush()
+        user = User(
+            org_id=org.id,
+            full_name="T6c",
+            email=f"t6c-{uuid.uuid4()}@example.com",
+            role=UserRole.SUPER_ADMIN.value,
+            password_hash="x",
+        )
+        s.add(user)
+        await s.flush()
+        machine = Machine(
+            hostname=f"T6C-{uuid.uuid4()}", org_id=org.id, machine_uuid=str(uuid.uuid4())
+        )
+        s.add(machine)
+        await s.flush()
+        s.add(
+            LlmConfig(
+                id=1,
+                enabled=True,
+                provider="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="m",
+                daily_token_budget=100_000,
+                tokens_used_today=0,
+            )
+        )
+        await s.flush()
+        inv = DfirInvestigation(
+            machine_id=machine.id,
+            velociraptor_client_id="C.t6c",
+            artifacts=[],
+            status="completed",
+            requested_by=user.id,
+        )
+        s.add(inv)
+        await s.flush()
+        s.add(DfirInvestigationMessage(investigation_id=inv.id, role="user", content="q"))
+        await s.commit()
+        return inv.id
+
+
+@pytest.mark.asyncio
+async def test_chat_with_llm_cancellation_settles_unknown(session_factory, monkeypatch):
+    """Hủy giữa LLM call → reservation settle unknown (không bỏ mặc reserved)."""
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    class _CancelLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _CancelLlm)
+
+    inv_id = await _seed_completed_investigation(session_factory)
+    async with session_factory() as s:
+        with pytest.raises(asyncio.CancelledError):
+            await inv_svc.chat_with_llm(
+                s, investigation_id=str(inv_id), user_message="hi"
+            )
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_chat' AND association_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one_or_none()
+        assert row is not None and row[0] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_local_analysis_cancellation_settles_unknown(session_factory, monkeypatch):
+    """Hủy giữa _state_analyze → reservation settle unknown."""
+    from app.db.models import DfirInvestigation
+    from app.services import dfir_investigation as inv_svc
+
+    monkeypatch.setattr(inv_svc, "_decrypt_api_key", lambda enc: "k")
+
+    class _CancelLlm:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def chat(self, messages):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inv_svc, "LlmClient", _CancelLlm)
+
+    inv_id = await _seed_analyzing_investigation(session_factory)
+    async with session_factory() as s:
+        inv = await s.get(DfirInvestigation, inv_id)
+        with pytest.raises(asyncio.CancelledError):
+            await inv_svc._state_analyze(s, inv)
+
+    async with session_factory() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT state FROM token_reservations"
+                    " WHERE scope='investigation_analysis' AND operation_id=:op"
+                ),
+                {"op": inv_id},
+            )
+        ).one_or_none()
+        assert row is not None and row[0] == "unknown"
