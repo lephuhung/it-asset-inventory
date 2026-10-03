@@ -1590,3 +1590,85 @@ async def test_dispatch_pre_post_flush_failure_settles_unknown(session_factory, 
         stored = await s.get(DfirInvestigation, inv_id)
         assert stored.status == "failed"
         assert stored.hermes_status == "dispatch_failed"
+
+
+# ── Fix Round 4: settle-commit DB-error translation to BudgetUnavailable ──
+
+
+class _CommitBoomSession:
+    """Bọc session: mọi `commit()` ném `OperationalError` (DB ngân sách hỏng lúc ghi)."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def commit(self):
+        raise OperationalError("COMMIT", {}, Exception("budget db down"))
+
+
+@pytest.mark.asyncio
+async def test_settle_commit_failure_translates_to_budget_unavailable(session_factory):
+    """Finding 3: commit ở bước ghi nhận usage lỗi → dịch thành `chat_budget_unavailable`.
+
+    `settle()` chỉ dịch lỗi ở đoạn đọc/khóa/ghi hàng; lỗi `commit()` nằm ngoài handler
+    đó nên `_settle_usage_or_unavailable` phải tự dịch, nếu không nó escape thành lỗi
+    DB thô (OperationalError) thay vì category `chat_budget_unavailable`.
+    """
+    from app.services import dfir_investigation as inv_svc
+
+    op = uuid.uuid4()
+    async with session_factory() as s:
+        await reserve(
+            s,
+            scope="investigation_analysis",
+            operation_id=op,
+            association_id=op,
+            envelope=10,
+            budget=None,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        wrapped = _CommitBoomSession(s)
+        with pytest.raises(BudgetUnavailable) as ei:
+            await inv_svc._settle_usage_or_unavailable(
+                wrapped,
+                scope="investigation_analysis",
+                operation_id=op,
+                actual=3,
+                cfg=None,
+            )
+        assert "chat_budget_unavailable" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_finalize_usage_keeps_completed_work_on_settle_db_failure(session_factory):
+    """`_finalize_usage` best-effort: settle-commit lỗi KHÔNG được ném ra (spec R8:
+    "không huỷ kết quả đã hoàn thành").
+    """
+    from app.services import dfir_investigation as inv_svc
+
+    op = uuid.uuid4()
+    async with session_factory() as s:
+        await reserve(
+            s,
+            scope="investigation_analysis",
+            operation_id=op,
+            association_id=op,
+            envelope=10,
+            budget=None,
+        )
+        await s.commit()
+
+    async with session_factory() as s:
+        wrapped = _CommitBoomSession(s)
+        # Không ném: đã dịch thành BudgetUnavailable rồi nuốt trong nhánh best-effort.
+        await inv_svc._finalize_usage(
+            wrapped,
+            scope="investigation_analysis",
+            operation_id=op,
+            actual=3,
+            cfg=None,
+        )

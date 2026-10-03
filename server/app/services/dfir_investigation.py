@@ -338,6 +338,30 @@ async def _admit_budget(
     return reserved
 
 
+async def _settle_usage_or_unavailable(
+    db: AsyncSession,
+    *,
+    scope: str,
+    operation_id: uuid.UUID,
+    actual: int | None,
+    cfg: LlmConfig | None,
+) -> None:
+    """Settle + sync cột hiển thị + commit; dịch lỗi DB ngân sách thành `BudgetUnavailable`.
+
+    `settle()` chỉ dịch `SQLAlchemyError` cho đoạn đọc/khóa/cập nhật hàng; các lỗi ở
+    bước autoflush và `commit()` của caller (cùng `_sync_tokens_used_today`) nằm NGOÀI
+    handler đó, nên phải dịch tại đây — nếu không chúng escape thành lỗi DB thô thay vì
+    category `chat_budget_unavailable` (spec R8, format lỗi chung).
+    """
+    try:
+        await settle(db, scope=scope, operation_id=operation_id, actual=actual)
+        if cfg is not None:
+            await _sync_tokens_used_today(db, cfg)
+        await db.commit()
+    except SQLAlchemyError as exc:
+        raise BudgetUnavailable(type(exc).__name__) from exc
+
+
 async def _finalize_usage(
     db: AsyncSession,
     *,
@@ -346,19 +370,26 @@ async def _finalize_usage(
     actual: int | None,
     cfg: LlmConfig | None,
 ) -> None:
-    """Ghi nhận usage SAU khi kết quả đã được persist (spec R8).
+    """Ghi nhận usage SAU khi kết quả đã được persist (spec R8) — best-effort.
 
     - `cfg=None` (llm_config bị xoá): vẫn settle (BẮT BUỘC), chỉ bỏ cập nhật cột
       hiển thị `tokens_used_today` (dẫn xuất).
-    - Lỗi ngân sách ở bước này KHÔNG được biến công việc đã hoàn thành thành thất bại:
-      rollback + log rồi trả về. Reservation khi đó vẫn ở trạng thái cũ (reserved →
-      vẫn tính đủ envelope) — dè dặt, an toàn.
+    - `_settle_usage_or_unavailable` đã dịch lỗi DB ngân sách thành `BudgetUnavailable`
+      (`chat_budget_unavailable`); tại đây nuốt (rollback + log) rồi trả về — KHÔNG ném
+      ra. Lý do: spec R8 — "DB không khả dụng → fail closed cho execution MỚI..., KHÔNG
+      huỷ kết quả đã hoàn thành". Reservation khi đó vẫn ở trạng thái cũ (reserved → vẫn
+      tính đủ envelope) — dè dặt, an toàn.
     """
     try:
-        await settle(db, scope=scope, operation_id=operation_id, actual=actual)
-        if cfg is not None:
-            await _sync_tokens_used_today(db, cfg)
-        await db.commit()
+        await _settle_usage_or_unavailable(
+            db, scope=scope, operation_id=operation_id, actual=actual, cfg=cfg
+        )
+    except BudgetUnavailable:
+        await db.rollback()
+        logger.exception(
+            "Ngân sách: ghi nhận usage thất bại (chat_budget_unavailable) — "
+            "giữ nguyên kết quả đã lưu"
+        )
     except Exception:
         await db.rollback()
         logger.exception("Ngân sách: ghi nhận usage thất bại — giữ nguyên kết quả đã lưu")
