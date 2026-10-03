@@ -177,3 +177,39 @@ def test_search_clients_exact_max_pages_guard() -> None:
         _search(handler, "DESKTOP-ABC")
     assert str(SEARCH_CLIENTS_MAX_PAGES) in str(ei.value)
     assert ei.value.category == "chat_collection_denied"
+
+
+def test_search_clients_exact_retries_for_newly_enrolled_client(monkeypatch) -> None:
+    # Client mới enroll chưa visible ở lần gọi đầu → retry bounded trong cửa sổ → thấy.
+    monkeypatch.setattr(settings, "resolver_consistency_window_seconds", 2)
+    monkeypatch.setattr(
+        "app.services.velociraptor.SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS", 0.01
+    )
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(200, json={"items": [], "total": 0})
+        return httpx.Response(
+            200, json={"items": [_client_item("C.new01", "DESKTOP-ABC")], "total": 1}
+        )
+
+    assert _search(handler, "DESKTOP-ABC") == ["C.new01"]
+    assert calls["n"] >= 2
+
+
+def test_search_clients_exact_total_changes_between_pages_raises() -> None:
+    # total đổi giữa các trang → phân trang không đáng tin → fail closed.
+    def handler(req: httpx.Request) -> httpx.Response:
+        offset = int(req.url.params.get("offset", "0"))
+        total = 2 if offset == 0 else 99
+        return httpx.Response(
+            200,
+            json={"items": [_client_item("C.aaa111", "OTHER")], "total": total},
+        )
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "total" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
