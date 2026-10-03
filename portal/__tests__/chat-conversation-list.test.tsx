@@ -103,7 +103,7 @@ describe("ChatConversationList", () => {
     const html = renderToString(
       <ChatConversationList items={[conv({ archived: true })]} onSelect={noop} onCreate={noop} onDelete={noop} />,
     );
-    expect(html).toContain("Lưu trữ");
+    expect(html).toContain("Đã lưu trữ");
     expect(html).not.toContain("archived");
   });
 

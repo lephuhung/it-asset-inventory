@@ -10,11 +10,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { MessageSquare, PanelRightClose, Send, Square, X } from "lucide-react";
+import { MessageSquare, Send, Square } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
 import { ChatConversationList } from "@/components/chat/chat-conversation-list";
 import { ChatContextChip } from "@/components/chat/chat-context-chip";
 import { ChatMessage } from "@/components/chat/chat-message";
+import { ChatRailHeader, ChatRailTabs } from "@/components/chat/chat-rail-header";
 import { useChatPanel } from "@/components/chat/use-chat-panel";
 import { useChatStream } from "@/components/chat/use-chat-stream";
 import { decideComposerState, formatErrorBanner, nextRetryContent } from "@/components/chat/chat-ux";
@@ -57,6 +58,9 @@ export function ChatRail() {
 
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Tab hiện tại: lịch sử hay chat. Mở hội thoại từ tab lịch sử sẽ chuyển sang
+  // tab chat — người dùng không phải tự bấm.
+  const [tab, setTab] = useState<"history" | "chat">("chat");
   const [detail, setDetail] = useState<ChatConversationDetail | null>(null);
   const [input, setInput] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -194,6 +198,7 @@ const openConversation = useCallback(async (id: string) => {
     // Mỗi lần chọn = generation mới; response của lần cũ bị bỏ qua.
     selectionRef.current += 1;
     const selection = selectionRef.current;
+    setTab("chat");
 
     reset();
     setServerActiveTurnId(null);
@@ -423,42 +428,42 @@ const openConversation = useCallback(async (id: string) => {
           }}
           className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[400px] shrink-0 flex-col border-l border-slate-200 bg-white shadow-xl md:static md:z-auto md:w-[400px] md:max-w-none md:shadow-none"
         >
-          <header className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 px-3">
-            <MessageSquare size={17} className="text-slate-500" aria-hidden="true" />
-            <h2 className="flex-1 text-sm font-semibold text-slate-800">Trợ lý tra cứu</h2>
-            <button
-              type="button"
-              ref={closeButtonRef}
-              onClick={toggle}
-              aria-label="Thu gọn trợ lý tra cứu"
-              aria-expanded
-              className="hidden w-9 cursor-pointer items-center justify-center rounded-md py-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 md:flex"
-            >
-              <PanelRightClose size={17} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              ref={closeButtonRef}
-              onClick={toggle}
-              aria-label="Đóng trợ lý tra cứu"
-              className="flex w-9 cursor-pointer items-center justify-center rounded-md py-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 md:hidden"
-            >
-              <X size={17} aria-hidden="true" />
-            </button>
-          </header>
-
-          <ChatConversationList
-            items={conversations}
-            activeId={activeId}
-            onSelect={(id) => void openConversation(id)}
-            onCreate={() => void createConversation()}
-            onDelete={(id) => void handleDelete(id)}
+          <ChatRailHeader
+            status={state.status === "streaming" ? "streaming" : state.status === "canceled" ? "canceled" : "idle"}
+            onClose={toggle}
+            closeButtonRef={closeButtonRef}
+            docked={!isDrawer}
           />
+
+          <ChatRailTabs active={tab} onChange={setTab} historyCount={conversations.length} />
+
+          <div
+            role="tabpanel"
+            id="chat-panel-history"
+            aria-labelledby="chat-tab-history"
+            hidden={tab !== "history"}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <ChatConversationList
+              items={conversations}
+              activeId={activeId}
+              onSelect={(id) => void openConversation(id)}
+              onCreate={() => void createConversation()}
+              onDelete={(id) => void handleDelete(id)}
+            />
+          </div>
 
           {loadError && (
             <p className="shrink-0 px-3 pb-1 text-xs text-red-600">{loadError}</p>
           )}
 
+          <div
+            role="tabpanel"
+            id="chat-panel-chat"
+            aria-labelledby="chat-tab-chat"
+            hidden={tab !== "chat"}
+            className="flex min-h-0 flex-1 flex-col"
+          >
           <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto border-t border-slate-200 px-3 py-3">
             {messages.length === 0 && !showStreamed ? (
               <p className="mt-6 text-center text-xs text-slate-400">
@@ -554,6 +559,7 @@ const openConversation = useCallback(async (id: string) => {
                 Thử lại câu hỏi vừa rồi
               </button>
             )}
+          </div>
           </div>
         </aside>
       )}

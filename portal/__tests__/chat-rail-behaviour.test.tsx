@@ -714,3 +714,88 @@ describe("Regression vòng 2 — dấu vết tool, Enter, reset, ngữ cảnh th
     expect(screen.getByLabelText("Dừng trả lời")).toBeTruthy();
   });
 });
+
+describe("Tab lịch sử / Tab chat", () => {
+  it("mở rail thì đang ở tab Chat", async () => {
+    await openRail();
+    expect(screen.getByRole("tab", { name: /Chat/i }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("bấm tab Lịch sử thì hiện danh sách và ẩn khung chat", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [conv({ id: "c1", title: "Hội thoại cũ" })],
+      total: 1,
+    });
+    await openRail();
+
+    const historyTab = screen.getByRole("tab", { name: /Lịch sử/i });
+    expect(historyTab.getAttribute("aria-selected")).toBe("false");
+
+    await act(async () => {
+      fireEvent.click(historyTab);
+    });
+
+    expect(screen.getByRole("tab", { name: /Lịch sử/i }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("Hội thoại cũ")).toBeTruthy();
+    // Khung chat bị ẨN (hidden) chứ không bị gỡ khỏi DOM: giữ nguyên câu đang gõ
+    // dở và stream đang chạy khi người dùng xem lại lịch sử.
+    expect(screen.getByLabelText("Nội dung câu hỏi")).toBeTruthy();
+    expect(document.getElementById("chat-panel-chat")?.hasAttribute("hidden")).toBe(true);
+    expect(document.getElementById("chat-panel-history")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("chọn một hội thoại thì tự chuyển sang tab Chat", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [conv({ id: "c1", title: "Hội thoại cũ" })],
+      total: 1,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Lịch sử/i }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại cũ"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Chat/i }).getAttribute("aria-selected")).toBe("true");
+    });
+    expect(screen.getByLabelText("Nội dung câu hỏi")).toBeTruthy();
+  });
+
+  it("header hiện tên trợ lý và trạng thái kết nối", async () => {
+    await openRail();
+    expect(screen.getByRole("heading", { name: "Trợ lý tra cứu" })).toBeTruthy();
+    expect(screen.getByText("Đã kết nối")).toBeTruthy();
+    expect(screen.getByText("Chỉ SuperAdmin")).toBeTruthy();
+  });
+
+  it("lịch sử gom theo ngày (Hôm nay)", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [
+        conv({ id: "a", title: "Hội A", last_message_at: new Date().toISOString() }),
+        conv({ id: "b", title: "Hội B", last_message_at: new Date().toISOString() }),
+      ],
+      total: 2,
+    });
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Lịch sử/i }));
+    });
+    expect(screen.getByRole("heading", { name: "Hôm nay" })).toBeTruthy();
+    expect(screen.getByText("Hội A")).toBeTruthy();
+    expect(screen.getByText("Hội B")).toBeTruthy();
+  });
+
+  it("tab Lịch sử có badge số hội thoại", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [conv({ id: "a" }), conv({ id: "b" })],
+      total: 2,
+    });
+    await openRail();
+    const historyTab = screen.getByRole("tab", { name: /Lịch sử/i });
+    expect(historyTab.textContent).toContain("2");
+  });
+});
