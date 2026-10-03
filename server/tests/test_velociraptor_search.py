@@ -461,6 +461,60 @@ def test_search_clients_exact_slow_retry_response_hits_absolute_deadline(
     assert elapsed < 3.0
 
 
+def test_search_clients_exact_streaming_response_cancelled_mid_body(
+    monkeypatch,
+) -> None:
+    # Response retry trả body dạng STREAM: chunk đầu tới ngay rồi treo; deadline
+    # tuyệt đối phải cắt GIỮA CHỪNG body, KHÔNG đọc hết. Test "slow response" phía
+    # trên sleep TRƯỚC khi trả response nên không chứng minh được điều này.
+    monkeypatch.setattr(settings, "resolver_consistency_window_seconds", 1.0)
+    monkeypatch.setattr(
+        "app.services.velociraptor.SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS", 0.01
+    )
+    calls = {"n": 0}
+    state = {"stream_started": False, "stream_finished": False}
+
+    async def slow_body():
+        state["stream_started"] = True
+        yield b'{"items": ['
+        # Treo lâu hơn hẳn cửa sổ 1s; nếu bị cắt giữa chừng thì dòng dưới không chạy.
+        await asyncio.sleep(30.0)
+        state["stream_finished"] = True
+        yield b'], "total": 0}'
+
+    async def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Lookup trực tiếp trả ngay, không khớp → kích hoạt retry có deadline.
+            return httpx.Response(200, json={"items": [], "total": 0})
+        # Retry: body streaming chậm → deadline tuyệt đối phải cắt giữa chừng.
+        return httpx.Response(200, content=slow_body())
+
+    client = VelociraptorClient(
+        "https://veloci.test",
+        username="admin",
+        password="tok",
+        transport=httpx.MockTransport(handler),
+    )
+    started = time.monotonic()
+
+    async def run():
+        async with client as c:
+            return await c.search_clients_exact("DESKTOP-ABC")
+
+    with pytest.raises(VelociraptorError) as ei:
+        asyncio.run(run())
+    elapsed = time.monotonic() - started
+
+    assert ei.value.category == "chat_collection_denied"
+    assert calls["n"] == 2
+    # Đã vào trong body (chunk đầu tới) nhưng KHÔNG đọc hết body → cắt mid-stream.
+    assert state["stream_started"] is True
+    assert state["stream_finished"] is False
+    # Bị cắt quanh deadline (~1s), KHÔNG chờ hết 30s của body.
+    assert elapsed < 5.0
+
+
 # ── Finding R2-C1: record hỏng dạng dict phải fail closed, không bỏ qua ──
 
 
@@ -555,6 +609,28 @@ def test_search_clients_exact_non_dict_os_info_raises() -> None:
             "total": 1,
         }
     }
+    handler = _paged_handler(pages)
+
+    with pytest.raises(VelociraptorError) as ei:
+        _search(handler, "DESKTOP-ABC")
+    assert "hostname" in str(ei.value)
+    assert ei.value.category == "chat_collection_denied"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"client_id": "C.12345"},                  # thiếu hẳn key `os_info`
+        {"client_id": "C.12345", "os_info": {}},   # `os_info` rỗng, không hostname
+        {"client_id": "C.12345", "os_info": None},  # `os_info` = None
+    ],
+    ids=["os_info_absent", "os_info_empty", "os_info_null"],
+)
+def test_search_clients_exact_missing_os_info_raises(record) -> None:
+    # `client_id` hợp lệ nhưng KHÔNG có `os_info.hostname` dùng được → record
+    # không phân loại được → fail closed đúng category (không `AttributeError`).
+    # Bao cả `os_info` thiếu hẳn (reviewer R3-C1) lẫn `os_info` rỗng.
+    pages = {0: {"items": [record], "total": 1}}
     handler = _paged_handler(pages)
 
     with pytest.raises(VelociraptorError) as ei:
