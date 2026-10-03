@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -28,6 +29,7 @@ from app.db.models import (
     VelociraptorConfig,
     VelociraptorLink,
 )
+from app.services.budget import charged, reserve, settle
 from app.services.llm import (
     LlmAuthError,
     LlmClient,
@@ -282,6 +284,24 @@ def _decrypt_api_key(encrypted: str | None) -> str | None:
     except Exception as e:  # noqa: BLE001
         logger.warning("Giải mã LLM api_key thất bại: %s", e)
         return None
+
+
+def _budget_envelope(cfg: LlmConfig) -> int:
+    """Envelope token giữ chỗ cho 1 thao tác LLM (spec F11/R8/V3-7).
+
+    Lấy bằng trần output của model (`max_tokens`). Settle luôn dùng `actual` thật
+    nên chi phí đã hoàn tất không bị tính thiếu; khi usage mất (`unknown`), toàn bộ
+    envelope bị tính — phần input chưa biết là residual risk đã ghi nhận.
+    """
+    return max(1, int(cfg.max_tokens or settings.llm_max_tokens))
+
+
+async def _sync_tokens_used_today(db: AsyncSession, cfg: LlmConfig) -> None:
+    """Cập nhật cột hiển thị `tokens_used_today` từ reservation (giá trị dẫn xuất).
+
+    Thay cho pattern read-modify-write cũ; `token_reservations` mới là nguồn sự thật.
+    """
+    cfg.tokens_used_today = await charged(db)
 
 
 # ── Public: enqueue investigation ────────────────────────────────
@@ -655,6 +675,27 @@ async def _state_dispatch_deepagent(db: AsyncSession, inv: DfirInvestigation) ->
     deepagent_token = settings.deepagent_api_key
     if not deepagent_enabled or not deepagent_token:
         raise LlmError("DeepAgent chưa được bật hoặc chưa có service token")
+
+    # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi dispatch (DeepAgent callback có thể
+    # không báo usage → settle unknown sẽ tính đủ envelope).
+    reserved = await reserve(
+        db,
+        scope="investigation_analysis",
+        operation_id=inv.id,
+        association_id=inv.id,
+        envelope=_budget_envelope(llm_cfg),
+        budget=llm_cfg.daily_token_budget,
+    )
+    if reserved is None:
+        inv.status = "failed"
+        inv.error = "chat_budget_exceeded: đã vượt ngân sách token hôm nay"
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning("Investigation %s: vượt budget, bỏ qua dispatch DeepAgent", inv.id)
+        return
+    # Chốt admission ngay để giải phóng advisory lock trước khi dispatch.
+    await db.commit()
+
     velo_cfg = (await db.execute(select(VelociraptorConfig).where(VelociraptorConfig.id == 1))).scalar_one_or_none()
     if not velo_cfg or not velo_cfg.client_config_encrypted:
         raise LlmError("Chưa upload api_client.yaml cho Velociraptor")
@@ -1053,6 +1094,25 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
     inv.llm_model = cfg.model
     await db.commit()
 
+    # R8/V3-7: giữ chỗ ngân sách TRƯỚC khi gọi LLM (DB là source of truth).
+    reserved = await reserve(
+        db,
+        scope="investigation_analysis",
+        operation_id=inv.id,
+        association_id=inv.id,
+        envelope=_budget_envelope(cfg),
+        budget=cfg.daily_token_budget,
+    )
+    if reserved is None:
+        inv.status = "failed"
+        inv.error = "chat_budget_exceeded: đã vượt ngân sách token hôm nay"
+        inv.completed_at = datetime.now(UTC)
+        await db.commit()
+        logger.warning("Investigation %s: vượt budget, bỏ qua phân tích", inv.id)
+        return
+    # Chốt admission ngay để giải phóng advisory lock trước khi gọi LLM.
+    await db.commit()
+
     try:
         async with LlmClient(
             base_url=cfg.base_url,
@@ -1085,7 +1145,13 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
             tokens=resp.output_tokens,
         ))
 
-        cfg.tokens_used_today = (cfg.tokens_used_today or 0) + resp.total_tokens
+        await settle(
+            db,
+            scope="investigation_analysis",
+            operation_id=inv.id,
+            actual=resp.total_tokens,
+        )
+        await _sync_tokens_used_today(db, cfg)
 
         inv.status = "completed"
         inv.completed_at = datetime.now(UTC)
@@ -1106,6 +1172,11 @@ async def _state_analyze(db: AsyncSession, inv: DfirInvestigation) -> None:
         inv.status = "failed"
         inv.error = f"LLM: {e}"[:2000]
         inv.completed_at = datetime.now(UTC)
+        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
+        await settle(
+            db, scope="investigation_analysis", operation_id=inv.id, actual=None
+        )
+        await _sync_tokens_used_today(db, cfg)
         await db.commit()
         logger.warning("Investigation %s LLM failed: %s", inv.id, e)
         # Gửi notification failed
@@ -1148,17 +1219,41 @@ async def chat_with_llm(
     cfg = await _load_llm_config(db)
     api_key = _decrypt_api_key(cfg.api_key_encrypted)
 
-    async with LlmClient(
-        base_url=cfg.base_url,
-        api_key=api_key,
-        model=cfg.model,
-        fallback_model=cfg.fallback_model,
-        timeout=cfg.request_timeout,
-        max_tokens=cfg.max_tokens,
-        temperature=cfg.temperature,
-        allow_cloud=cfg.allow_cloud,
-    ) as llm:
-        resp = await llm.chat(llm_messages)
+    # Mỗi câu hỏi Q&A là MỘT thao tác tính phí riêng (operation_id mới).
+    chat_op_id = uuid.uuid4()
+    reserved = await reserve(
+        db,
+        scope="investigation_chat",
+        operation_id=chat_op_id,
+        association_id=inv.id,
+        envelope=_budget_envelope(cfg),
+        budget=cfg.daily_token_budget,
+    )
+    if reserved is None:
+        raise LlmError("chat_budget_exceeded: đã vượt ngân sách token hôm nay")
+    # Chốt admission ngay để giải phóng advisory lock trước khi gọi LLM.
+    await db.commit()
+
+    try:
+        async with LlmClient(
+            base_url=cfg.base_url,
+            api_key=api_key,
+            model=cfg.model,
+            fallback_model=cfg.fallback_model,
+            timeout=cfg.request_timeout,
+            max_tokens=cfg.max_tokens,
+            temperature=cfg.temperature,
+            allow_cloud=cfg.allow_cloud,
+        ) as llm:
+            resp = await llm.chat(llm_messages)
+    except LlmError:
+        # Usage không xác định sau lỗi → settle unknown (tính đủ envelope).
+        await settle(
+            db, scope="investigation_chat", operation_id=chat_op_id, actual=None
+        )
+        await _sync_tokens_used_today(db, cfg)
+        await db.commit()
+        raise
 
     db.add(DfirInvestigationMessage(
         investigation_id=inv.id, role="user", content=user_message, tokens=resp.input_tokens,
@@ -1167,7 +1262,10 @@ async def chat_with_llm(
         investigation_id=inv.id, role="assistant", content=resp.content,
         tokens=resp.output_tokens,
     ))
-    cfg.tokens_used_today = (cfg.tokens_used_today or 0) + resp.total_tokens
+    await settle(
+        db, scope="investigation_chat", operation_id=chat_op_id, actual=resp.total_tokens
+    )
+    await _sync_tokens_used_today(db, cfg)
     await db.commit()
 
     return {
@@ -1338,6 +1436,13 @@ async def submit_external_result(
         if external_job_id:
             inv.external_job_id = external_job_id
         inv.external_callback_idempotency_key = idempotency_key
+        # Callback báo lỗi → usage không xác định → settle unknown (đủ envelope).
+        await settle(
+            db, scope="investigation_analysis", operation_id=inv.id, actual=None
+        )
+        cfg = await _load_llm_config(db)
+        if cfg:
+            await _sync_tokens_used_today(db, cfg)
         snapshot = _inv_to_dict(inv)
         await db.commit()
         # Notify failed
@@ -1369,11 +1474,18 @@ async def submit_external_result(
         inv.external_job_id = external_job_id
     inv.external_callback_idempotency_key = idempotency_key
 
-    # Cộng token vào daily budget nếu có
-    if (input_tokens or 0) + (output_tokens or 0) > 0:
-        cfg = await _load_llm_config(db)
-        if cfg:
-            cfg.tokens_used_today = (cfg.tokens_used_today or 0) + (input_tokens or 0) + (output_tokens or 0)
+    # Chốt reservation của lần dispatch: actual nếu callback báo usage, ngược lại
+    # unknown (tính đủ envelope) — DeepAgent có thể không báo usage.
+    reported = (input_tokens or 0) + (output_tokens or 0)
+    await settle(
+        db,
+        scope="investigation_analysis",
+        operation_id=inv.id,
+        actual=reported if reported > 0 else None,
+    )
+    cfg = await _load_llm_config(db)
+    if cfg:
+        await _sync_tokens_used_today(db, cfg)
 
     # Snapshot trước commit; refresh ở đây sẽ làm mất các thay đổi chưa commit.
     snapshot = _inv_to_dict(inv)
