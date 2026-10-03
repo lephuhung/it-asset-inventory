@@ -12,6 +12,17 @@ import { render, screen, act, waitFor, cleanup, fireEvent } from "@testing-libra
 // jsdom không cài scrollTo — rail gọi nó để cuộn xuống đáy khi có token mới.
 beforeEach(() => {
   Element.prototype.scrollTo = function scrollTo() {};
+  // jsdom không có matchMedia; rail dùng để biết docked hay drawer.
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
 });
 
 const authState = { user: null as unknown };

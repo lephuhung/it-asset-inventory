@@ -334,3 +334,60 @@ describe("B6 — active_turn_id từ server phải dùng được", () => {
     expect(cancelSpy).toHaveBeenCalledWith("c1", "turn-from-server");
   });
 });
+describe("Regression vòng 3 — cancel lỗi không kẹt composer", () => {
+  it("cancel thất bại vẫn mở lại composer (không kẹt 'streaming')", async () => {
+    vi.spyOn(chatApi, "cancelTurn").mockRejectedValue(new Error("500"));
+    let release!: (v: Response) => void;
+    const pending = new Promise<Response>((res) => {
+      release = res;
+    });
+    const fetchMock = vi.fn(() => pending);
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { result } = renderHook(() => useChatStream("c1"));
+
+    await act(async () => {
+      release(
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(enc.encode(frame({ v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1" })));
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+      await pending;
+      void result.current.send("câu hỏi");
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    expect(result.current.state.status).toBe("streaming");
+
+    await act(async () => {
+      await expect(result.current.cancel()).rejects.toThrow("500");
+    });
+
+    // Lỗi không được báo cho người dùng như lỗi nuốt mất, nhưng composer phải mở.
+    expect(result.current.state.status).not.toBe("streaming");
+    expect(result.current.state.status).toBe("canceled");
+  });
+
+  it("cancel lỗi giữ lại server turn id để nút Dừng còn dùng được", async () => {
+    vi.spyOn(chatApi, "cancelTurn").mockRejectedValue(new Error("500"));
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(sseResponse())) as unknown as typeof fetch);
+
+    const { result } = renderHook(() => useChatStream("c1"));
+    act(() => {
+      result.current.setServerActiveTurnId("turn-server");
+    });
+
+    await act(async () => {
+      await expect(result.current.cancel()).rejects.toThrow("500");
+    });
+
+    // Server còn chạy → vẫn có turn active để thử hủy lại.
+    expect(result.current.hasActiveTurn).toBe(true);
+    expect(result.current.serverActiveTurnId).toBe("turn-server");
+  });
+});

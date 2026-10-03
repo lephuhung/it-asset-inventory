@@ -497,16 +497,27 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
 
     // Ưu tiên turn từ stream cục bộ, không có thì dùng turn server đang báo.
     const turnId = state.turnId ?? serverTurnRef.current;
+    let failure: unknown = null;
     if (conversationId && turnId) {
       // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
-      // Lỗi ở đây PHẢI nổi lên: nếu nuốt, UI báo "đã dừng" trong khi backend
-      // vẫn đang chạy và người dùng sẽ gửi câu mới dính 409.
-      await chatApi.cancelTurn(conversationId, turnId);
+      try {
+        await chatApi.cancelTurn(conversationId, turnId);
+      } catch (error) {
+        failure = error;
+      }
     }
-    // Trong lúc chờ, người dùng có thể đã gửi câu mới → không ghi đè state đó.
-    if (generationRef.current !== generation || !mountedRef.current) return;
+
+    // Trong lúc chờ người dùng có thể đã gửi câu mới → không ghi đè state đó.
+    // Nhưng nếu vẫn là mình, PHẢI mở lại composer dù thành công hay lỗi, nếu không
+    // status kẹt ở "streaming" và người dùng không gửi được câu mới nữa.
+    if (generationRef.current !== generation || !mountedRef.current) {
+      if (failure) throw failure;
+      return;
+    }
     setState((prev) => ({ ...prev, status: "canceled", error: null }));
-    setServerActiveTurnId(null);
+    // Lỗi → server còn chạy → giữ id turn để nút Dừng vẫn dùng được để thử lại.
+    if (!failure) setServerActiveTurnId(null);
+    if (failure) throw failure;
   }, [conversationId, state.turnId]);
 
   return {

@@ -24,6 +24,19 @@ import type { ChatConversation, ChatConversationDetail, SessionUser } from "@/li
 
 const SUPER_ADMIN_ROLES: SessionUser["role"][] = ["super_admin", "admin_global"];
 
+/** Theo dõi media query để biết đang ở chế độ drawer hay docked. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false);
+  useEffect(() => {
+    const mql = window.matchMedia(query);
+    setMatches(mql.matches);
+    const onChange = () => setMatches(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
+}
+
 function isSuperAdmin(user: SessionUser | null): boolean {
   return !!user && SUPER_ADMIN_ROLES.includes(user.role);
 }
@@ -50,6 +63,11 @@ export function ChatRail() {
     useChatStream(activeId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  // Drawer (màn nhỏ) che nội dung → giam focus + Escape đóng. Màn rộng thì rail
+  // chỉ là một cột cạnh nội dung, không được giam.
+  const isDrawer = useMediaQuery("(max-width: 767px)");
 
   // Chặn response chậm ghi đè nhầm hội thoại đang chọn (B3).
   const selectionRef = useRef(0);
@@ -59,6 +77,11 @@ export function ChatRail() {
   const lastAttemptRef = useRef<{ content: string } | null>(null);
   // Timer hỏi lại turn đang chạy — phải huỷ khi chuyển hội thoại / unmount.
   const pollTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // Turn server đang theo dõi; đổi turn ⇒ snapshot của turn cũ không được áp.
+  const trackedTurnRef = useRef<string | null>(null);
+  const beginTracking = useCallback((turnId: string | null) => {
+    trackedTurnRef.current = turnId;
+  }, []);
   // false sau unmount: continuation của create/send không được tạo request mới.
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -128,23 +151,29 @@ const ACTIVE_TURN_POLL_MAX = 100;
  * Dừng treo vĩnh viễn và câu trả lời không bao giờ hiện.
  */
 const pollUntilTerminal = useCallback(
-  (id: string, selection: number, attempt = 0) => {
+  (id: string, selection: number, trackedTurnId: string, attempt = 0) => {
     if (!mountedRef.current || selectionRef.current !== selection || attempt >= ACTIVE_TURN_POLL_MAX) return;
     const timer = setTimeout(() => {
       pollTimersRef.current.delete(timer);
+      // Kiểm tra TRƯỚC khi gọi: nếu không, một timer đã hẹn vẫn bắn thêm một
+      // request sau khi người dùng đã chuyển hội thoại.
+      if (!mountedRef.current || selectionRef.current !== selection) return;
       void (async () => {
         try {
           const loaded = await chatApi.getConversation(id);
           if (!mountedRef.current || selectionRef.current !== selection) return;
+          // Turn đã đổi (vừa hủy rồi gửi câu mới trong CÙNG hội thoại — selection
+          // không đổi) → snapshot của turn cũ không được đè lên lịch sử mới hơn.
+          if (trackedTurnRef.current !== trackedTurnId) return;
           if (loaded.active_turn_id) {
-            pollUntilTerminal(id, selection, attempt + 1);
+            pollUntilTerminal(id, selection, trackedTurnId, attempt + 1);
             return;
           }
           // Turn đã kết thúc → nạp lại lịch sử và mở lại composer.
           setDetail(loaded);
           setServerActiveTurnId(null);
         } catch {
-          pollUntilTerminal(id, selection, attempt + 1);
+          pollUntilTerminal(id, selection, trackedTurnId, attempt + 1);
         }
       })();
     }, ACTIVE_TURN_POLL_MS);
@@ -170,11 +199,12 @@ const openConversation = useCallback(async (id: string) => {
       setDetail(loaded);
       // Turn đang chạy ở server (mở lại hội thoại cũ) → hiện nút Dừng, khoá Gửi.
       setServerActiveTurnId(loaded.active_turn_id);
-      if (loaded.active_turn_id) pollUntilTerminal(id, selection);
+      beginTracking(loaded.active_turn_id);
+      if (loaded.active_turn_id) pollUntilTerminal(id, selection, loaded.active_turn_id);
     } catch {
       if (selectionRef.current === selection) setDetail(null);
     }
-  }, [pollUntilTerminal, reset, setServerActiveTurnId]);
+  }, [beginTracking, pollUntilTerminal, reset, setServerActiveTurnId]);
 
   const createConversation = useCallback(async (): Promise<string | null> => {
     try {
@@ -241,6 +271,9 @@ const openConversation = useCallback(async (id: string) => {
         conversationId,
         machineContext: effectiveMachineId ? { machine_id: effectiveMachineId } : null,
       });
+      // Thả khoá TRƯỚC khi đồng bộ lịch sử: đó là việc nền, không được biến nút
+      // Gửi thành im lặng không phản ứi.
+      sendingRef.current = false;
 
       // Persist xong → đồng bộ tiêu đề/số tin nhắn và lịch sử vừa trả lời.
       const selection = selectionRef.current;
@@ -251,6 +284,10 @@ const openConversation = useCallback(async (id: string) => {
         if (selectionRef.current === selection && activeIdRef.current === conversationId) {
           setDetail(loaded);
           setServerActiveTurnId(loaded.active_turn_id);
+          // Stream có thể bị bỏ giữa chừng (mất mạng, người dùng đóng tab) → server
+          // vẫn còn turn chạy thì phải hỏi lại, nếu không nút Dừng treo vĩnh viễn.
+          beginTracking(loaded.active_turn_id);
+          if (loaded.active_turn_id) pollUntilTerminal(conversationId, selection, loaded.active_turn_id);
         }
       } catch {
         // giữ nguyên tin nhắn đang hiển thị
@@ -258,7 +295,7 @@ const openConversation = useCallback(async (id: string) => {
     } finally {
       sendingRef.current = false;
     }
-  }, [activeId, createConversation, effectiveMachineId, hasActiveTurn, input, refreshConversations, send, setServerActiveTurnId]);
+  }, [activeId, beginTracking, createConversation, effectiveMachineId, hasActiveTurn, input, pollUntilTerminal, refreshConversations, send, setServerActiveTurnId]);
 
   // Nút Dừng: báo lỗi nếu server KHÔNG nhận yêu cầu hủy. Nuốt lỗi rồi báo
   // "canceled" sẽ khiến UI mở nút Gửi trong khi backend vẫn đang chạy.
@@ -279,15 +316,20 @@ const openConversation = useCallback(async (id: string) => {
   // "Ghim" = ghi ngữ cảnh vào hội thoại. Không có hội thoại thì không có chỗ để ghim.
   const handlePinContext = useCallback(
     async (machineId: string) => {
-      if (!activeId) return;
+      const conversationId = activeIdRef.current;
+      if (!conversationId) return;
+      const selection = selectionRef.current;
       try {
-        const updated = await chatApi.patchConversation(activeId, { machine_id: machineId });
+        const updated = await chatApi.patchConversation(conversationId, { machine_id: machineId });
+        // Trong lúc chờ người dùng có thể đã chuyển hội thoại — PATCH của A không
+        // được áp lên detail của B.
+        if (selectionRef.current !== selection || activeIdRef.current !== conversationId) return;
         setDetail((prev) => (prev ? { ...prev, machine_id: updated.machine_id } : prev));
       } catch {
         setLoadError("Không ghim được ngữ cảnh máy.");
       }
     },
-    [activeId],
+    [],
   );
 
   // Không phải SuperAdmin → không render gì cả (kể cả nút bật/tắt).
@@ -306,8 +348,37 @@ const openConversation = useCallback(async (id: string) => {
   const composer = decideComposerState({ streaming: hasActiveTurn, input });
   const banner = formatErrorBanner(state.error);
 
+  // Thông báo cho trình đọc màn hình: chỉ đổi ở mốc quan trọng, không theo từng token.
+  const liveMessage = state.error
+    ? `Đã xảy ra lỗi: ${banner?.text ?? state.error.category}`
+    : streaming
+      ? state.tools.length > 0
+        ? `Đang trả lời. Đã dùng ${state.tools.length} công cụ.`
+        : "Đang trả lời."
+      : state.status === "done"
+        ? "Đã có câu trả lời."
+        : state.status === "canceled"
+          ? "Đã dừng trả lời."
+          : "";
+
+  // Mở panel → đưa focus vào ô nhập (drawer) hoặc về nút đóng (docked) để bàn phím
+  // không bị bỏ rơi vào vùng đã bị thay thế bởi panel.
+  const wasOpenRef = useRef(open);
+  useEffect(() => {
+    if (!wasOpenRef.current && open) {
+      (isDrawer ? inputRef.current : closeButtonRef.current)?.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open, isDrawer]);
+
   return (
     <>
+      {/* Vùng thông báo cho trình đọc màn hình: chỉ đổi khi trạng thái đổi, không
+          đọc từng token. aria-live="polite" để không cắt ngang. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {liveMessage}
+      </div>
+
       {/* Nút bật/tắt — nằm trong cột nội dung, không phải trong panel. */}
       {!open && (
         <button
@@ -323,7 +394,25 @@ const openConversation = useCallback(async (id: string) => {
 
       {open && (
         <aside
+          ref={panelRef}
+          role="dialog"
+          aria-modal="false"
           aria-label="Trợ lý tra cứu"
+          onKeyDown={(e) => {
+            // Escape đóng panel khi đang ở chế độ drawer (mobile che nội dung).
+            if (e.key === "Escape" && isDrawer) {
+              e.stopPropagation();
+              toggle();
+            }
+          }}
+          onBlur={(e) => {
+            // Focus trap cho drawer: Tab cuối ra khỏi panel sẽ quay về ô nhập.
+            // Dùng blur vì relatedTarget chỉ có trên FocusEvent, không có trên
+            // KeyboardEvent.
+            if (!isDrawer) return;
+            if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+            inputRef.current?.focus();
+          }}
           className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[400px] shrink-0 flex-col border-l border-slate-200 bg-white shadow-xl md:static md:z-auto md:w-[400px] md:max-w-none md:shadow-none"
         >
           <header className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 px-3">
@@ -331,6 +420,7 @@ const openConversation = useCallback(async (id: string) => {
             <h2 className="flex-1 text-sm font-semibold text-slate-800">Trợ lý tra cứu</h2>
             <button
               type="button"
+              ref={closeButtonRef}
               onClick={toggle}
               aria-label="Thu gọn trợ lý tra cứu"
               aria-expanded
@@ -340,6 +430,7 @@ const openConversation = useCallback(async (id: string) => {
             </button>
             <button
               type="button"
+              ref={closeButtonRef}
               onClick={toggle}
               aria-label="Đóng trợ lý tra cứu"
               className="flex w-9 cursor-pointer items-center justify-center rounded-md py-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 md:hidden"

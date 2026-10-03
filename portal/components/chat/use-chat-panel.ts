@@ -78,8 +78,12 @@ export function writeStoredOpen(store: Storage | null | undefined, open: boolean
 export function currentOpen(): boolean {
   const store = safeStorage();
   if (store) {
-    const stored = readStoredOpen(store);
-    if (stored || store.getItem(OPEN_STORAGE_KEY) === "false") return stored;
+    try {
+      const raw = store.getItem(OPEN_STORAGE_KEY);
+      if (raw !== null) return raw === "true";
+    } catch {
+      // storage bị chặn giữa chừng → rơi xuống bộ nhớ
+    }
   }
   return memoryFallbackOpen;
 }
