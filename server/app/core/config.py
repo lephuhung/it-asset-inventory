@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     turn_pending_timeout_seconds: int = 60
     # Khoảng retry bounded khi resolve client_id từ Velociraptor (T7).
     resolver_consistency_window_seconds: int = 5
+    # ── Admission control chat (F11) — enforce trước khi gọi LLM ──
+    # Trần ký tự 1 message người dùng (spec `chat_max_message_chars`).
+    chat_max_message_chars: int = 8000
+    # Trần số message/hội thoại (spec `chat_max_messages_per_conversation`).
+    chat_max_messages_per_conversation: int = 100
+    # Trần số hội thoại active/người dùng (spec `chat_max_active_conversations_per_user`).
+    chat_max_active_conversations_per_user: int = 3
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

@@ -21,6 +21,7 @@ from app.api.routes import (
     api_keys,
     audit,
     auth,
+    chat,
     chat_internal,
     compliance,
     dfir_requests,
@@ -213,6 +214,7 @@ app.include_router(offline_import.router)
 app.include_router(api_keys.router)
 app.include_router(api_keys.public_router)
 app.include_router(audit.router)
+app.include_router(chat.router)
 app.include_router(chat_internal.router)
 app.include_router(compliance.router)
 app.include_router(announcements.router)
