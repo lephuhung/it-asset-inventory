@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     chat_context_secret: str = Field(
         default="CHANGE_ME_CHAT_CONTEXT_SECRET_000000", min_length=32
     )
+    # Service token backend ↔ ChatAgent (T10). Chỉ backend và container chatagent
+    # biết; agent gửi qua header `X-Service-Token` cho mọi endpoint nội bộ.
+    chat_service_token: str = Field(
+        default="CHANGE_ME_CHAT_SERVICE_TOKEN_0000", min_length=16
+    )
+    # Intent audit chưa có outcome quá ngưỡng này (giây) → reconciler ghi `unknown`.
+    audit_outcome_deadline: int = 600
     # Cửa sổ ân hạn cho completion đến muộn sau khi turn đã terminal (T8).
     chat_completion_grace_seconds: int = 120
     # Turn `pending` quá hạn này (không được dispatch) → failed(chat_dispatch_stuck) (T8, F7).
