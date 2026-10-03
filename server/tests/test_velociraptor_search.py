@@ -8,6 +8,7 @@ Mock ở boundary HTTP (``httpx.MockTransport``) — không cần Velociraptor t
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -414,3 +415,47 @@ def test_search_clients_exact_retry_never_starts_after_deadline(monkeypatch) -> 
         _search(handler, "DESKTOP-ABC")
     assert ei.value.category == "chat_collection_denied"
     assert calls["n"] == 1
+
+
+def test_search_clients_exact_slow_retry_response_hits_absolute_deadline(
+    monkeypatch,
+) -> None:
+    # Cửa sổ consistency phải là DEADLINE TUYỆT ĐỐI, không chỉ timeout từng read
+    # của httpx: response retry chậm hơn cửa sổ (nhưng vẫn "sống") phải bị cancel
+    # và fail closed, KHÔNG được chạy tới hết.
+    monkeypatch.setattr(settings, "resolver_consistency_window_seconds", 1.0)
+    monkeypatch.setattr(
+        "app.services.velociraptor.SEARCH_CLIENTS_RETRY_INTERVAL_SECONDS", 0.01
+    )
+    calls = {"n": 0}
+
+    async def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Lookup trực tiếp trả ngay, không khớp → kích hoạt retry có deadline.
+            return httpx.Response(200, json={"items": [], "total": 0})
+        # Retry: chậm hơn hẳn cửa sổ 1s → phải bị deadline tuyệt đối cắt.
+        await asyncio.sleep(5.0)
+        return httpx.Response(200, json={"items": [], "total": 0})
+
+    client = VelociraptorClient(
+        "https://veloci.test",
+        username="admin",
+        password="tok",
+        transport=httpx.MockTransport(handler),
+    )
+
+    started = time.monotonic()
+
+    async def run():
+        async with client as c:
+            return await c.search_clients_exact("DESKTOP-ABC")
+
+    with pytest.raises(VelociraptorError) as ei:
+        asyncio.run(run())
+    elapsed = time.monotonic() - started
+
+    assert ei.value.category == "chat_collection_denied"
+    assert calls["n"] == 2
+    # Bị cancel quanh deadline (~1s), KHÔNG chờ hết 5s của response.
+    assert elapsed < 3.0

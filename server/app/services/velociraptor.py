@@ -656,9 +656,9 @@ class VelociraptorClient:
         """Một trang `SearchClients` — trả `(items, total)`.
 
         `total=None` khi response thiếu trường `total` (caller phải fail closed).
-        `timeout` (giây) giới hạn request khi caller cần bao theo deadline
-        consistency; `None` → dùng timeout mặc định của client (KHÔNG truyền
-        `timeout=None` cho httpx vì như vậy là tắt hẳn timeout).
+        `timeout` (giây) là DEADLINE TUYỆT ĐỐI cho cả request khi caller cần bao
+        theo cửa sổ consistency; `None` → dùng timeout mặc định của client
+        (KHÔNG truyền `timeout=None` cho httpx vì như vậy là tắt hẳn timeout).
         """
         client = self._check_client()
         params = {
@@ -671,8 +671,22 @@ class VelociraptorClient:
         if timeout is not None:
             req_kwargs["timeout"] = timeout
         try:
-            r = await client.get("/SearchClients", params=params, **req_kwargs)
+            request = client.get("/SearchClients", params=params, **req_kwargs)
+            if timeout is not None:
+                # `timeout` của httpx áp cho TỪNG lần read, không giới hạn tổng
+                # thời lượng response. Một response trả chunk trong mỗi read
+                # timeout vẫn có thể chạy vô hạn → cần deadline tuyệt đối để
+                # không kéo dài cửa sổ consistency ngoài ý muốn.
+                r = await asyncio.wait_for(request, timeout=timeout)
+            else:
+                r = await request
             r.raise_for_status()
+        except TimeoutError as e:
+            raise VelociraptorError(
+                f"[{COLLECTION_DENIED_CATEGORY}] SearchClients vượt deadline "
+                f"{timeout:g}s",
+                category=COLLECTION_DENIED_CATEGORY,
+            ) from e
         except httpx.HTTPStatusError as e:
             raise VelociraptorError(
                 f"[{COLLECTION_DENIED_CATEGORY}] SearchClients HTTP {e.response.status_code}",
@@ -756,12 +770,32 @@ class VelociraptorClient:
                         category=COLLECTION_DENIED_CATEGORY,
                     )
                 page_timeout = remaining
-            items, page_total = await self._search_clients_page_exact(
-                query=f"host:{target}",
-                limit=SEARCH_CLIENTS_PAGE_SIZE,
-                offset=offset,
-                timeout=page_timeout,
-            )
+            # `asyncio.wait_for` mới là deadline TỔNG thực sự: timeout của httpx chỉ
+            # giới hạn từng thao tác/mỗi lần đọc, nên một response streaming liên tục
+            # gửi chunk có thể vượt cửa sổ consistency. Hết hạn → hủy và fail closed.
+            if page_timeout is None:
+                items, page_total = await self._search_clients_page_exact(
+                    query=f"host:{target}",
+                    limit=SEARCH_CLIENTS_PAGE_SIZE,
+                    offset=offset,
+                )
+            else:
+                try:
+                    items, page_total = await asyncio.wait_for(
+                        self._search_clients_page_exact(
+                            query=f"host:{target}",
+                            limit=SEARCH_CLIENTS_PAGE_SIZE,
+                            offset=offset,
+                            timeout=page_timeout,
+                        ),
+                        timeout=page_timeout,
+                    )
+                except TimeoutError:
+                    raise VelociraptorError(
+                        f"[{COLLECTION_DENIED_CATEGORY}] hết cửa sổ consistency khi "
+                        f"lấy trang tại offset {offset}",
+                        category=COLLECTION_DENIED_CATEGORY,
+                    )
             pages += 1
             if page_total is None:
                 raise VelociraptorError(
@@ -802,25 +836,16 @@ class VelociraptorClient:
                     category=COLLECTION_DENIED_CATEGORY,
                 )
             for it in items:
-                if not isinstance(it, dict):
-                    # Item hỏng vẫn được tính vào completeness → không thể bỏ qua
-                    # âm thầm rồi coi như đã kiểm tra đủ.
-                    raise VelociraptorError(
-                        f"[{COLLECTION_DENIED_CATEGORY}] SearchClients trả item "
-                        f"không hợp lệ tại offset {offset}: {it!r}",
-                        category=COLLECTION_DENIED_CATEGORY,
-                    )
-                # `hostname_from_velociraptor_client` đã chuẩn hoá; `target` cũng
-                # đã chuẩn hoá ở `search_clients_exact` → một lần chuẩn hoá/operand.
-                if hostname_from_velociraptor_client(it) != target:
+                # Mỗi record PHẢI phân loại được (có `client_id` string và
+                # `os_info.hostname` string) TRƯỚC khi so khớp. Record hỏng vẫn
+                # tính vào completeness, nên không thể bỏ qua âm thầm rồi coi như
+                # đã kiểm tra đủ; và tránh `AttributeError` không category từ
+                # record có `os_info`/hostname sai kiểu.
+                cid, hostname = _validated_client_identity(it, offset=offset)
+                # `hostname` đã chuẩn hoá; `target` cũng đã chuẩn hoá ở
+                # `search_clients_exact` → một lần chuẩn hoá/operand.
+                if hostname != target:
                     continue
-                cid = str(it.get("client_id") or "").strip()
-                if not cid:
-                    raise VelociraptorError(
-                        f"[{COLLECTION_DENIED_CATEGORY}] client khớp hostname "
-                        f"{target!r} thiếu client_id (không xác lập được identity)",
-                        category=COLLECTION_DENIED_CATEGORY,
-                    )
                 found.add(cid)
             offset += len(items)
             if offset >= total:
@@ -1068,3 +1093,36 @@ def hostname_from_velociraptor_client(client: dict) -> str:
     """Tách hostname chuẩn hoá từ client JSON trả về bởi VQL `SELECT * FROM clients()`."""
     os_info = client.get("os_info") or {}
     return normalize_hostname(os_info.get("hostname"))
+
+
+def _validated_client_identity(item: Any, *, offset: int) -> tuple[str, str]:
+    """Trích `(client_id, hostname chuẩn hoá)` từ 1 record SearchClients, fail closed.
+
+    Record PHẢI phân loại được: là dict, có `client_id` string không rỗng, và có
+    `os_info.hostname` string không rỗng. Record không phân loại được hoặc
+    identity sai kiểu → `VelociraptorError(category=chat_collection_denied)` kèm
+    prefix. KHÔNG `str(...)` identity (id không phải string là không xác lập được)
+    và KHÔNG bỏ qua record hỏng (sẽ làm sai tính đầy đủ của phân trang).
+    """
+    if not isinstance(item, dict):
+        raise VelociraptorError(
+            f"[{COLLECTION_DENIED_CATEGORY}] SearchClients trả item không hợp lệ "
+            f"tại offset {offset}: {item!r}",
+            category=COLLECTION_DENIED_CATEGORY,
+        )
+    cid = item.get("client_id")
+    if not isinstance(cid, str) or not cid.strip():
+        raise VelociraptorError(
+            f"[{COLLECTION_DENIED_CATEGORY}] SearchClients trả client_id không hợp lệ "
+            f"tại offset {offset}: {cid!r}",
+            category=COLLECTION_DENIED_CATEGORY,
+        )
+    os_info = item.get("os_info")
+    hostname = os_info.get("hostname") if isinstance(os_info, dict) else None
+    if not isinstance(hostname, str) or not hostname.strip():
+        raise VelociraptorError(
+            f"[{COLLECTION_DENIED_CATEGORY}] SearchClients trả os_info.hostname "
+            f"không hợp lệ tại offset {offset}: {hostname!r}",
+            category=COLLECTION_DENIED_CATEGORY,
+        )
+    return cid.strip(), normalize_hostname(hostname)
