@@ -77,3 +77,26 @@ Tổng: **162 test pass**, `tsc --noEmit` sạch, `next build` thành công, lin
 
 - **Task 9 Step 5 — manual smoke: BLOCKED.** Cần P1 xong T11 (public routes) +
   T15 (chatagent loop) + T16 (compose). Không thể chạy end-to-end với backend chưa có.
+
+## D7 — Thứ tự ưu tiên ngữ cảnh máy (làm rõ mâu thuẫn spec L273 vs L276)
+
+Reviewer vòng 2 nêu mâu thuẫn giữa hai câu spec:
+- L273: "Đã có hội thoại → chip là **override per-turn**, không đổi `machine_id` đã lưu".
+- L276: "Gỡ chip/reload/**chuyển hội thoại** → reset về `machine_id` đã lưu".
+
+**Chốt:** L273 cụ thể và hữu dụng hơn — khi đang ở `/machines/<id>` thì máy đó là
+override per-turn bất kể đang mở hội thoại nào (nếu chặn, chip "Ghim" sẽ không
+bao giờ hiện được với hội thoại đã tồn tại). L276 áp dụng khi **không có** ngữ cảnh
+trang, tức là rời trang máy rồi chuyển hội thoại.
+
+Thứ tự ưu tiên khi gửi:
+
+1. `machine_context` ghi đè mềm từ trang máy (hoặc do người dùng chọn) — kể cả sau khi bấm "Gỡ" thì bị chặn.
+2. Nếu không có: `chat_conversations.machine_id` **đã lưu** của hội thoại.
+3. Nếu không có: không gửi `machine_context`.
+
+**Không bao giờ** tự ghi `machine_id` vào hội thoại khi tạo — chỉ nút "Ghim"
+(`PATCH`) mới lưu.
+
+Hệ quả: `resetPendingMachineContext()` (khi chuyển hội thoại) chỉ rụng ghi đè cũ,
+KHÔNG chặn ngữ cảnh trang; `clearPendingMachineId()` (nút "Gỡ") mới chặn.

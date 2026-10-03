@@ -93,6 +93,10 @@ export async function POST(request: Request) {
   } catch {
     return jsonError(400, "chat_validation", "Body phải là JSON hợp lệ.");
   }
+  // `null` là JSON hợp lệ nhưng không phải object → phải chặn trước khi đọc thuộc tính.
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return jsonError(400, "chat_validation", "Body phải là một JSON object.");
+  }
 
   if (!isNonEmptyString(payload.conversation_id)) {
     return jsonError(400, "chat_validation", "Thiếu conversation_id.");
@@ -146,6 +150,8 @@ export async function POST(request: Request) {
   if (res.status === 401 && refresh) {
     newPair = await refreshTokens(refresh);
     if (newPair) {
+      // Thả body 401 cũ: không dùng nữa, không nên giữ connection mở.
+      void res.body?.cancel().catch(() => undefined);
       try {
         res = await fetchUpstreamStream({
           path,
@@ -167,7 +173,14 @@ export async function POST(request: Request) {
   // Lỗi TRƯỚC khi stream bắt đầu → trả nguyên JSON của backend (spec L392),
   // không bịa ra một stream rỗng để client tưởng đang chờ token.
   if (!isEventStream) {
-    const text = await res.text();
+    // `res.text()` cũng có thể ném (đọc body lỗi / client ngắt) — phải trả
+    // cookie đã refresh, không thì browser giữ token cũ đã bị thu hồi.
+    let text: string;
+    try {
+      text = await res.text();
+    } catch {
+      return jsonError(502, "chat_upstream_llm", "Dịch vụ chat trả về lỗi không đọc được.", 502, newPair);
+    }
     const headers = new Headers({ "cache-control": "no-store" });
     if (contentType) headers.set("content-type", contentType);
     else headers.set("content-type", "application/json");

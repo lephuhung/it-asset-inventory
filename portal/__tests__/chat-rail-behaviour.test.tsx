@@ -476,3 +476,230 @@ describe("render trùng lặp & retry", () => {
     expect(screen.getByText("Thử lại câu hỏi vừa rồi")).toBeTruthy();
   });
 });
+describe("Regression vòng 2 — dấu vết tool, Enter, reset, ngữ cảnh theo hội thoại", () => {
+  function toolStream(): Response {
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(frame({ v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1" })));
+          c.enqueue(
+            enc.encode(
+              frame({ v: 1, seq: 2, type: "tool_start", tool_call_id: "tc1", tool: "inventory_search", params_digest: "d", summary: "s" }),
+            ),
+          );
+          c.enqueue(
+            enc.encode(
+              frame({ v: 1, seq: 3, type: "tool_result", tool_call_id: "tc1", ok: true, row_count: 3, byte_count: null, duration_ms: 12 }),
+            ),
+          );
+          c.enqueue(enc.encode(frame({ v: 1, seq: 4, type: "token", text: "Có 3 máy." })));
+          c.enqueue(
+            enc.encode(frame({ v: 1, seq: 5, type: "done", message_id: "m1", finish_reason: "stop" })),
+          );
+          c.close();
+        },
+      }),
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  }
+
+  it("dấu vết tool KHÔNG biến mất sau khi lịch sử được nạp lại", async () => {
+    // MessageOut không mang tools → nếu chỉ ẩn bản stream, chip tool sẽ mất.
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(
+      detail({
+        id: "c1",
+        messages: [
+          { id: "m0", role: "user", content: "kiểm tra", turn_id: "t0", machine_id: null, error_category: null, created_at: "2026-10-02T08:00:00Z" },
+          { id: "m1", role: "assistant", content: "Có 3 máy.", turn_id: "t1", machine_id: null, error_category: null, created_at: "2026-10-02T08:00:01Z" },
+        ],
+      }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue(toolStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await act(async () => {
+      typeAndSend("kiểm tra");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 80));
+    });
+
+    expect(fetchMock).toHaveBeenCalled();
+    // Chip tool vẫn còn, và câu trả lời chỉ hiện MỘT lần.
+    expect(screen.getByText("inventory_search")).toBeTruthy();
+    expect(screen.getAllByText("Có 3 máy.")).toHaveLength(1);
+  });
+
+  it("phím Enter không bypass được khoá khi server còn turn đang chạy", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1", active_turn_id: "turn-server" }));
+    const fetchMock = vi.fn().mockResolvedValue(okStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await waitFor(() => expect(screen.getByLabelText("Dừng trả lời")).toBeTruthy());
+
+    const box = screen.getByLabelText("Nội dung câu hỏi");
+    fireEvent.change(box, { target: { value: "câu cố gửi" } });
+    await act(async () => {
+      fireEvent.keyDown(box, { key: "Enter", shiftKey: false });
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Nội dung câu hỏi") as HTMLTextAreaElement).value).toBe("câu cố gửi");
+  });
+
+  it("tạo hội thoại mới sau khi mở turn đang chạy → không mượn nút Dừng của hội thoại cũ", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [conv({ id: "c1", title: "Cũ" })],
+      total: 1,
+    });
+    vi.mocked(chatApi.createConversation).mockResolvedValue(conv({ id: "c-new" }));
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) =>
+      id === "c1" ? detail({ id, active_turn_id: "turn-A" }) : detail({ id }),
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+    const cancelSpy = vi.spyOn(chatApi, "cancelTurn").mockResolvedValue({ status: "canceled" });
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Cũ"));
+    });
+    await waitFor(() => expect(screen.getByLabelText("Dừng trả lời")).toBeTruthy());
+
+    // Bấm "Cuộc trò chuyện mới".
+    await act(async () => {
+      fireEvent.click(screen.getByText("Cuộc trò chuyện mới"));
+    });
+
+    // Nút Dừng của turn-A không được mang sang hội thoại mới.
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Dừng trả lời")).toBeNull();
+    });
+    expect(screen.getByLabelText("Gửi câu hỏi")).toBeTruthy();
+    cancelSpy.mockClear();
+  });
+
+  it("xoá hội thoại đang mở không được xoá hội thoại người dùng vừa chuyển sang", async () => {
+    let resolveDelete!: () => void;
+    vi.spyOn(chatApi, "deleteConversation").mockReturnValue(
+      new Promise<void>((res) => {
+        resolveDelete = () => res();
+      }) as never,
+    );
+    vi.mocked(chatApi.listConversations).mockResolvedValue({
+      items: [conv({ id: "A", title: "Hội A" }), conv({ id: "B", title: "Hội B" })],
+      total: 2,
+    });
+    vi.mocked(chatApi.getConversation).mockImplementation(async (id) =>
+      detail({ id, messages: [
+        { id: `${id}-1`, role: "user", content: id === "A" ? "CÂU A" : "CÂU B", turn_id: "t", machine_id: null, error_category: null, created_at: "2026-10-02T08:00:00Z" },
+      ] }),
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội A"));
+    });
+    await waitFor(() => expect(screen.getByText("CÂU A")).toBeTruthy());
+
+    // Xoá A nhưng CHƯA xong; trong lúc đó người dùng chuyển sang B.
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Xoá hội thoại: Hội A"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội B"));
+    });
+    await act(async () => {
+      resolveDelete();
+      await new Promise((r) => setTimeout(r, 60));
+    });
+
+    // B vẫn phải còn nguyên.
+    expect(screen.getByText("CÂU B")).toBeTruthy();
+  });
+
+  it("không ở trang máy + hội thoại đã ghim máy → gửi máy ĐÃ LƯU", async () => {
+    // Spec L276: "Gỡ chip/reload/chuyển hội thoại → reset về machine_id đã lưu".
+    pathname = "/dashboard";
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })] , total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(
+      detail({ id: "c1", machine_id: "22222222-2222-4222-8222-222222222222" }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue(okStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+
+    await act(async () => {
+      typeAndSend("hỏi");
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    // Không có ngữ cảnh trang → dùng máy đã ghim của hội thoại.
+    expect(body.machine_context.machine_id).toBe("22222222-2222-4222-8222-222222222222");
+  });
+
+  it("đang ở trang máy → máy đó là override per-turn kể cả khi hội thoại đã ghim máy khác", async () => {
+    // Spec L273: "Đã có hội thoại → chip là override per-turn".
+    pathname = "/machines/11111111-1111-4111-8111-111111111111";
+    vi.mocked(api.get).mockResolvedValue({ hostname: "WS-TRANG" } as never);
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(
+      detail({ id: "c1", machine_id: "22222222-2222-4222-8222-222222222222" }),
+    );
+    const fetchMock = vi.fn().mockResolvedValue(okStream());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await waitFor(() => expect(screen.getByText(/Đang hỏi về:/)).toBeTruthy());
+
+    await act(async () => {
+      typeAndSend("hỏi");
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.machine_context.machine_id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("cancel thất bại thì báo lỗi, không giả vờ đã dừng", async () => {
+    vi.mocked(chatApi.listConversations).mockResolvedValue({ items: [conv({ id: "c1" })], total: 1 });
+    vi.mocked(chatApi.getConversation).mockResolvedValue(detail({ id: "c1", active_turn_id: "turn-server" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okStream()));
+    vi.spyOn(chatApi, "cancelTurn").mockRejectedValue(new Error("500 Internal"));
+
+    await openRail();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Hội thoại mới"));
+    });
+    await waitFor(() => expect(screen.getByLabelText("Dừng trả lời")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("Dừng trả lời"));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Không dừng được câu trả lời. Thử lại hoặc tải lại trang.")).toBeTruthy();
+    });
+    // Vẫn còn turn đang chạy → không được mở nút Gửi.
+    expect(screen.getByLabelText("Dừng trả lời")).toBeTruthy();
+  });
+});

@@ -31,7 +31,8 @@ function isSuperAdmin(user: SessionUser | null): boolean {
 export function ChatRail() {
   const { user } = useAuth();
   const allowed = isSuperAdmin(user);
-  const { open, toggle, pendingMachineId, clearPendingMachineId } = useChatPanel();
+  const { open, toggle, pendingMachineId, clearPendingMachineId, resetPendingMachineContext } =
+    useChatPanel();
 
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -40,7 +41,10 @@ export function ChatRail() {
   const [loadError, setLoadError] = useState<string | null>(null);
   // hostname theo machine_id — tra cứu lười, không cần reset khi rời trang máy.
   const [hostnames, setHostnames] = useState<Record<string, string>>({});
-  const hostname = pendingMachineId ? (hostnames[pendingMachineId] ?? null) : null;
+  // Ngữ cảnh máy THỰC SỰ gửi đi: ưu tiên ghi đè mềm, không có thì dùng máy đã lưu
+  // của hội thoại (spec L269-276: chuyển hội thoại → quay về ngữ cảnh đã lưu).
+  const effectiveMachineId = pendingMachineId ?? detail?.machine_id ?? null;
+  const hostname = effectiveMachineId ? (hostnames[effectiveMachineId] ?? null) : null;
 
   const { state, streaming, send, cancel, reset, serverActiveTurnId, setServerActiveTurnId, hasActiveTurn } =
     useChatStream(activeId);
@@ -53,6 +57,18 @@ export function ChatRail() {
   const sendingRef = useRef(false);
   // Câu hỏi vừa gửi — giữ riêng vì lỗi trước khi persist sẽ không có trong lịch sử.
   const lastAttemptRef = useRef<{ content: string } | null>(null);
+  // Timer hỏi lại turn đang chạy — phải huỷ khi chuyển hội thoại / unmount.
+  const pollTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  // false sau unmount: continuation của create/send không được tạo request mới.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const t of pollTimersRef.current) clearTimeout(t);
+      pollTimersRef.current.clear();
+    };
+  }, []);
   // activeId mới nhất, đọc được trong callback bất đồng bộ mà không stale.
   const activeIdRef = useRef<string | null>(activeId);
   useEffect(() => {
@@ -84,22 +100,58 @@ export function ChatRail() {
   // Tên máy để chip ngữ cảnh đọc được. Chỉ cần hostname — không kéo cả object máy.
   // Ghi vào map theo machine_id nên rời trang máy không cần reset.
   useEffect(() => {
-    if (!pendingMachineId || hostnames[pendingMachineId]) return;
+    if (!effectiveMachineId || hostnames[effectiveMachineId]) return;
     let cancelled = false;
     void api
-      .get<{ hostname?: string | null }>(`/machines/${pendingMachineId}`)
+      .get<{ hostname?: string | null }>(`/machines/${effectiveMachineId}`)
       .then((m) => {
         if (!cancelled && m?.hostname) {
-          setHostnames((prev) => ({ ...prev, [pendingMachineId]: m.hostname as string }));
+          setHostnames((prev) => ({ ...prev, [effectiveMachineId]: m.hostname as string }));
         }
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [pendingMachineId, hostnames]);
+  }, [effectiveMachineId, hostnames]);
 
-  const openConversation = useCallback(async (id: string) => {
+  /** Khoảng nghỉ giữa các lần hỏi lại turn đang chạy (ms). */
+const ACTIVE_TURN_POLL_MS = 3000;
+/** Số lần hỏi lại tối đa — sau đó bỏ, đừng đốt pin vô ích. */
+const ACTIVE_TURN_POLL_MAX = 100;
+
+/**
+ * Hỏi lại hội thoại cho tới khi turn server về trạng thái cuối, rồi nạp lại lịch sử.
+ * Turn được tạo từ phiên trước không có stream cục bộ để theo dõi; không thì nút
+ * Dừng treo vĩnh viễn và câu trả lời không bao giờ hiện.
+ */
+const pollUntilTerminal = useCallback(
+  (id: string, selection: number, attempt = 0) => {
+    if (!mountedRef.current || selectionRef.current !== selection || attempt >= ACTIVE_TURN_POLL_MAX) return;
+    const timer = setTimeout(() => {
+      pollTimersRef.current.delete(timer);
+      void (async () => {
+        try {
+          const loaded = await chatApi.getConversation(id);
+          if (!mountedRef.current || selectionRef.current !== selection) return;
+          if (loaded.active_turn_id) {
+            pollUntilTerminal(id, selection, attempt + 1);
+            return;
+          }
+          // Turn đã kết thúc → nạp lại lịch sử và mở lại composer.
+          setDetail(loaded);
+          setServerActiveTurnId(null);
+        } catch {
+          pollUntilTerminal(id, selection, attempt + 1);
+        }
+      })();
+    }, ACTIVE_TURN_POLL_MS);
+    pollTimersRef.current.add(timer);
+  },
+  [setServerActiveTurnId],
+);
+
+const openConversation = useCallback(async (id: string) => {
     // Mỗi lần chọn = generation mới; response của lần cũ bị bỏ qua.
     selectionRef.current += 1;
     const selection = selectionRef.current;
@@ -108,16 +160,19 @@ export function ChatRail() {
     setServerActiveTurnId(null);
     setActiveId(id);
     setDetail(null); // xoá ngay, không để nội dung hội thoại cũ lóe lên
+    // Chuyển hội thoại → ngữ cảnh mềm quay về máy đã lưu của hội thoại mới.
+    resetPendingMachineContext();
     try {
       const loaded = await chatApi.getConversation(id);
       if (selectionRef.current !== selection) return;
       setDetail(loaded);
       // Turn đang chạy ở server (mở lại hội thoại cũ) → hiện nút Dừng, khoá Gửi.
       setServerActiveTurnId(loaded.active_turn_id);
+      if (loaded.active_turn_id) pollUntilTerminal(id, selection);
     } catch {
       if (selectionRef.current === selection) setDetail(null);
     }
-  }, [reset, setServerActiveTurnId]);
+  }, [pollUntilTerminal, reset, setServerActiveTurnId]);
 
   const createConversation = useCallback(async (): Promise<string | null> => {
     try {
@@ -128,12 +183,13 @@ export function ChatRail() {
       setActiveId(created.id);
       setDetail({ ...created, messages: [], active_turn_id: null });
       reset();
+      resetPendingMachineContext();
       return created.id;
     } catch {
       setLoadError("Không tạo được hội thoại mới.");
       return null;
     }
-  }, [refreshConversations, reset]);
+  }, [refreshConversations, reset, resetPendingMachineContext]);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -142,8 +198,14 @@ export function ChatRail() {
       try {
         await chatApi.deleteConversation(id);
         await refreshConversations();
-        if (id === activeId) {
+        // So sánh với activeId HIỆN TẠI (không phải giá trị đã chụp): người dùng có
+        // thể đã chuyển sang hội thoại khác trong lúc chờ xoá.
+        if (id === activeIdRef.current) {
+          // Vô hiệu hoá selection TRƯỚC khi xoá, nếu không một response đang bay
+          // của chính hội thoại này vẫn có thể quay lại điền lại lịch sử đã xoá.
+          selectionRef.current += 1;
           reset();
+          setServerActiveTurnId(null);
           setActiveId(null);
           setDetail(null);
         }
@@ -156,14 +218,16 @@ export function ChatRail() {
 
   const handleSend = useCallback(async () => {
     const content = input.trim();
-    if (!content || streaming || sendingRef.current) return;
+    // `hasActiveTurn` (không chỉ `streaming`): turn đang chạy ở SERVER cũng phải
+    // chặn, nếu không nút Gửi bị ẩn nhưng phím Enter vẫn gửi được → 409.
+    if (!content || hasActiveTurn || sendingRef.current) return;
     sendingRef.current = true;
 
     try {
       let conversationId = activeId;
       if (!conversationId) {
         conversationId = await createConversation();
-        if (!conversationId) return;
+        if (!conversationId || !mountedRef.current) return;
       }
 
       // Truyền `conversationId` tường minh: callback `send` của render cũ vẫn giữ
@@ -173,7 +237,7 @@ export function ChatRail() {
 
       await send(content, {
         conversationId,
-        machineContext: pendingMachineId ? { machine_id: pendingMachineId } : null,
+        machineContext: effectiveMachineId ? { machine_id: effectiveMachineId } : null,
       });
 
       // Persist xong → đồng bộ tiêu đề/số tin nhắn và lịch sử vừa trả lời.
@@ -192,7 +256,18 @@ export function ChatRail() {
     } finally {
       sendingRef.current = false;
     }
-  }, [activeId, createConversation, input, pendingMachineId, refreshConversations, send, streaming, setServerActiveTurnId]);
+  }, [activeId, createConversation, effectiveMachineId, hasActiveTurn, input, refreshConversations, send, setServerActiveTurnId]);
+
+  // Nút Dừng: báo lỗi nếu server KHÔNG nhận yêu cầu hủy. Nuốt lỗi rồi báo
+  // "canceled" sẽ khiến UI mở nút Gửi trong khi backend vẫn đang chạy.
+  const handleCancel = useCallback(async () => {
+    try {
+      await cancel();
+      await refreshConversations().catch(() => undefined);
+    } catch {
+      setLoadError("Không dừng được câu trả lời. Thử lại hoặc tải lại trang.");
+    }
+  }, [cancel, refreshConversations]);
 
   const handleRetry = useCallback(() => {
     // Ưu tiên câu vừa gửi thật — lỗi trước khi persist sẽ không có trong lịch sử.
@@ -217,11 +292,15 @@ export function ChatRail() {
   if (!allowed) return null;
 
   const messages = detail?.messages ?? [];
-  // Câu trả lời đã persist (có message_id trùng stream) không được render 2 lần.
-  const streamedAlreadyPersisted =
-    state.content !== "" && state.messageId !== null && messages.some((m) => m.id === state.messageId);
+  // Khi stream đã persist, tin nhắn trong lịch sử và bản stream là MỘT câu trả lời.
+  // MessageOut không mang tools → gắn tools của turn hiện tại vào đó thay vì render
+  // thêm một bản (render 2 lần) hoặc ẩn hẳn (mất dấu vết tool).
+  const persistedIndex =
+    state.messageId !== null ? messages.findIndex((m) => m.id === state.messageId) : -1;
+  const streamedAlreadyPersisted = persistedIndex !== -1;
+  // Lỗi đã hiển thị ở banner bên dưới → không cần render lại trong khối stream.
   const showStreamed =
-    streaming || (state.content !== "" && !streamedAlreadyPersisted) || state.error !== null;
+    !streamedAlreadyPersisted && (streaming || state.content !== "" || state.tools.length > 0);
   const composer = decideComposerState({ streaming: hasActiveTurn, input });
   const banner = formatErrorBanner(state.error);
 
@@ -286,13 +365,15 @@ export function ChatRail() {
               </p>
             ) : (
               <div className="flex flex-col gap-3">
-                {messages.map((m) => (
+                {messages.map((m, i) => (
                   <ChatMessage
                     key={m.id}
                     role={m.role}
                     content={m.content}
                     errorCategory={m.error_category}
                     createdAt={m.created_at}
+                    // Dấu vết tool chỉ tồn tại trong stream, không có trong MessageOut.
+                    tools={i === persistedIndex ? state.tools : []}
                   />
                 ))}
                 {showStreamed && (
@@ -311,9 +392,9 @@ export function ChatRail() {
           </div>
 
           <ChatContextChip
-            machineId={pendingMachineId}
+            machineId={effectiveMachineId}
             hostname={hostname}
-            pinned={!!pendingMachineId && detail?.machine_id === pendingMachineId}
+            pinned={!!effectiveMachineId && detail?.machine_id === effectiveMachineId}
             onClear={clearPendingMachineId}
             onPin={(id) => handlePinContext(id)}
           />
@@ -344,7 +425,7 @@ export function ChatRail() {
               {composer.mode === "stop" ? (
                 <button
                   type="button"
-                  onClick={() => void cancel()}
+                  onClick={() => void handleCancel()}
                   disabled={composer.stopDisabled}
                   aria-label="Dừng trả lời"
                   className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"

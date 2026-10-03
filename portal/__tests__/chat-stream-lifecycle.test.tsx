@@ -144,23 +144,28 @@ describe("B4 — hủy thật phải ra 'canceled', không phải lỗi", () => 
 });
 
 describe("B2 — stream cũ không được ghi đè state mới", () => {
-  it("reset() rồi stream cũ abort về sau KHÔNG hồi sinh nội dung cũ", async () => {
+  it("reset() rồi stream cũ trả về muộn KHÔNG hồi sinh nội dung cũ", async () => {
+    // Deferred PHẢI được cài vào global fetch — bản cũ tạo fetchImpl nhưng không
+    // dùng, nên test pass dù hook chưa từng nhận response nào.
     let release!: (v: Response) => void;
     const pending = new Promise<Response>((res) => {
       release = res;
     });
-    const fetchImpl = vi.fn(() => pending) as unknown as typeof fetch;
+    const fetchMock = vi.fn(() => pending);
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const { result } = renderHook(() => useChatStream("c1"));
 
     act(() => {
       void result.current.send("câu cũ");
     });
-    // Stream cũ đã bắt đầu nhưng chưa trả token nào.
+    // Request cũ đã thực sự được gọi và vẫn treo.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
     act(() => {
       result.current.reset();
     });
-    // Giải phóng request cũ muộn mới.
+
     await act(async () => {
       release(
         new Response(
@@ -174,69 +179,141 @@ describe("B2 — stream cũ không được ghi đè state mới", () => {
         ),
       );
       await pending;
+      await new Promise((r) => setTimeout(r, 20));
     });
 
     expect(result.current.state.content).not.toContain("NỘI DUNG CŨ");
     expect(result.current.state.status).toBe("idle");
   });
 
-  it("cancel() bị trễ KHÔNG được ghi đè state của stream mới", async () => {
-    const cancelDeferred = { resolve: (_v: unknown) => {} };
-    vi.spyOn(chatApi, "cancelTurn").mockReturnValue(
+  it("cancel() trả về muộn KHÔNG ghi đè state của stream MỚI (có turn id thật)", async () => {
+    let resolveCancel!: (v: { status: string }) => void;
+    const cancelSpy = vi.spyOn(chatApi, "cancelTurn").mockReturnValue(
       new Promise((res) => {
-        cancelDeferred.resolve = res;
+        resolveCancel = res;
       }) as never,
     );
 
-    let release!: (v: Response) => void;
-    const pending = new Promise<Response>((res) => {
-      release = res;
+    // Request thứ nhất trả start+token để có turnId, rồi treo; request thứ hai
+    // trả nội dung riêng biệt để phân biệt được.
+    let releaseFirst!: (v: Response) => void;
+    const firstPending = new Promise<Response>((res) => {
+      releaseFirst = res;
     });
-    const fetchImpl = vi.fn(() => pending) as unknown as typeof fetch;
-    vi.stubGlobal("fetch", fetchImpl);
+    let call = 0;
+    const fetchMock = vi.fn(() => {
+      call += 1;
+      if (call === 1) return firstPending;
+      return Promise.resolve(
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(enc.encode(frame({ v: 1, seq: 1, type: "token", text: "CÂU HAI" })));
+              c.close();
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const { result } = renderHook(() => useChatStream("c1"));
 
     await act(async () => {
+      releaseFirst(
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(enc.encode(frame({ v: 1, seq: 1, type: "start", turn_id: "t1", message_id: "m1" })));
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+      await firstPending;
       void result.current.send("câu một");
-      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 10));
     });
 
-    // Bấm Dừng (cancelTurn đang bay), rồi gửi câu mới.
+    expect(result.current.state.turnId).toBe("t1");
+
+    // Bấm Dừng → cancelTurn thực sự được gọi và đang bay.
     let cancelPromise!: Promise<void>;
     act(() => {
       cancelPromise = result.current.cancel();
     });
+    expect(cancelSpy).toHaveBeenCalledWith("c1", "t1");
+
     await act(async () => {
       void result.current.send("câu hai");
     });
 
-    // cancelTurn trả về muộn mới.
+    // cancelTurn trả về muộn mới — không được ghi đè stream mới.
     await act(async () => {
-      cancelDeferred.resolve({ status: "canceled" });
+      resolveCancel({ status: "canceled" });
       await cancelPromise;
     });
 
     expect(result.current.state.status).not.toBe("canceled");
   });
 
-  it("unmount không phát sinh cập nhật state (React cảnh báo)", async () => {
+  it("unmount ABORT request đang bay và không phát sinh cập nhật state", async () => {
     const errors: unknown[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...a) => {
       errors.push(a[0]);
     });
-    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(sseResponse())) as unknown as typeof fetch);
 
-    const { unmount } = renderHook(() => useChatStream("c1"));
+    let capturedSignal: AbortSignal | undefined;
+    let release!: (v: Response) => void;
+    const pending = new Promise<Response>((res) => {
+      release = res;
+    });
+    const fetchMock = vi.fn((_u: string, init: RequestInit) => {
+      capturedSignal = init.signal ?? undefined;
+      return pending;
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { result, unmount } = renderHook(() => useChatStream("c1"));
+
+    // PHẢI có request đang bay thì mới nói được chuyện cleanup.
+    act(() => {
+      void result.current.send("câu hỏi");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedSignal?.aborted).toBe(false);
+
     await act(async () => {
       unmount();
     });
+
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Response về sau unmount không được làm React cảnh báo.
     await act(async () => {
+      release(sseResponse());
+      await pending;
       await new Promise((r) => setTimeout(r, 20));
     });
 
     expect(errors.filter((e) => String(e).includes("unmounted"))).toHaveLength(0);
     spy.mockRestore();
+  });
+
+  it("send() sau unmount không tạo request mới", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(sseResponse()));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const { result, unmount } = renderHook(() => useChatStream("c1"));
+    await act(async () => {
+      unmount();
+    });
+    await act(async () => {
+      await result.current.send("sau unmount");
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

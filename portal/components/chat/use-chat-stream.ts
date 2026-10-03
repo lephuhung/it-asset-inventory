@@ -201,10 +201,15 @@ export interface RunChatStreamArgs {
   fetchImpl?: typeof fetch;
 }
 
-/** Người dùng bấm Dừng (abort có chủ ý) ≠ mất kết nối. */
+/**
+ * Người dùng bấm Dừng (abort có chủ ý) ≠ mất kết nối.
+ *
+ * KHÔNG coi `TimeoutError` là hủy có chủ ý: abort giữa stream do trần 360s là
+ * lỗi hệ thống, báo sai thành "người dùng đã dừng" sẽ giấu mất sự cố.
+ */
 function isAbort(error: unknown, signal?: AbortSignal): boolean {
   if (signal?.aborted) return true;
-  return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+  return error instanceof Error && error.name === "AbortError";
 }
 
 const FRAME_SEPARATOR = /\r?\n\r?\n/;
@@ -287,7 +292,13 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
       if (typeof data.hint === "string") hint = data.hint;
       else if (typeof data.detail === "string") hint = data.detail;
       if (typeof data.retryable === "boolean") retryable = data.retryable;
-    } catch {
+    } catch (error) {
+      // Người dùng bấm Dừng đúng lúc đang đọc body → không phải lỗi.
+      if (isAbort(error, args.signal)) {
+        const canceled: ChatStreamState = { ...initialStreamState(), status: "canceled" };
+        args.onState?.(canceled);
+        return canceled;
+      }
       // không phải JSON → giữ giá trị mặc định
     }
     if (!hint) hint = `Dịch vụ chat trả về lỗi ${res.status}.`;
@@ -417,7 +428,10 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
   // Ref (không state) để cancel luôn đọc được turn hiện tại: đọc qua state sẽ
   // kẹt closure cũ nếu setServerActiveTurnId vừa xong chưa kịp render lại.
   const serverTurnRef = useRef<string | null>(null);
-  serverTurnRef.current = serverActiveTurnId;
+  // Đồng bộ ref trong effect (không ghi trong render — vi phạm react-hooks/refs).
+  useEffect(() => {
+    serverTurnRef.current = serverActiveTurnId;
+  }, [serverActiveTurnId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -434,6 +448,9 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
+    // Xoá luôn turn đang chạy ở server: create/delete gọi reset(), nếu giữ lại
+    // thì hội thoại mới sẽ mượn nút Dừng và id turn của hội thoại cũ.
+    if (mountedRef.current) setServerActiveTurnId(null);
     if (mountedRef.current) setState(initialStreamState());
   }, []);
 
@@ -445,7 +462,9 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
       // `conversationId` truyền vào thắng biến đã chụp: khi rail vừa tạo hội
       // thoại mới, callback của render cũ vẫn giữ `null` và sẽ âm thầm bỏ câu hỏi.
       const target = options?.conversationId ?? conversationId;
-      if (!target || !content.trim()) return;
+      // Unmount rồi mà continuation của createConversation vẫn tới đây → không
+      // được tạo request mới; cleanup đã abort xong nên không ai huỷ được nó.
+      if (!target || !content.trim() || !mountedRef.current) return;
 
       generationRef.current += 1;
       const generation = generationRef.current;
@@ -480,7 +499,9 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
     const turnId = state.turnId ?? serverTurnRef.current;
     if (conversationId && turnId) {
       // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
-      await chatApi.cancelTurn(conversationId, turnId).catch(() => undefined);
+      // Lỗi ở đây PHẢI nổi lên: nếu nuốt, UI báo "đã dừng" trong khi backend
+      // vẫn đang chạy và người dùng sẽ gửi câu mới dính 409.
+      await chatApi.cancelTurn(conversationId, turnId);
     }
     // Trong lúc chờ, người dùng có thể đã gửi câu mới → không ghi đè state đó.
     if (generationRef.current !== generation || !mountedRef.current) return;

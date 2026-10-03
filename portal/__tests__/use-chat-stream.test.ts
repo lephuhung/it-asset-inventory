@@ -2,14 +2,17 @@ import { describe, it, expect, vi } from "vitest";
 
 import { parseSseFrame, reduceEvent, initialStreamState, runChatStream } from "@/components/chat/use-chat-stream";
 import type { ChatSseEvent } from "@/lib/types";
+import type { ChatStreamState } from "@/components/chat/use-chat-stream";
 
 function frame(data: unknown, name?: string): string {
   const t = name ?? (data as { type: string }).type;
   return `event: ${t}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+const moduleEnc = new TextEncoder();
+
 function chunked(chunks: string[]): Response {
-  const enc = new TextEncoder();
+  const enc = moduleEnc;
   const body = new ReadableStream<Uint8Array>({
     start(c) {
       for (const ch of chunks) c.enqueue(enc.encode(ch));
@@ -243,24 +246,102 @@ describe("runChatStream", () => {
     expect(state.content).toBe("dở");
   });
 
-  it("reports cancellation instead of a lost stream when the user aborts", async () => {
+  // LƯU Ý: test cũ ở đây abort rồi ĐÓNG stream sạch → không đi qua nhánh catch
+  // nào, nên pass dù code còn bug. Bản dưới thay bằng hành vi fetch thật.
+  it("abort giữa lúc đọc stream → canceled, giữ nội dung dở, KHÔNG phải stream_lost", async () => {
     const controller = new AbortController();
-    const enc = new TextEncoder();
+    let pulled = 0;
     const body = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(enc.encode(frame({ v: 1, seq: 1, type: "token", text: "dở" })));
-        // Người dùng bấm Dừng giữa chừng.
-        controller.abort();
-        c.close();
+      pull(c) {
+        pulled += 1;
+        if (pulled === 1) {
+          c.enqueue(moduleEnc.encode(frame({ v: 1, seq: 1, type: "token", text: "dở dang" })));
+          return;
+        }
+        // Reader ném AbortError khi signal bị abort (đúng như fetch thật).
+        const fail = () => {
+          const e = new Error("The operation was aborted.");
+          e.name = "AbortError";
+          c.error(e);
+        };
+        if (controller.signal.aborted) fail();
+        else controller.signal.addEventListener("abort", fail);
       },
     });
     const res = new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const states: ChatStreamState[] = [];
 
-    const state = await runChatStream({ ...args(res), signal: controller.signal });
+    const run = runChatStream({
+      ...args(res),
+      signal: controller.signal,
+      onState: (s) => states.push(s),
+    });
+    // Đợi token đầu về rồi mới hủy — giống người dùng bấm Dừng giữa lúc đọc.
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    const state = await run;
 
     expect(state.status).toBe("canceled");
     expect(state.error).toBeNull();
-    expect(state.content).toBe("dở");
+    expect(state.content).toBe("dở dang");
+    // Không state nào được phát ra mang phân loại lỗi.
+    expect(states.filter((s) => s.error !== null)).toHaveLength(0);
+  });
+
+  it("abort khi fetch chưa có header → canceled, KHÔNG phải chat_internal", async () => {
+    const controller = new AbortController();
+    const fetchImpl = (async (_u: string, init: RequestInit) => {
+      return new Promise<Response>((_res, rej) => {
+        const fail = () => {
+          const e = new Error("The operation was aborted.");
+          e.name = "AbortError";
+          rej(e);
+        };
+        if (init.signal?.aborted) fail();
+        else init.signal?.addEventListener("abort", fail);
+      });
+    }) as unknown as typeof fetch;
+
+    const run = runChatStream({
+      conversationId: "c1",
+      content: "hi",
+      signal: controller.signal,
+      onState: () => {},
+      fetchImpl,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    const state = await run;
+
+    expect(state.status).toBe("canceled");
+    expect(state.error).toBeNull();
+  });
+
+  it("mất kết nối thật (không hủy) vẫn phải là chat_stream_lost", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.error(new Error("socket reset"));
+      },
+    });
+    const res = new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const state = await runChatStream(args(res));
+    expect(state.status).toBe("error");
+    expect(state.error?.category).toBe("chat_stream_lost");
+  });
+
+  it("TimeoutError KHÔNG bị coi là người dùng hủy", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        const e = new Error("The operation timed out.");
+        e.name = "TimeoutError";
+        c.error(e);
+      },
+    });
+    const res = new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const state = await runChatStream(args(res));
+    // Trần 360s là lỗi hệ thống, không phải hành động của người dùng.
+    expect(state.status).toBe("error");
+    expect(state.error?.category).toBe("chat_stream_lost");
   });
 
   it("keeps the server error category when the stream carries an error event", async () => {

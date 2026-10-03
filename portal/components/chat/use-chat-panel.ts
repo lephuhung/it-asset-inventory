@@ -36,6 +36,18 @@ export function deriveMachineId(pathname: string): string | null {
   return UUID_SHAPE.test(match[1]) ? match[1] : null;
 }
 
+/**
+ * Lấy localStorage an toàn: jsdom, private mode, hay một getter bị chặn đều không
+ * được làm sập component.
+ */
+function safeStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 /** Đọc trạng thái mở/đóng đã lưu; mặc định đóng. Không bao giờ ném lỗi. */
 export function readStoredOpen(store: Storage | null | undefined): boolean {
   try {
@@ -45,17 +57,35 @@ export function readStoredOpen(store: Storage | null | undefined): boolean {
   }
 }
 
-/** Ghi trạng thái mở/đóng; im lặng bỏ qua nếu storage bị chặn. */
+/**
+ * Ghi trạng thái mở/đóng. Nếu storage bị chặn/quota đầy, giữ trong bộ nhớ để rail
+ * vẫn dùng được trong phiên (thay vì bấm mở không ăn).
+ */
+let memoryFallbackOpen = false;
 export function writeStoredOpen(store: Storage | null | undefined, open: boolean): void {
   try {
-    store?.setItem(OPEN_STORAGE_KEY, open ? "true" : "false");
+    if (store) {
+      store.setItem(OPEN_STORAGE_KEY, open ? "true" : "false");
+      return;
+    }
   } catch {
-    // private mode / quota — trạng thái chỉ sống trong phiên hiện tại
+    // rơi xuống bộ nhớ
   }
+  memoryFallbackOpen = open;
+}
+
+/** Đọc trạng thái mở/đóng, kể cả khi phải dùng bộ nhớ. */
+export function currentOpen(): boolean {
+  const store = safeStorage();
+  if (store) {
+    const stored = readStoredOpen(store);
+    if (stored || store.getItem(OPEN_STORAGE_KEY) === "false") return stored;
+  }
+  return memoryFallbackOpen;
 }
 
 function setStoredOpen(open: boolean): void {
-  writeStoredOpen(window.localStorage, open);
+  writeStoredOpen(safeStorage(), open);
   window.dispatchEvent(new Event(OPEN_CHANGE_EVENT));
 }
 
@@ -83,9 +113,21 @@ export interface UseChatPanelResult {
    * nên bấm “Gỡ” thật sự gỡ được (trước đây null bị hiểu là “lùi về máy của URL”).
    */
   clearPendingMachineId(): void;
+  /**
+   * Bỏ ghi đè cũ khi chuyển hội thoại.
+   *
+   * KHÔNG chặn ngữ cảnh của trang: spec L273 quy định rõ “đã có hội thoại →
+   * chip là override per-turn”, nên khi đang ở `/machines/<id>` thì máy đó vẫn
+   * áp cho lượt tiếp theo bất kể đang mở hội thoại nào. Xem contract D7.
+   */
+  resetPendingMachineContext(): void;
 }
 
-/** Trạng thái ghi đè ngữ cảnh: có chủ ý gỡ hay không. */
+/**
+ * Trạng thái ghi đè ngữ cảnh, gắn với pathname đã sinh ra nó.
+ * `cleared` tách bạch với `machineId: null` — nếu gộp, bấm “Gỡ” sẽ bị hiểu là
+ * “không có override” và lùi về máy của trang, tức là Gỡ không bao giờ có tác dụng.
+ */
 interface ContextOverride {
   pathname: string;
   /** Ghi đè tường minh (vd chọn máy khác). */
@@ -103,7 +145,7 @@ export function useChatPanel(): UseChatPanelResult {
   // nên render SSR không nháy panel rồi mới tắt, và đồng bị được cả tab khác.
   const open = useSyncExternalStore(
     subscribeOpen,
-    () => readStoredOpen(window.localStorage),
+    currentOpen,
     () => false,
   );
 
@@ -123,7 +165,7 @@ export function useChatPanel(): UseChatPanelResult {
     : machineId;
 
   const setOpen = useCallback((next: boolean) => setStoredOpen(next), []);
-  const toggle = useCallback(() => setStoredOpen(!readStoredOpen(window.localStorage)), []);
+  const toggle = useCallback(() => setStoredOpen(!currentOpen()), []);
 
   const setPendingMachineId = useCallback(
     (id: string | null) => setOverride({ pathname, machineId: id, cleared: id === null }),
@@ -131,6 +173,16 @@ export function useChatPanel(): UseChatPanelResult {
   );
   const clearPendingMachineId = useCallback(
     () => setOverride({ pathname, machineId: null, cleared: true }),
+    [pathname],
+  );
+
+  /**
+   * Đóng băng ngữ cảnh khi người dùng chuyển hội thoại: ghi đè cũ (kể cả `cleared`)
+   * không được sống tiếp, nếu không quay lại máy cũ sẽ thấy “đã gỡ” từ hôm trước.
+   * Sau reset, ngữ cảnh áp dụng là `machine_id` ĐÃ LƯU của hội thoái (xem `storedMachineId`).
+   */
+  const resetPendingMachineContext = useCallback(
+    () => setOverride({ pathname, machineId: null, cleared: false }),
     [pathname],
   );
 
@@ -144,5 +196,6 @@ export function useChatPanel(): UseChatPanelResult {
     pendingMachineId,
     setPendingMachineId,
     clearPendingMachineId,
+    resetPendingMachineContext,
   };
 }
