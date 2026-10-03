@@ -99,6 +99,10 @@ async def chat_ro_session(db_engine, monkeypatch):
             await conn.exec_driver_sql(stmt)
         for stmt in mig.GRANT_DDL:
             await conn.exec_driver_sql(stmt)
+        # Chính sách text-to-SQL hiện hành: SELECT toàn bộ `public` trừ denylist.
+        from app.services.chat_sql_policy import sync_chat_ro_privileges
+
+        await sync_chat_ro_privileges(conn)
 
     engine = session_module.create_chat_ro_engine(
         _chat_ro_test_url(), poolclass=sa_pool.NullPool
@@ -211,6 +215,18 @@ async def test_chat_ro_cannot_read_sensitive_tables(chat_ro_session, table):
 async def test_chat_ro_can_read_approved_view(chat_ro_session):
     rows = await _chat_ro_fetch("SELECT * FROM v_chat_machines")
     assert rows == []  # view đọc được (không lỗi quyền), chưa seed dữ liệu
+
+
+async def test_chat_ro_can_read_public_base_table(chat_ro_session):
+    """Text-to-SQL: bảng gốc `public` (ngoài denylist) đọc được; bảng bí mật thì không."""
+    assert await _chat_ro_fetch("SELECT id FROM public.machines LIMIT 1") == []
+    assert await _chat_ro_fetch("SELECT id FROM public.organizations LIMIT 1") == []
+    with pytest.raises(Exception) as exc:
+        await _chat_ro_fetch("SELECT id FROM public.llm_config LIMIT 1")
+    assert "permission denied" in str(exc.value).lower()
+    with pytest.raises(Exception) as exc2:
+        await _chat_ro_fetch("SELECT id FROM public.audit_log LIMIT 1")
+    assert "permission denied" in str(exc2.value).lower()
 
 
 async def test_chat_ro_extra_schema_object_not_readable(db_engine, chat_ro_session):

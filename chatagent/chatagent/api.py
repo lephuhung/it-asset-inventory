@@ -12,9 +12,10 @@ import secrets
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from chatagent.agent import AgentRequest, CancelRegistry, ChatAgent
+from chatagent.agent import AgentRequest, CancelRegistry, ChatAgent, LlmRuntime
 from chatagent.backend_client import BackendClient
 from chatagent.config import Settings, get_settings
+from chatagent.planner import LlmPlanner
 from chatagent.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -35,14 +36,30 @@ class _UnavailableBridge:
         raise RuntimeError("MCP bridge chưa được cấu hình cho chatagent (P1)")
 
 
+def _build_llm_planner(
+    settings: Settings, runtime: LlmRuntime, sql_schema: str | None = None
+) -> LlmPlanner:
+    """Factory planner theo `llm_runtime` + catalog SQL của từng turn."""
+    return LlmPlanner(
+        runtime,
+        system_prompt=settings.llm_system_prompt,
+        max_output_tokens=settings.llm_max_output_tokens,
+        max_calls=settings.llm_max_calls_per_turn,
+        sql_schema=sql_schema,
+    )
+
+
 def build_default_agent(settings: Settings, cancel_registry: CancelRegistry) -> ChatAgent:
-    """Dựng agent thật (backend HTTP + bridge MCP chưa cấu hình ở P1)."""
+    """Dựng agent thật: LLM planner + backend HTTP (bridge MCP Velociraptor chưa cấu hình)."""
     backend = BackendClient(settings)
     registry = ToolRegistry(bridge=_UnavailableBridge(), backend=backend, settings=settings)
     return ChatAgent(
         registry=registry,
         backend=backend,
         settings=settings,
+        planner_factory=lambda runtime, sql_schema=None: _build_llm_planner(
+            settings, runtime, sql_schema
+        ),
         cancel_registry=cancel_registry,
     )
 

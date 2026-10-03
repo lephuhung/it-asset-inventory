@@ -39,6 +39,9 @@ class BackendError(RuntimeError):
         self.status_code = status_code
         self.category = category
         self.detail = detail
+        # `hint` là detail THÔ (không kèm prefix/suffix) để tầng ReAct không bọc
+        # lại lần nữa khi phát SSE error (regression: `[cat] [cat] … [HTTP] [HTTP]`).
+        self.hint = detail
         super().__init__(f"[{category}] {detail} [HTTP {status_code}]")
 
 

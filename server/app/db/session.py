@@ -10,19 +10,22 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.util import await_only
 
 from app.core.config import settings
-from sqlalchemy.util import await_only
 
 engine = create_async_engine(settings.database_url, echo=settings.db_echo, pool_pre_ping=True)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 # ── Pool read-only inventory cho Chat Assistant (T3) ──────────────────────────
-# Role `inventory_chat_ro` chỉ có USAGE trên schema `chat_ro_views` + SELECT 6 view.
-# `search_path` đặt lúc tạo connection (server_settings) **và** reset lại mỗi lần
-# checkout để session setting của lần dùng trước không rò sang lần sau.
+# Role `inventory_chat_ro`: SELECT mọi bảng `public` (trừ denylist, enforce ở
+# `chat_sql_policy.sync_chat_ro_privileges`) + các view `chat_ro_views`; KHÔNG có
+# quyền ghi. `search_path` đặt lúc tạo connection (server_settings) **và** reset lại
+# mỗi lần checkout để session setting của lần dùng trước không rò sang lần sau.
 # `statement_timeout` do tầng service (T9) đặt theo từng truy vấn.
-CHAT_RO_SEARCH_PATH = "chat_ro_views, pg_catalog"
+# `chat_ro_views` đứng trước `public` để view curated không bị bảng/view trùng tên
+# trong `public` che khuất; base table vẫn resolve qua `public`.
+CHAT_RO_SEARCH_PATH = "chat_ro_views, public, pg_catalog"
 
 
 def _register_chat_ro_hygiene(engine_: AsyncEngine) -> None:

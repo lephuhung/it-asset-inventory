@@ -152,30 +152,49 @@ def test_validate_sql_rejects_multi_statement():
 @pytest.mark.parametrize("sql", [
     "SELECT * FROM users",
     "SELECT email FROM public.users",
-    "SELECT * FROM machines",
     "SELECT * FROM public.audit_log",
+    "SELECT * FROM public.llm_config",
+    "SELECT * FROM public.api_keys",
+    "SELECT * FROM public.heartbeats_20261003",
     "SELECT * FROM pg_catalog.pg_tables",
     "SELECT * FROM information_schema.tables",
     "SELECT * FROM pg_class",
     "SELECT * FROM pg_stat_activity",
 ])
-def test_validate_sql_rejects_non_manifest_and_catalog(sql):
+def test_validate_sql_rejects_denylist_and_catalog(sql):
+    """Bỏ allowlist bảng: chỉ chặn denylist (bí mật/log) + system catalog."""
     with pytest.raises(SqlGuardrailError):
         validate_sql(sql)
 
 
 @pytest.mark.parametrize("sql", [
-    "SELECT md5('x')",
+    "SELECT * FROM machines",
+    "SELECT * FROM public.machines",
+    "SELECT * FROM v_chat_machines",
+    (
+        "SELECT m.hostname FROM public.machines m "
+        "JOIN public.organizations o ON o.id = m.org_id"
+    ),
+    "SELECT * FROM public.machine_current",
+    "SELECT * FROM public.system_profiles",
+])
+def test_validate_sql_accepts_base_tables(sql):
+    """Text-to-SQL: bảng gốc nghiệp vụ (ngoài denylist) được phép query."""
+    assert validate_sql(sql)
+
+
+@pytest.mark.parametrize("sql", [
     "SELECT pg_sleep(1)",
     "SELECT dblink_connect('x')",
     "SELECT pg_read_file('/etc/passwd')",
     "SELECT lo_import('/etc/passwd')",
     "SELECT current_setting('data_directory')",
+    "SELECT nextval('x')",
     # quoted-identifier bypass
     'SELECT "md5"(\'x\')',
     'SELECT "pg_sleep"(1)',
 ])
-def test_validate_sql_rejects_unregistered_functions(sql):
+def test_validate_sql_rejects_forbidden_functions(sql):
     with pytest.raises(SqlGuardrailError):
         validate_sql(sql)
 
@@ -189,7 +208,7 @@ def test_validate_sql_rejects_quoted_identifier_smuggling(sql):
         validate_sql(sql)
 
 
-def test_validate_sql_accepts_registry_functions():
+def test_validate_sql_accepts_common_functions():
     validate_sql(
         "SELECT count(*), lower(hostname), upper(org_name), length(hostname), "
         "coalesce(os_name, ''), min(last_seen), max(last_seen), now() "
@@ -199,6 +218,8 @@ def test_validate_sql_accepts_registry_functions():
         "SELECT date_trunc('day', created_at), sum(ram_mb), avg(ram_mb) "
         "FROM v_chat_machine_detail"
     )
+    # Hàm ngoài registry cũ nhưng an toàn → được phép.
+    validate_sql("SELECT round(avg(ram_gb), 1), md5(hostname) FROM public.machine_specs")
 
 
 def test_validate_sql_accepts_cte_over_manifest_view():
@@ -256,6 +277,14 @@ async def test_run_sql_returns_rows_and_digest(db, chat_ro_factory):
 
 
 @pytest.mark.asyncio
+async def test_run_sql_surfaces_db_error_detail(chat_ro_factory):
+    """Lỗi DB (vd cột không tồn tại) phải lộ message ngắn để model tự sửa SQL."""
+    async with chat_ro_factory() as s:
+        with pytest.raises(SqlGuardrailError) as exc:
+            await run_sql(s, "SELECT khong_ton_tai FROM v_chat_machines")
+    assert "khong_ton_tai" in str(exc.value)
+
+
 async def test_run_sql_rejects_dml(db, chat_ro_factory):
     async with chat_ro_factory() as s:
         with pytest.raises(SqlGuardrailError):

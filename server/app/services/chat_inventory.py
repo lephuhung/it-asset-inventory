@@ -33,6 +33,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.chat_sql_policy import CHAT_RO_SCHEMA, is_denied
+
 # ── Trần (spec "Guardrail SQL inventory") ────────────────────────────────────
 SQL_STATEMENT_TIMEOUT_MS = 5000
 SQL_MAX_ROWS = 5000
@@ -62,13 +64,24 @@ MANIFEST_VIEWS: dict[str, frozenset[str]] = {
     ),
 }
 
-ALLOWED_SCHEMA = "chat_ro_views"
+# Schema được phép tham chiếu. Ngoài 2 schema này → từ chối (kể cả tên lạ).
+ALLOWED_SCHEMAS = frozenset({"public", CHAT_RO_SCHEMA})
 
-# Function registry đóng (spec V3-4). Chỉ hàm projection/predicate thuần.
-FUNCTION_REGISTRY = frozenset(
-    {"count", "min", "max", "sum", "avg", "coalesce", "date_trunc",
-     "lower", "upper", "length", "now"}
-)
+# Hàm nguy hiểm bị cấm (ngoài `pg_*` đã bị chặn ở `_check_identifier`). Hàm hợp lệ
+# khác (toán học, chuỗi, ngày, aggregate, window…) được phép — an toàn nhờ role chỉ
+# có SELECT + transaction READ ONLY.
+FORBIDDEN_FUNCTIONS = frozenset({
+    "dblink", "dblink_connect", "dblink_exec", "dblink_open", "dblink_fetch",
+    "dblink_close", "dblink_send_query", "dblink_get_result",
+    "lo_import", "lo_export", "lo_create", "lo_unlink", "lo_open", "lo_get",
+    "lo_put", "lo_from_bytea", "lowrite", "loread",
+    "set_config", "current_setting", "setseed",
+    "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
+    "pg_sleep", "pg_sleep_for", "pg_sleep_until", "pg_terminate_backend",
+    "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile",
+    "nextval", "setval", "currval", "lastval",
+    "query_to_xml", "database_to_xml", "table_to_xml",
+})
 
 # Từ khóa SQL hợp lệ (không phải function call khi theo sau là `(`).
 KEYWORDS = frozenset({
@@ -293,18 +306,13 @@ def _skip_balanced(toks: list[_Tok], i: int) -> int:
 
 def _check_table(schema: str | None, table: str, cte_names: frozenset[str]) -> None:
     low = table.lower()
-    if schema is not None:
-        if schema.lower() != ALLOWED_SCHEMA:
-            raise SqlGuardrailError(f"schema ngoài manifest bị cấm: {schema!r}")
-        if low not in MANIFEST_VIEWS:
-            raise SqlGuardrailError(f"bảng ngoài manifest bị cấm: {ALLOWED_SCHEMA}.{low}")
-        return
-    if low in MANIFEST_VIEWS:
-        return
-    # `pg_*`/`information_schema` đã bị chặn ở _check_identifier.
     if low in cte_names:
         return
-    raise SqlGuardrailError(f"bảng ngoài manifest bị cấm: {low}")
+    # `pg_*`/`information_schema`/`pg_catalog` đã bị chặn ở `_check_identifier`.
+    if schema is not None and schema.lower() not in ALLOWED_SCHEMAS:
+        raise SqlGuardrailError(f"schema ngoài phạm vi bị cấm: {schema!r}")
+    if is_denied(low):
+        raise SqlGuardrailError(f"bảng bị chặn (denylist): {low!r}")
 
 
 def _normalize(toks: list[_Tok]) -> str:
@@ -351,8 +359,9 @@ def validate_sql(sql: str) -> str:
             if t.kind == "ident" and low in FORBIDDEN_KEYWORDS:
                 raise SqlGuardrailError(f"từ khóa bị cấm: {low!r}")
 
-    # 2) Function registry đóng: ident theo sau '(' và không phải keyword. Quoted
-    #    identifier gọi hàm (`"md5"(...)`) bị từ chối thẳng (fail closed).
+    # 2) Hàm: ident theo sau '(' và không phải keyword. Chỉ chặn hàm nguy hiểm;
+    #    hàm hợp lệ khác (toán/chuỗi/ngày/aggregate/window) được phép — an toàn nhờ
+    #    role chỉ SELECT + transaction READ ONLY. Quoted identifier gọi hàm → từ chối.
     for idx, t in enumerate(toks[:-1]):
         if t.kind not in ("ident", "qident"):
             continue
@@ -363,8 +372,8 @@ def validate_sql(sql: str) -> str:
             raise SqlGuardrailError(f"gọi hàm bằng quoted identifier bị cấm: {t.value!r}")
         if low in KEYWORDS:
             continue
-        if low not in FUNCTION_REGISTRY:
-            raise SqlGuardrailError(f"function ngoài registry bị cấm: {low!r}")
+        if low in FORBIDDEN_FUNCTIONS:
+            raise SqlGuardrailError(f"function bị cấm: {low!r}")
 
     # 3) Bảng trong FROM/JOIN phải thuộc manifest (hoặc là CTE).
     i, depth = 0, 0
@@ -419,6 +428,18 @@ def validate_sql(sql: str) -> str:
     return _normalize(toks)
 
 
+def _db_error_hint(exc: SQLAlchemyError) -> str:
+    """Message DB ngắn, an toàn để model tự sửa SQL.
+
+    asyncpg đặt message gốc ở `exc.orig` (vd `column "x" does not exist`,
+    `permission denied for table y`). Chỉ giữ dòng đầu, cắt ngắn — không kèm SQL/chi tiết nội bộ.
+    """
+    orig = getattr(exc, "orig", None)
+    message = str(orig) if orig is not None else str(exc)
+    first_line = message.strip().splitlines()[0] if message.strip() else type(exc).__name__
+    return f"truy vấn inventory thất bại: {first_line[:200]}"
+
+
 def _digest(normalized_sql: str) -> str:
     return hashlib.sha256(normalized_sql.encode("utf-8")).hexdigest()
 
@@ -456,9 +477,7 @@ async def _execute_readonly(
     except SQLAlchemyError as exc:
         if owns_tx:
             await session.rollback()
-        raise SqlGuardrailError(
-            f"truy vấn inventory thất bại ({type(exc).__name__})"
-        ) from exc
+        raise SqlGuardrailError(_db_error_hint(exc)) from exc
     if owns_tx:
         await session.commit()
 

@@ -58,6 +58,7 @@ from app.schemas.chat import (
     SendMessageIn,
 )
 from app.services.budget import BudgetUnavailable, reserve
+from app.services.chat_sql_policy import build_sql_catalog
 from app.services.chat_turns import (
     ACTIVE_STATUSES,
     ActiveTurnExists,
@@ -403,6 +404,7 @@ async def _build_agent_request(
         }
 
     llm_runtime = await _agent_llm_runtime(db)
+    sql_schema = await build_sql_catalog(db)
 
     return {
         "schema_version": "chat.agent.request/1.0",
@@ -413,6 +415,7 @@ async def _build_agent_request(
         "messages": messages,
         "chat_context": capability,
         "llm_runtime": llm_runtime,
+        "sql_schema": sql_schema,
         "velociraptor_api_client_yaml": None,
         "completion_token": completion_token,
         "limits": {

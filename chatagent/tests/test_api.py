@@ -44,3 +44,16 @@ def test_settings_defaults() -> None:
 def test_settings_do_not_read_root_env_file() -> None:
     """Spec F5: chatagent KHÔNG nạp root `.env` (chỉ `CHATAGENT_*` từ env)."""
     assert Settings.model_config.get("env_file") is None
+
+
+def test_default_agent_wires_real_llm_planner() -> None:
+    """Agent mặc định phải dựng `LlmPlanner` (LLM thật), không còn StubPlanner."""
+    from chatagent.agent import CancelRegistry, LlmRuntime
+    from chatagent.api import build_default_agent
+    from chatagent.planner import LlmPlanner
+
+    settings = Settings(service_token="svc", backend_url="http://backend.internal:8000")
+    agent = build_default_agent(settings, CancelRegistry())
+    factory = agent._planner_factory
+    planner = factory(LlmRuntime(base_url="http://127.0.0.1:1/v1", model="m"), None)
+    assert isinstance(planner, LlmPlanner)

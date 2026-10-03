@@ -24,9 +24,9 @@ from app.api.routes import (
     chat,
     chat_internal,
     compliance,
+    device_types,
     dfir_requests,
     downloads,
-    device_types,
     drifts,
     enroll,
     enroll_attempts,
@@ -38,12 +38,12 @@ from app.api.routes import (
     llm_dfir_external,
     machines,
     notifications,
+    officers,
     offline_import,
     orgs,
     renew,
-    self_service,
-    officers,
     reports,
+    self_service,
     stats,
     system_profile_diagram_ai,
     system_profiles,
@@ -150,6 +150,34 @@ async def lifespan(app: FastAPI):
             from app.db.seed_compliance import seed_compliance_notice
 
             await seed_compliance_notice(db, commit=False)
+
+    # Text-to-SQL: đồng bộ quyền role `inventory_chat_ro` — SELECT toàn bộ bảng
+    # `public` (trừ denylist bí mật/log) để bảng mới do migration tạo cũng tự có
+    # SELECT; luôn thu hồi quyền ghi + bảng nhạy cảm. Bỏ qua nếu role chưa tồn tại.
+    try:
+        from app.db.session import AsyncSessionLocal
+        from app.services.chat_sql_policy import (
+            sync_chat_ro_password,
+            sync_chat_ro_privileges,
+        )
+
+        async with AsyncSessionLocal() as db:
+            role_exists = (
+                await db.execute(
+                    text(
+                        "SELECT 1 FROM pg_roles WHERE rolname = 'inventory_chat_ro'"
+                    )
+                )
+            ).scalar()
+            if role_exists:
+                await sync_chat_ro_password(db)
+                blocked = await sync_chat_ro_privileges(db)
+                await db.commit()
+                logging.getLogger(__name__).info(
+                    "chat_ro privileges synced (blocked relations=%s)", blocked
+                )
+    except Exception:
+        logging.getLogger(__name__).exception("đồng bộ quyền chat_ro thất bại")
 
     # Background monitor: phát hiện offline + đảm bảo partition heartbeats
     from app.services.monitor import start_monitor

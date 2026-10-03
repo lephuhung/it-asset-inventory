@@ -84,6 +84,21 @@ class Settings(BaseSettings):
     chat_max_history_messages: int = 40
     chat_max_history_chars: int = 60000
 
+    # ── Text-to-SQL (chỉ superAdmin dùng chat) ──
+    # Bảng CẤM đọc qua `inventory_sql` (bí mật + log/time-series). Rỗng = không chặn
+    # bảng nào. Hỗ trợ prefix pattern kết thúc bằng `%` (vd `heartbeats%`).
+    chat_sql_denylist: str = (
+        "users,api_keys,refresh_tokens,enroll_tokens,enroll_attempts,token_reservations,"
+        "llm_config,telegram_bot_config,velociraptor_config,"
+        "audit_log,chat_conversations,chat_messages,chat_turns,chat_tool_calls,"
+        "chat_audit_intents,system_profile_events,dfir_investigation_messages,"
+        "notification_deliveries,heartbeats%"
+    )
+    # Trần ký tự catalog schema gửi cho LLM (spec F11 evidence).
+    chat_sql_schema_max_chars: int = 24000
+    # TTL cache catalog (giây) — tránh introspect mỗi turn.
+    chat_sql_catalog_cache_seconds: int = 300
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     # online_ttl: None → tự tính = 2 × (heartbeat_interval + jitter) (mục 5.2: online = heartbeat ≤ 2× chu kỳ)

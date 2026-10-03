@@ -26,7 +26,7 @@ import socket
 import time
 import urllib.parse
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -44,6 +44,12 @@ CATEGORY_INTERNAL = "chat_internal"
 CATEGORY_TIMEOUT_TOOL = "chat_timeout_tool"
 CATEGORY_UPSTREAM_LLM = "chat_upstream_llm"
 CATEGORY_CANCELED = "chat_canceled"
+
+# Lỗi guardrail do CHÍNH model sinh tham số sai (vd bịa bảng/cột SQL) → trả về cho
+# model tự sửa hoặc trả lời trung thực, KHÔNG giết cả turn. Các lỗi chính sách/authz
+# khác (vd chat_collection_denied) vẫn fail-closed như cũ.
+RECOVERABLE_TOOL_CATEGORIES = frozenset({"chat_guardrail_sql", "chat_guardrail_vql"})
+MAX_GUARDRAIL_RETRIES = 2
 
 # CGNAT 100.64.0.0/10 không nằm trong `ipaddress.is_private` ở mọi phiên bản Python.
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
@@ -141,6 +147,8 @@ class AgentRequest(BaseModel):
     messages: list[Message]
     chat_context: str
     llm_runtime: LlmRuntime
+    # Catalog bảng/cột (text-to-SQL) do backend introspect — đưa vào mô tả tool.
+    sql_schema: str | None = None
     velociraptor_api_client_yaml: str | None = None
     completion_token: str
     limits: Limits = Field(default_factory=Limits)
@@ -307,12 +315,16 @@ class ChatAgent:
         backend: Any,
         settings: Settings,
         planner: Planner | None = None,
+        planner_factory: Callable[[LlmRuntime, str | None], Planner] | None = None,
         cancel_registry: CancelRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._backend = backend
         self._settings = settings
         self._planner = planner or StubPlanner()
+        # Nhà máy planner theo `llm_runtime` của từng turn (LLM thật); nếu None thì
+        # dùng `planner` cố định (mặc định StubPlanner cho test/dev).
+        self._planner_factory = planner_factory
         self._cancel = cancel_registry or CancelRegistry()
 
     async def stream(self, request: AgentRequest) -> AsyncIterator[str]:
@@ -325,10 +337,15 @@ class ChatAgent:
             1.0, min(float(limits.wall_clock_seconds), float(settings.wall_clock_seconds))
         )
 
+        planner: Planner = self._planner
+        if self._planner_factory is not None:
+            planner = self._planner_factory(request.llm_runtime, request.sql_schema)
+
         token = self._cancel.register(turn_id)
         started = time.monotonic()
         seq = 0
         tool_calls = 0
+        guardrail_retries = 0
         answer = ""
         observations: list[str] = []
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
@@ -357,7 +374,7 @@ class ChatAgent:
                 if tool_calls >= max_tool_calls:
                     break
 
-                action = await self._planner.plan(
+                action = await planner.plan(
                     messages=request.messages,
                     observations=list(observations),
                     machine_context=request.machine_context,
@@ -403,8 +420,38 @@ class ChatAgent:
                     raise
                 except Exception as exc:  # noqa: BLE001 — map mọi lỗi tool vào taxonomy
                     matched = _category_for(exc)
+                    hint = _hint_for(exc)
+                    # Model sinh tham số sai (guardrail) → gửi lỗi lại làm observation
+                    # để nó tự sửa, thay vì chặn cả turn bằng SSE error.
+                    if (
+                        matched in RECOVERABLE_TOOL_CATEGORIES
+                        and guardrail_retries < MAX_GUARDRAIL_RETRIES
+                    ):
+                        guardrail_retries += 1
+                        yield _sse(
+                            {
+                                "v": SSE_VERSION,
+                                "seq": seq,
+                                "type": "tool_result",
+                                "tool_call_id": tool_call_id,
+                                "ok": False,
+                                "row_count": 0,
+                                "byte_count": 0,
+                                "duration_ms": 0,
+                                "client_id": None,
+                                "flow_id": None,
+                                "error_category": matched,
+                            }
+                        )
+                        seq += 1
+                        observations.append(
+                            _wrap_error_observation(
+                                action.tool, matched, hint, max_evidence, observations
+                            )
+                        )
+                        continue
                     finish_reason, error_category = "error", matched
-                    error_event = _error(matched, _hint_for(exc))
+                    error_event = _error(matched, hint)
                     break
 
                 yield _sse(
@@ -428,23 +475,61 @@ class ChatAgent:
                 )
 
             if error_event is None:
-                answer = await self._planner.compose(
-                    messages=request.messages, observations=list(observations)
-                )
-                for chunk in _chunk_text(answer):
-                    yield _sse({"v": SSE_VERSION, "seq": seq, "type": "token", "text": chunk})
+                if hasattr(planner, "compose_stream"):
+                    # Streaming thật: mỗi delta là một event `token`.
+                    async for chunk in planner.compose_stream(
+                        messages=request.messages, observations=list(observations)
+                    ):
+                        if not chunk:
+                            continue
+                        answer += chunk
+                        yield _sse(
+                            {"v": SSE_VERSION, "seq": seq, "type": "token", "text": chunk}
+                        )
+                        seq += 1
+                else:
+                    answer = await planner.compose(
+                        messages=request.messages, observations=list(observations)
+                    )
+                    for chunk in _chunk_text(answer):
+                        yield _sse(
+                            {"v": SSE_VERSION, "seq": seq, "type": "token", "text": chunk}
+                        )
+                        seq += 1
+                if not answer.strip():
+                    # Model trả rỗng (hiếm) → không để turn không có nội dung.
+                    answer = (
+                        "(Trợ lý chưa tạo được nội dung trả lời. "
+                        "Vui lòng hỏi lại cụ thể hơn.)"
+                    )
+                    yield _sse(
+                        {"v": SSE_VERSION, "seq": seq, "type": "token", "text": answer}
+                    )
                     seq += 1
-                usage = _estimate_usage(request, answer, observations)
+                planner_usage = planner.usage() if hasattr(planner, "usage") else None
+                if planner_usage and (
+                    planner_usage.get("input_tokens") or planner_usage.get("output_tokens")
+                ):
+                    usage = {
+                        "input_tokens": int(planner_usage.get("input_tokens", 0)),
+                        "output_tokens": int(planner_usage.get("output_tokens", 0)),
+                    }
+                else:
+                    usage = _estimate_usage(request, answer, observations)
         except asyncio.CancelledError:
             finish_reason, error_category = "canceled", CATEGORY_CANCELED
             error_event = _error(CATEGORY_CANCELED, "turn đã bị hủy")
         except EgressError as exc:
             finish_reason, error_category = "error", CATEGORY_UPSTREAM_LLM
             error_event = _error(CATEGORY_UPSTREAM_LLM, str(exc))
-        except Exception:
-            logger.exception("chatagent turn %s: lỗi không mong đợi", turn_id)
-            finish_reason, error_category = "error", CATEGORY_INTERNAL
-            error_event = _error(CATEGORY_INTERNAL, "lỗi xử lý turn")
+        except Exception as exc:
+            if hasattr(exc, "category"):
+                finish_reason, error_category = "error", _category_for(exc)
+                error_event = _error(error_category, _hint_for(exc))
+            else:
+                logger.exception("chatagent turn %s: lỗi không mong đợi", turn_id)
+                finish_reason, error_category = "error", CATEGORY_INTERNAL
+                error_event = _error(CATEGORY_INTERNAL, "lỗi xử lý turn")
 
         # Durable completion — LUÔN gọi ở mọi nhánh terminal.
         completion: dict[str, Any] = {}
@@ -484,6 +569,14 @@ class ChatAgent:
         self._cancel.finish(turn_id, status=terminal_status)
         self._cancel.unregister(turn_id)
 
+        # Planner sở hữu httpx client riêng (tạo mỗi turn) → đóng để trả connection.
+        close_planner = getattr(planner, "aclose", None)
+        if callable(close_planner):
+            try:
+                await close_planner()
+            except Exception:
+                logger.warning("chatagent turn %s: đóng planner thất bại", turn_id, exc_info=True)
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -517,17 +610,44 @@ def _wrap_observation(
     tool: str, result: Any, max_evidence: int, existing: list[str]
 ) -> str:
     """Bọc output tool trong `<untrusted_tool_output>` + cắt theo trần evidence."""
-    payload = json.dumps(
-        {"ok": result.ok, "rows": result.rows, "truncated": result.truncated},
-        ensure_ascii=False,
-        default=str,
+    return _wrap_payload(
+        tool,
+        {
+            "ok": result.ok,
+            "row_count": result.row_count,
+            "rows": result.rows,
+            "truncated": result.truncated,
+        },
+        max_evidence,
+        existing,
     )
+
+
+def _wrap_error_observation(
+    tool: str, category: str, hint: str, max_evidence: int, existing: list[str]
+) -> str:
+    """Bọc LỖI guardrail để model tự sửa — vẫn là dữ liệu untrusted."""
+    return _wrap_payload(
+        tool,
+        {"ok": False, "error_category": category, "error": hint},
+        max_evidence,
+        existing,
+    )
+
+
+def _wrap_payload(
+    tool: str, payload: dict[str, Any], max_evidence: int, existing: list[str]
+) -> str:
+    """JSON payload → `<untrusted_tool_output>`, cắt theo trần evidence còn lại."""
+    encoded = json.dumps(payload, ensure_ascii=False, default=str)
     used = sum(len(item) for item in existing)
     remaining = max(0, max_evidence - used)
-    wrapped = f'<untrusted_tool_output tool="{tool}">{payload}</untrusted_tool_output>'
+    open_tag = f'<untrusted_tool_output tool="{tool}">'
+    close_tag = "</untrusted_tool_output>"
+    wrapped = f"{open_tag}{encoded}{close_tag}"
     if len(wrapped) > remaining:
-        keep = max(0, remaining - len(f'<untrusted_tool_output tool="{tool}"></untrusted_tool_output>'))
-        wrapped = f'<untrusted_tool_output tool="{tool}">{payload[:keep]}</untrusted_tool_output>'
+        keep = max(0, remaining - len(open_tag) - len(close_tag))
+        wrapped = f"{open_tag}{encoded[:keep]}{close_tag}"
     return wrapped
 
 
