@@ -1397,3 +1397,173 @@ export interface EnrollAttemptApproveResult {
   install_url_warnings: string[];
   expires_at: string;
 }
+
+/* ------------------------------------------------------------------ *
+ * Chat Assistant — `chat.api/1` (spec 2026-10-02 §"Hợp đồng API")
+ * Phản chiếu chính xác server/app/schemas/chat.py của P1.
+ * ------------------------------------------------------------------ */
+
+/** Vai trò tin nhắn — `ck_chat_msg_turn` cho phép `system` không cần turn. */
+export type ChatRole = "user" | "assistant" | "system";
+
+/**
+ * Phân loại lỗi của hệ thống (spec §SSE event schema). Hiển thị dạng
+ * `[<category>] <hint> [HTTP <code>]` — không bao giờ lộ exception thô.
+ */
+export type ChatErrorCategory =
+  | "chat_validation"
+  | "chat_authz"
+  | "chat_not_found"
+  | "chat_conflict_active_turn"
+  | "chat_conflict_idempotency"
+  | "chat_rate_limited"
+  | "chat_budget_exceeded"
+  | "chat_budget_unavailable"
+  | "chat_guardrail_sql"
+  | "chat_guardrail_vql"
+  | "chat_collection_denied"
+  | "chat_timeout_llm"
+  | "chat_timeout_tool"
+  | "chat_upstream_llm"
+  | "chat_upstream_velo"
+  | "chat_mcp_bridge"
+  | "chat_canceled"
+  | "chat_stream_lost"
+  | "chat_dispatch_stuck"
+  | "chat_internal";
+
+/** `ConversationOut` — metadata hội thoại. */
+export interface ChatConversation {
+  id: string;
+  title: string | null;
+  machine_id: string | null;
+  message_count: number;
+  last_message_at: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `MessageOut` — một tin nhắn đã persist. */
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  content: string;
+  turn_id: string | null;
+  machine_id: string | null;
+  error_category: ChatErrorCategory | string | null;
+  created_at: string;
+}
+
+/** `ConversationDetailOut` — kèm lịch sử tin nhắn và turn đang chạy. */
+export interface ChatConversationDetail extends ChatConversation {
+  messages: ChatMessage[];
+  /** Không null ⇔ đang có turn `pending|streaming` → nút Gửi phải khóa. */
+  active_turn_id: string | null;
+}
+
+/**
+ * Dấu vết tool đã lọc an toàn. Chỉ gồm field cho phép hiển thị
+ * (spec §UI + D4 trong contract-decisions): KHÔNG có payload thô,
+ * `args_digest` hay `params_digest`.
+ */
+export interface ChatToolCall {
+  tool_call_id: string;
+  tool: string;
+  ok: boolean | null;
+  row_count: number | null;
+  byte_count: number | null;
+  duration_ms: number | null;
+  client_id: string | null;
+  flow_id: string | null;
+  error_category: ChatErrorCategory | string | null;
+}
+
+/** Trạng thái turn — `chat_turns.status`. */
+export type ChatTurnStatus = "pending" | "streaming" | "completed" | "canceled" | "failed";
+
+/** `ChatTurn` — chỉ các field client cần để hiển thị trạng thái. */
+export interface ChatTurn {
+  id: string;
+  conversation_id: string;
+  machine_id: string | null;
+  status: ChatTurnStatus;
+  finish_reason: "stop" | "length" | "canceled" | "error" | null;
+  error_category: ChatErrorCategory | string | null;
+  created_at: string;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+/** Ngữ cảnh máy mềm theo lượt — `client_id` do backend resolve, client không tự khai. */
+export interface ChatMachineContext {
+  machine_id: string;
+  hostname?: string | null;
+}
+
+interface ChatSseBase {
+  /** Phiên bản schema: `1`. */
+  v: 1;
+  /** Số thứ tự đơn diệu trong stream. */
+  seq: number;
+}
+
+export interface ChatSseStart extends ChatSseBase {
+  type: "start";
+  turn_id: string;
+  message_id: string;
+}
+
+export interface ChatSseToolStart extends ChatSseBase {
+  type: "tool_start";
+  tool_call_id: string;
+  tool: string;
+  params_digest: string | null;
+  summary: string | null;
+}
+
+export interface ChatSseToolResult extends ChatSseBase {
+  type: "tool_result";
+  tool_call_id: string;
+  ok: boolean;
+  row_count: number | null;
+  byte_count: number | null;
+  duration_ms: number | null;
+  client_id?: string | null;
+  flow_id?: string | null;
+  error_category?: ChatErrorCategory | string | null;
+}
+
+export interface ChatSseToken extends ChatSseBase {
+  type: "token";
+  text: string;
+}
+
+export interface ChatSseUsage extends ChatSseBase {
+  type: "usage";
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface ChatSseDone extends ChatSseBase {
+  type: "done";
+  message_id: string;
+  finish_reason: "stop" | "length" | "canceled" | "error";
+}
+
+export interface ChatSseError extends ChatSseBase {
+  type: "error";
+  category: ChatErrorCategory;
+  hint: string;
+  retryable: boolean;
+  http_status?: number;
+}
+
+export type ChatSseEvent =
+  | ChatSseStart
+  | ChatSseToolStart
+  | ChatSseToolResult
+  | ChatSseToken
+  | ChatSseUsage
+  | ChatSseDone
+  | ChatSseError;
