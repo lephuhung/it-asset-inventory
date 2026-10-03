@@ -9,7 +9,7 @@
  * - Màn nhỏ chuyển thành drawer trượt từ phải.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { MessageSquare, PanelRightClose, Send, Square, X } from "lucide-react";
 import { useAuth } from "@/components/auth-context";
 import { ChatConversationList } from "@/components/chat/chat-conversation-list";
@@ -24,17 +24,25 @@ import type { ChatConversation, ChatConversationDetail, SessionUser } from "@/li
 
 const SUPER_ADMIN_ROLES: SessionUser["role"][] = ["super_admin", "admin_global"];
 
-/** Theo dõi media query để biết đang ở chế độ drawer hay docked. */
+/**
+ * Theo dõi media query để biết đang ở chế độ drawer hay docked.
+ * Dùng useSyncExternalStore: matchMedia là nguồn sự thật bên ngoài React nên
+ * không cần setState trong effect.
+ */
 function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(false);
-  useEffect(() => {
-    const mql = window.matchMedia(query);
-    setMatches(mql.matches);
-    const onChange = () => setMatches(mql.matches);
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
-  }, [query]);
-  return matches;
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const mql = window.matchMedia(query);
+      mql.addEventListener("change", onChange);
+      return () => mql.removeEventListener("change", onChange);
+    },
+    [query],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
 }
 
 function isSuperAdmin(user: SessionUser | null): boolean {
