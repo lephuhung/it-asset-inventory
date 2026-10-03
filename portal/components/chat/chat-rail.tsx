@@ -63,10 +63,12 @@ export function ChatRail() {
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
+    // Chụp Set vào biến cục bộ: effect cleanup đóng băng đúng Set lúc mount.
+    const timers = pollTimersRef.current;
     return () => {
       mountedRef.current = false;
-      for (const t of pollTimersRef.current) clearTimeout(t);
-      pollTimersRef.current.clear();
+      for (const t of timers) clearTimeout(t);
+      timers.clear();
     };
   }, []);
   // activeId mới nhất, đọc được trong callback bất đồng bộ mà không stale.
