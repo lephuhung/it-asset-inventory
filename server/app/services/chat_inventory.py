@@ -71,26 +71,28 @@ FUNCTION_REGISTRY = frozenset(
 )
 
 # Từ khóa SQL hợp lệ (không phải function call khi theo sau là `(`).
-KEYWORDS = frozenset(
-    """
-    select from where group by having order limit offset as and or not is null in
-    between like ilike distinct on join left right inner outer full cross union all
-    case when then else end cast asc desc true false lateral over partition nulls
-    first last filter exists any some with fetch for using natural
-    text integer int bigint smallint boolean uuid timestamp timestamptz date
-    numeric real double precision varchar char interval json jsonb materialized
-    """.split()
-)
+KEYWORDS = frozenset({
+    "select", "from", "where", "group", "by", "having", "order", "limit",
+    "offset", "as", "and", "or", "not", "is", "null", "in", "between", "like",
+    "ilike", "distinct", "on", "join", "left", "right", "inner", "outer",
+    "full", "cross", "union", "all", "case", "when", "then", "else", "end",
+    "cast", "asc", "desc", "true", "false", "lateral", "over", "partition",
+    "nulls", "first", "last", "filter", "exists", "any", "some", "with",
+    "fetch", "for", "using", "natural", "text", "integer", "int", "bigint",
+    "smallint", "boolean", "uuid", "timestamp", "timestamptz", "date",
+    "numeric", "real", "double", "precision", "varchar", "char", "interval",
+    "json", "jsonb", "materialized",
+})
 
 # Câu lệnh/động từ bị cấm (mọi vị trí).
-FORBIDDEN_KEYWORDS = frozenset(
-    """
-    insert update delete drop create alter truncate grant revoke copy call set reset
-    explain vacuum analyze commit rollback begin do merge refresh reindex cluster
-    listen notify lock execute prepare deallocate comment into values start
-    transaction declare
-    """.split()
-)
+FORBIDDEN_KEYWORDS = frozenset({
+    "insert", "update", "delete", "drop", "create", "alter", "truncate",
+    "grant", "revoke", "copy", "call", "set", "reset", "explain", "vacuum",
+    "analyze", "commit", "rollback", "begin", "do", "merge", "refresh",
+    "reindex", "cluster", "listen", "notify", "lock", "execute", "prepare",
+    "deallocate", "comment", "into", "values", "start", "transaction",
+    "declare",
+})
 
 # Từ khóa kết thúc danh sách FROM.
 _CLAUSE_ENDERS = frozenset(
@@ -340,21 +342,25 @@ def validate_sql(sql: str) -> str:
 
     cte_names = _collect_cte_names(toks)
 
-    # 1) Kiểm tra mọi identifier (catalog/pg_*) + keyword bị cấm.
+    # 1) Kiểm tra mọi identifier (catalog/pg_*) + keyword bị cấm. Áp cho cả
+    #    quoted identifier (`"pg_catalog"`, `"users"`).
     for t in toks:
-        if t.kind == "ident":
+        if t.kind in ("ident", "qident"):
             low = t.value.lower()
             _check_identifier(t.value)
-            if low in FORBIDDEN_KEYWORDS:
+            if t.kind == "ident" and low in FORBIDDEN_KEYWORDS:
                 raise SqlGuardrailError(f"từ khóa bị cấm: {low!r}")
 
-    # 2) Function registry đóng: ident theo sau '(' và không phải keyword.
+    # 2) Function registry đóng: ident theo sau '(' và không phải keyword. Quoted
+    #    identifier gọi hàm (`"md5"(...)`) bị từ chối thẳng (fail closed).
     for idx, t in enumerate(toks[:-1]):
-        if t.kind != "ident":
+        if t.kind not in ("ident", "qident"):
             continue
         if toks[idx + 1].kind != "op" or toks[idx + 1].value != "(":
             continue
         low = t.value.lower()
+        if t.kind == "qident":
+            raise SqlGuardrailError(f"gọi hàm bằng quoted identifier bị cấm: {t.value!r}")
         if low in KEYWORDS:
             continue
         if low not in FUNCTION_REGISTRY:
@@ -520,41 +526,42 @@ def _build_search(params: Mapping[str, object]) -> tuple[str, dict]:
     limit = _clamp_limit(params)
     q = _str_param(params, "q")
     if q:
-        return (
+        sql = (
             f"SELECT {cols} FROM v_chat_machines "
             "WHERE hostname ILIKE :like OR org_name ILIKE :like "
-            "ORDER BY last_seen DESC NULLS LAST LIMIT :limit",
-            {"like": f"%{q}%", "limit": limit},
+            "ORDER BY last_seen DESC NULLS LAST LIMIT :limit"
         )
-    return (
+        return sql, {"like": f"%{q}%", "limit": limit}
+    sql = (
         f"SELECT {cols} FROM v_chat_machines "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT :limit",
-        {"limit": limit},
+        "ORDER BY last_seen DESC NULLS LAST LIMIT :limit"
     )
+    return sql, {"limit": limit}
 
 
 def _build_machine_detail(params: Mapping[str, object]) -> tuple[str, dict]:
     cols = ("id, hostname, org_name, os_name, os_version, cpu, ram_mb, disk_gb, "
             "status, last_seen")
     if params.get("machine_id") is not None:
-        return (
+        sql = (
             f"SELECT {cols} FROM v_chat_machine_detail "
-            "WHERE id = CAST(:machine_id AS uuid) LIMIT 1",
-            {"machine_id": _machine_id_param(params)},
+            "WHERE id = CAST(:machine_id AS uuid) LIMIT 1"
         )
-    return (
-        f"SELECT {cols} FROM v_chat_machine_detail WHERE hostname = :hostname LIMIT 1",
-        {"hostname": _hostname_param(params)},
-    )
+        return sql, {"machine_id": _machine_id_param(params)}
+    sql = f"SELECT {cols} FROM v_chat_machine_detail WHERE hostname = :hostname LIMIT 1"
+    return sql, {"hostname": _hostname_param(params)}
 
 
 def _build_resolve(params: Mapping[str, object]) -> tuple[str, dict]:
-    return (
+    sql = (
         "SELECT id, hostname, status, last_seen FROM v_chat_machines "
         "WHERE lower(hostname) = lower(:hostname) "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT :limit",
-        {"hostname": _hostname_param(params), "limit": _clamp_limit(params, default=10)},
+        "ORDER BY last_seen DESC NULLS LAST LIMIT :limit"
     )
+    return sql, {
+        "hostname": _hostname_param(params),
+        "limit": _clamp_limit(params, default=10),
+    }
 
 
 def _build_stats(params: Mapping[str, object]) -> tuple[str, dict]:
@@ -562,10 +569,8 @@ def _build_stats(params: Mapping[str, object]) -> tuple[str, dict]:
     limit = _clamp_limit(params, default=100)
     q = _str_param(params, "org_name")
     if q:
-        return (
-            base + " WHERE org_name ILIKE :like ORDER BY machine_count DESC LIMIT :limit",
-            {"like": f"%{q}%", "limit": limit},
-        )
+        sql = base + " WHERE org_name ILIKE :like ORDER BY machine_count DESC LIMIT :limit"
+        return sql, {"like": f"%{q}%", "limit": limit}
     return base + " ORDER BY machine_count DESC LIMIT :limit", {"limit": limit}
 
 
@@ -584,11 +589,11 @@ def _build_software(params: Mapping[str, object]) -> tuple[str, dict]:
         conds.append("software_name ILIKE :name_like")
         binds["name_like"] = f"%{name}%"
     where = " AND ".join(conds)
-    return (
+    sql = (
         "SELECT machine_id, hostname, software_name, version, install_date "
-        f"FROM v_chat_software WHERE {where} ORDER BY software_name LIMIT :limit",
-        binds,
+        f"FROM v_chat_software WHERE {where} ORDER BY software_name LIMIT :limit"
     )
+    return sql, binds
 
 
 def _build_hardware(params: Mapping[str, object]) -> tuple[str, dict]:
@@ -606,11 +611,11 @@ def _build_hardware(params: Mapping[str, object]) -> tuple[str, dict]:
         conds.append("component = :component")
         binds["component"] = component
     where = " AND ".join(conds)
-    return (
+    sql = (
         "SELECT machine_id, hostname, component, value "
-        f"FROM v_chat_hardware WHERE {where} ORDER BY component LIMIT :limit",
-        binds,
+        f"FROM v_chat_hardware WHERE {where} ORDER BY component LIMIT :limit"
     )
+    return sql, binds
 
 
 def _build_alerts(params: Mapping[str, object]) -> tuple[str, dict]:
@@ -628,11 +633,11 @@ def _build_alerts(params: Mapping[str, object]) -> tuple[str, dict]:
         conds.append("severity = :severity")
         binds["severity"] = severity
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
-    return (
+    sql = (
         "SELECT id, machine_id, hostname, severity, category, created_at, status "
-        f"FROM v_chat_alerts{where} ORDER BY created_at DESC NULLS LAST LIMIT :limit",
-        binds,
+        f"FROM v_chat_alerts{where} ORDER BY created_at DESC NULLS LAST LIMIT :limit"
     )
+    return sql, binds
 
 
 STRUCTURED_TOOLS: dict[str, object] = {
@@ -651,7 +656,11 @@ ALL_TOOLS = frozenset(STRUCTURED_TOOLS) | {"inventory_sql"}
 async def run_tool(
     session: AsyncSession, tool: str, params: Mapping[str, object] | None = None
 ) -> ToolResult:
-    """Chạy một tool inventory trong manifest. Raise `SqlGuardrailError` nếu vi phạm."""
+    """Chạy một tool inventory trong manifest. Raise `SqlGuardrailError` nếu vi phạm.
+
+    `session` PHẢI là session pool `chat_ro` (role `inventory_chat_ro`) — caller
+    (T10) mở từ `get_chat_ro_session`/`AsyncChatRoSessionLocal`.
+    """
     params = params or {}
     if tool not in ALL_TOOLS:
         raise SqlGuardrailError(f"tool ngoài allowlist: {tool!r}")
@@ -677,7 +686,10 @@ async def run_tool(
 async def run_sql(
     session: AsyncSession, sql: str, max_rows: int = SQL_MAX_ROWS
 ) -> ToolResult:
-    """Validate SQL tự do rồi chạy read-only trên pool `chat_ro`."""
+    """Validate SQL tự do rồi chạy read-only trên pool `chat_ro`.
+
+    `session` PHẢI là session pool `chat_ro` (role `inventory_chat_ro`).
+    """
     normalized = validate_sql(sql)
     rows, truncated, byte_count = await _execute_readonly(
         session, normalized, timeout_ms=SQL_STATEMENT_TIMEOUT_MS, max_rows=max_rows,

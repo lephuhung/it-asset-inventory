@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import pool as sa_pool, text
+from sqlalchemy import pool as sa_pool
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import session as session_module
@@ -171,8 +171,20 @@ def test_validate_sql_rejects_non_manifest_and_catalog(sql):
     "SELECT pg_read_file('/etc/passwd')",
     "SELECT lo_import('/etc/passwd')",
     "SELECT current_setting('data_directory')",
+    # quoted-identifier bypass
+    'SELECT "md5"(\'x\')',
+    'SELECT "pg_sleep"(1)',
 ])
 def test_validate_sql_rejects_unregistered_functions(sql):
+    with pytest.raises(SqlGuardrailError):
+        validate_sql(sql)
+
+
+@pytest.mark.parametrize("sql", [
+    'SELECT * FROM "users"',
+    'SELECT * FROM "pg_catalog"."pg_class"',
+])
+def test_validate_sql_rejects_quoted_identifier_smuggling(sql):
     with pytest.raises(SqlGuardrailError):
         validate_sql(sql)
 
