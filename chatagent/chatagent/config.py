@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     max_evidence_chars: int = Field(default=120_000, ge=1)
     wall_clock_seconds: int = Field(default=300, ge=1)
 
+    # Trần collection Velociraptor read-only (spec F9/R6 — enforce, fail closed).
+    collection_max_time_range_hours: int = Field(default=24, ge=1)
+    collection_flow_deadline_seconds: int = Field(default=240, ge=1)
+    collection_max_rows: int = Field(default=5000, ge=1)
+    collection_max_outstanding_per_client: int = Field(default=1, ge=1)
+    collection_per_machine_per_hour: int = Field(default=6, ge=1)
+    # Số trang tối đa khi resolve hostname → client_id (fail closed nếu vượt).
+    resolver_max_pages: int = Field(default=20, ge=1)
+    resolver_page_size: int = Field(default=200, ge=1)
+
     # Egress: mặc định fail-closed cho endpoint LLM private (spec R7).
     egress_allow_cloud: bool = False
 
