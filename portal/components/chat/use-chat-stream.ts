@@ -306,7 +306,6 @@ export async function runChatStream(args: RunChatStreamArgs): Promise<ChatStream
       buffer += decoder.decode(value, { stream: true });
 
       let match: RegExpExecArray | null;
-      // eslint-disable-next-line no-cond-assign
       while ((match = FRAME_SEPARATOR.exec(buffer)) !== null) {
         const raw = buffer.slice(0, match.index);
         buffer = buffer.slice(match.index + match[0].length);
@@ -364,8 +363,6 @@ export interface UseChatStreamResult {
 export function useChatStream(conversationId: string | null): UseChatStreamResult {
   const [state, setState] = useState<ChatStreamState>(initialStreamState);
   const abortRef = useRef<AbortController | null>(null);
-  const conversationIdRef = useRef<string | null>(conversationId);
-  conversationIdRef.current = conversationId;
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
@@ -374,8 +371,7 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
   }, []);
 
   const send = useCallback(async (content: string, machineContext?: ChatMachineContext | null) => {
-    const convId = conversationIdRef.current;
-    if (!convId || !content.trim()) return;
+    if (!conversationId || !content.trim()) return;
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -383,25 +379,23 @@ export function useChatStream(conversationId: string | null): UseChatStreamResul
 
     setState({ ...initialStreamState(), status: "streaming" });
     await runChatStream({
-      conversationId: convId,
+      conversationId,
       content,
       machineContext,
       signal: controller.signal,
       onState: setState,
     });
     if (abortRef.current === controller) abortRef.current = null;
-  }, []);
+  }, [conversationId]);
 
   const cancel = useCallback(async () => {
     abortRef.current?.abort();
-    const turnId = state.turnId;
-    const convId = conversationIdRef.current;
-    if (convId && turnId) {
-      // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
-      await chatApi.cancelTurn(convId, turnId).catch(() => undefined);
+    // Server vẫn cần biết để chuyển turn sang `canceled` và hoàn tất ngân sách.
+    if (conversationId && state.turnId) {
+      await chatApi.cancelTurn(conversationId, state.turnId).catch(() => undefined);
     }
     setState((prev) => ({ ...prev, status: "canceled", error: null }));
-  }, [state.turnId]);
+  }, [conversationId, state.turnId]);
 
   return { state, streaming: state.status === "streaming", send, cancel, reset };
 }
